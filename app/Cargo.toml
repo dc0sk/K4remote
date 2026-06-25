@@ -1,0 +1,32 @@
+[package]
+name = "k4remote"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+publish = false
+description = "K4 Remote — GUI application (ARC-08, iced)."
+
+[[bin]]
+name = "k4remote"
+path = "src/main.rs"
+
+[features]
+# Real audio capture/playback (cpal) and TLS-PSK (OpenSSL). On by default (the
+# app is a real remote panel); require libasound + libssl to build. Disable with
+# --no-default-features for a minimal build.
+default = ["audio-device", "tls", "keychain"]
+audio-device = ["k4-audio/device"]
+tls = ["k4-transport/tls"]
+keychain = ["k4-config/keychain"]
+
+[dependencies]
+k4-protocol = { path = "../crates/k4-protocol" }
+# `serial` always enabled for the app (USB/serial transport selectable in the UI).
+k4-transport = { path = "../crates/k4-transport", features = ["serial"] }
+k4-session = { path = "../crates/k4-session" }
+k4-stream = { path = "../crates/k4-stream" }
+k4-audio = { path = "../crates/k4-audio" }
+k4-config = { path = "../crates/k4-config" }
+k4-diag = { path = "../crates/k4-diag" }
+iced = { version = "0.13", features = ["tokio", "canvas"] }

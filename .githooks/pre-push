@@ -1,0 +1,16 @@
+#!/usr/bin/env sh
+# K4 Remote pre-push hook: the full non-hardware test suite + dependency audit
+# must pass before pushing. Enable once per clone with:
+#   git config core.hooksPath .githooks
+#
+# Hardware-in-the-loop tests (L4) are gated behind the `hardware` cargo feature
+# and `#[ignore]`, so the default `cargo test` below runs only what needs no radio.
+set -eu
+
+echo "[pre-push] cargo test --workspace (non-hardware)"
+cargo test --workspace
+
+echo "[pre-push] cargo audit"
+cargo audit
+
+echo "[pre-push] OK"

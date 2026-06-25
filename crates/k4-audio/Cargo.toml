@@ -1,0 +1,19 @@
+[package]
+name = "k4-audio"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Audio engine (ARC-09): Opus codec, jitter buffer, resampler, cpal device I/O."
+
+[features]
+default = ["opus"]
+# `opus` links system libopus (via pkg-config).
+opus = ["dep:opus"]
+# `device` links cpal (ALSA/CoreAudio/WASAPI) for real audio capture/playback.
+device = ["dep:cpal"]
+
+[dependencies]
+opus = { version = "0.3", optional = true }
+cpal = { version = "0.15", optional = true }

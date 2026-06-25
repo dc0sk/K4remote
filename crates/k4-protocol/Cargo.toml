@@ -1,0 +1,11 @@
+[package]
+name = "k4-protocol"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+publish = false
+description = "K4/0 binary framing, authentication hashing, and CAT codec (hardware/UI-independent core)."
+
+[dependencies]
+sha2 = { workspace = true }

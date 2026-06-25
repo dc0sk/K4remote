@@ -1,0 +1,8 @@
+[package]
+name = "k4-stream"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+publish = false
+description = "StreamCodec seam (ARC-10): audio packet now, PAN/MiniPAN dB/bin in Phase 2."

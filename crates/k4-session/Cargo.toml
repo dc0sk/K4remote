@@ -1,0 +1,15 @@
+[package]
+name = "k4-session"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Session manager (ARC-07): keep-alive, link-loss detection, reconnect, fail-safe."
+
+[dependencies]
+k4-protocol = { path = "../k4-protocol" }
+k4-transport = { path = "../k4-transport" }
+
+[dev-dependencies]
+k4-stream = { path = "../k4-stream" }
