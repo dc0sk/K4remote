@@ -1,0 +1,22 @@
+[package]
+name = "k4-transport"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Transport abstraction to the K4 (Ethernet now, serial later) plus an in-memory test double."
+
+[features]
+# TLS-PSK transport (port 9204) via system OpenSSL. Opt-in.
+tls = ["dep:openssl"]
+# USB/serial CAT transport via the serialport crate (libudev on Linux). Opt-in.
+serial = ["dep:serialport"]
+
+[dependencies]
+k4-protocol = { path = "../k4-protocol" }
+openssl = { version = "0.10", optional = true }
+serialport = { version = "4", optional = true }
+
+[dev-dependencies]
+k4-sim = { path = "../k4-sim" }

@@ -1,0 +1,11 @@
+[package]
+name = "k4-sim"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+publish = false
+description = "K4 protocol simulator (ARC-14) for hardware-free integration tests (NFR-TEST-02)."
+
+[dependencies]
+k4-protocol = { path = "../k4-protocol" }

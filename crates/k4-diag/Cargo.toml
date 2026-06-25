@@ -1,0 +1,8 @@
+[package]
+name = "k4-diag"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Structured, levelled, bounded diagnostic log (FR-DIAG-01)."

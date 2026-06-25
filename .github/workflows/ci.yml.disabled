@@ -1,0 +1,82 @@
+# K4 Remote — CI pipeline.  *** DISABLED ***
+#
+# This file is intentionally named `ci.yml.disabled`. GitHub Actions only loads
+# `.yml`/`.yaml` files, so this workflow does NOT run and consumes no Actions
+# minutes. To ENABLE it:
+#
+#     git mv .github/workflows/ci.yml.disabled .github/workflows/ci.yml
+#
+# It mirrors the local git hooks (fmt + clippy + test + audit) and adds the
+# traceability gate (cargo xtask) and a cross-platform build (NFR-PORT-01).
+#
+# When enabled, promote `V*` rows in docs/test/test-strategy.md to `V`.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  fmt-clippy:
+    name: Format & Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install libopus (k4-audio `opus` feature)
+        run: sudo apt-get update && sudo apt-get install -y libopus-dev libasound2-dev libssl-dev libudev-dev pkg-config
+      - name: rustfmt
+        run: cargo fmt --all -- --check
+      - name: clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+  test:
+    name: Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # NFR-PORT-01: Linux + macOS. (Windows needs libopus via vcpkg —
+        # add windows-latest with a vcpkg opus step when desired.)
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install libopus (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libopus-dev libasound2-dev libssl-dev libudev-dev pkg-config
+      - name: Install libopus (macOS)
+        if: runner.os == 'macOS'
+        run: brew install opus pkg-config
+      - name: Test (non-hardware)
+        run: cargo test --workspace
+      - name: Traceability gate (R3/R4)
+        run: cargo run --quiet -p xtask
+      - name: TLS-PSK test (opt-in feature)
+        run: cargo test -p k4-transport --features tls
+
+  audit:
+    name: Dependency Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - name: cargo audit
+        run: cargo audit

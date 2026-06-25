@@ -1,0 +1,17 @@
+[package]
+name = "k4-config"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Connection profiles + preferences persistence (FR-CFG-*), secret-free by construction."
+
+[features]
+# OS keychain password storage via the `keyring` crate. Opt-in.
+keychain = ["dep:keyring"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+keyring = { version = "3", optional = true }

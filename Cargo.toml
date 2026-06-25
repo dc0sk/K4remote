@@ -1,0 +1,27 @@
+# K4 Remote — Cargo workspace.
+# Layering per docs/concept/architecture.md (NFR-MAINT-01): the protocol core
+# (k4-protocol) has no UI or audio dependency. Heavy deps (iced, tokio, opus,
+# cpal) are added per-crate as their phase begins — kept out of the first scaffold.
+[workspace]
+resolver = "2"
+members = [
+    "crates/k4-protocol",
+    "crates/k4-transport",
+    "crates/k4-stream",
+    "crates/k4-session",
+    "crates/k4-audio",
+    "crates/k4-sim",
+    "crates/k4-config",
+    "crates/k4-diag",
+    "app",
+    "xtask",
+]
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+authors = ["Simon Keimer (DC0SK)"]
+rust-version = "1.90"
+
+[workspace.dependencies]
+sha2 = "0.10"
