@@ -30,6 +30,8 @@ consistent traceability** from stakeholder needs down to test cases and test res
 | [requirements/stakeholder-requirements.md](requirements/stakeholder-requirements.md) | What stakeholders need (solution-independent) | `STK-` |
 | [requirements/system-requirements.md](requirements/system-requirements.md) | Functional + non-functional software requirements (testable) | `FR-`, `NFR-` |
 | [concept/architecture.md](concept/architecture.md) | Concept, architecture, components, data flow, ADRs | `ARC-`, `ADR-` |
+| [concept/ui-design.md](concept/ui-design.md) | UI/UX design concept: layout, switchable view mode, semantic colour, interaction model | — (elaborates `FR-UI-*`, `ADR-15`) |
+| [concept/k4-screens.md](concept/k4-screens.md) | K4 on-screen config screens (extracted from the manual): per-primary spec + reusable components + CAT gaps + action list | `SCR-` (elaborates `FR-UI-19`) |
 | [test/test-strategy.md](test/test-strategy.md) | Test approach, levels, verification methods, traceability matrix | `TC-` |
 | [references/](references/) | Vendor documentation (Elecraft K4 Programmer's Reference, manuals) | — |
 | [references/external-references.md](references/external-references.md) | Community references (QK4) + extracted K4/0 streaming protocol facts | `R-EXT-` |

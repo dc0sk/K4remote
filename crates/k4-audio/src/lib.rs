@@ -28,4 +28,4 @@ pub use codec::{OpusDecoder, OpusEncoder};
 #[cfg(feature = "device")]
 pub mod device;
 #[cfg(feature = "device")]
-pub use device::{AudioInput, AudioOutput};
+pub use device::{input_device_names, output_device_names, AudioInput, AudioOutput};

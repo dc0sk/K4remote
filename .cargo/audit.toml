@@ -1,0 +1,11 @@
+# cargo-audit policy (used by the pre-push hook and CI).
+[advisories]
+ignore = [
+    # quick-xml DoS advisories (RUSTSEC-2026-0194/0195) reach the code only via
+    # `wayland-scanner`, a BUILD-TIME proc-macro that parses trusted, shipped
+    # Wayland protocol XML — never runtime or network input — so they are not
+    # exploitable here. quick-xml is pinned <0.41 by the iced/winit Wayland
+    # clipboard stack; remove these once that chain ships quick-xml >=0.41.0.
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
+]

@@ -1,8 +1,8 @@
 ---
 title: "System Requirements Specification"
 status: Draft
-version: "0.2"
-updated: 2026-06-25
+version: "0.13"
+updated: 2026-07-03
 authors:
   - Simon Keimer (DC0SK)
 owns: [FR, NFR]
@@ -79,9 +79,10 @@ Programmer's Reference rev. D12 (`PRG`) command mnemonics.
 | `FR-VFO-01` | set VFO A and VFO B frequency in Hz via `FA`/`FB`, accepting the operator's entry and emitting the canonical 11-digit form (PRG `FA`/`FB`). | STK-02 | M | T | Entering 14.074 MHz emits `FA00014074000;`. |
 | `FR-VFO-02` | display VFO A/B frequency from RESP, parsing the 11-digit Hz form. | STK-02 | M | T | `FB00007100000;` shows 7.100000 MHz on VFO B. |
 | `FR-VFO-03` | tune by step increments (configurable step) and by direct numeric entry. | STK-02 | M | T | A +1 step at 100 Hz step changes target freq by exactly 100 Hz. |
-| `FR-VFO-04` | switch bands and reflect band-stack changes (PRG `BN`). | STK-02 | M | T | Band-up command and RESP update the band field. |
+| `FR-VFO-04` | switch bands — band up/down, **direct band select** by number, band-stacking recall, and transverter bands (PRG `BN`/`BN$`/`BN^`/`XV`). | STK-02 | M | T | Band-up and direct `BN00`…`BN10;` encode; band-stack `BN^;` and `XV` encode; RESP updates the band field. |
 | `FR-VFO-05` | control RIT/XIT on/off and offset, and clear them (PRG `RT`/`XT`/`RC`, `IF` flags). | STK-03 | S | T | Enabling RIT and a +50 Hz offset is reflected in state and via `IF`. |
 | `FR-VFO-06` | control split on/off (PRG `FT`). | STK-02 | S | T | `FT1;`/`FT0;` toggles split state. |
+| `FR-VFO-07` | copy/swap the VFOs — A→B, B→A, and swap, for frequency or full state (PRG `AB`). | STK-02 | S | T | `AB0`…`AB5;` encode the copy/swap variants. |
 | `FR-VFO-ID` | set/display the station ID text (PRG `ID`) to support identification. | STK-13 | S | T | Setting ID emits `ID<text>;`; RESP updates displayed ID. |
 
 ## E. Mode & Bandwidth — `FR-MODE`
@@ -138,12 +139,14 @@ Programmer's Reference rev. D12 (`PRG`) command mnemonics.
 | `FR-AUD-03` | set/observe remote streaming audio latency where supported (`SL`). | STK-05 | C | T | `SL` value round-trips. |
 | `FR-AUD-04` | decode the K4 audio packet (`0x01`): header (version, sequence, encode mode, frame size u16 LE, sample-rate code), then Opus/PCM data; RX = 12 kHz stereo (L=Main, R=Sub), TX = 12 kHz mono (`R-EXT-01`). | STK-05 | M | T | Decoder yields correct PCM from sample/captured audio fixtures; channel split L=Main/R=Sub verified. |
 | `FR-AUD-05` | order/seq-check audio packets using the wrapping sequence byte and drop/conceal as needed. | STK-05 | S | T | Out-of-order/duplicate sequence numbers handled per policy. |
+| `FR-AUD-DEV-01` | let the operator **select the audio devices** — RX playback (output) and TX microphone (capture) — from the OS-enumerated device lists via dropdowns in the settings dialog; the choice persists (`FR-CFG-02`) and is applied to the audio streams. | STK-05/06/12 | S | D/T | Available output/input devices are listed; selecting one routes RX playback / TX capture to it and the choice survives restart. |
+| `FR-AUD-LVL-01` | provide a **RX volume** slider (local playback level of the received audio) and a **TX mic-level** slider (local capture gain before encode), each adjustable live; these are client-side levels, distinct from the radio's `AG`/`MG`. | STK-05/06 | S | T/D | Moving the volume slider scales RX playback amplitude; the mic slider scales captured mic amplitude; both take effect without reconnect. |
 
 ## J. Panadapter / Waterfall — `FR-PAN` (Phase 2; control subset in v1)
 
 | ID | Statement | Up | Pri | Ver | Acceptance criteria |
 |---|---|---|---|---|---|
-| `FR-PAN-CTL-01` | control panadapter span (`#SPN`, 6–368 kHz), reference (`#REF`), scale (`#SCL`), averaging (`#AVG`), FPS (`#FPS`) (PRG Display Commands). | STK-10 | S | T | Each `#` command encodes within documented range and round-trips. |
+| `FR-PAN-CTL-01` | control the panadapter/display via the `#` command family: mode/dual (`#DPM`), span (`#SPN`, 6–368 kHz), reference (`#REF`), scale (`#SCL`), averaging (`#AVG`), peak (`#PKM`), fixed/freeze (`#FXT`/`#FRZ`), waterfall palette/height (`#WFC`/`#WFH`), panadapter NB (`#NB`/`#NBL`) (PRG Display Commands). | STK-10 | S | T | Each `#` command encodes within documented range and round-trips. |
 | `FR-PAN-CTL-02` | control waterfall colour mode (`#WFC`), colour range (`#WBS`), height (`#WFH`), and display mode (`#DSM`). | STK-10 | S | T | Each waterfall `#` command round-trips. |
 | `FR-PAN-CTL-03` | freeze/unfreeze the panadapter+waterfall (`#FRZ`) and set peak mode (`#PKM`). | STK-10 | C | T | Freeze toggles state. |
 | `FR-PAN-01` | **[Phase 2]** decode the PAN packet (`0x02`): receiver, center freq (i64 LE Hz), sample rate (i32 LE; span = ×1000 Hz), noise floor (i32 LE ÷10 dB), and bins as 1 byte each where **dBm = byte − 146** (`R-EXT-01`). | STK-09 | W2 | T | Decoder produces the expected dBm array + metadata from sample fixtures; MiniPAN (`0x03`) likewise. |
@@ -162,6 +165,22 @@ Programmer's Reference rev. D12 (`PRG`) command mnemonics.
 | `FR-UI-05` | reserve a designated, clearly-labelled placeholder region for the Phase-2 spectrum/waterfall. | STK-09/11 | M | I | A placeholder pane exists where the panadapter will mount. |
 | `FR-UI-06` | reflect the connection/transmit state visibly enough to prevent mode confusion (e.g. distinct TX indication). | STK-11/08 | M | D | TX state is visually unmistakable. |
 | `FR-UI-07` | keep the UI responsive (no freeze) while network/audio I/O runs (UI on its own thread/async runtime). | STK-11 | M | T/D | UI thread never blocks on I/O in design; demonstrated under load. |
+| `FR-UI-08` | provide a switchable main-window **view mode** — single VFO A, single VFO B, or dual (A+B) — that reflows the header + panadapter layout, mirroring the K4 `PAN=A/B/A+B` selection (`R-EXT-02`, `ui-design.md`). | STK-11 | M | T | `ViewMode` cycles A→B→dual→A; each mode reports which receiver pane(s) are shown. |
+| `FR-UI-09` | render operating frequencies with the K4's **dot-grouped** formatting to kHz (e.g. `14.070.000`). | STK-11 | M | T | Formatter maps Hz → grouped string across band edges and sub-kHz values. |
+| `FR-UI-10` | apply **semantic colour roles** to operating state — transmit (amber), VFO A/main (blue), VFO B/sub & active (green), RX values (white), caution (yellow), inactive (dim) — so TX/RX and A/B are unmistakable (`FR-UI-06`). | STK-11/08 | M | T | Role selector returns the correct role for TX/RX, A/B, active/inactive inputs. |
+| `FR-UI-11` | present operating controls as **two-line state buttons** (function label + live value derived from the radio state), e.g. `ATT`/`Off`, `AGC`/`Slow`, `BW`/`2.80`. | STK-11 | S | T | State→(label,value) derivation matches the radio state for representative controls. |
+| `FR-UI-12` | lay out the two VFOs **symmetrically** (A-left/B-right) with the shared TX/SPLIT/RIT-XIT indicator **between** them, reflowing responsively (single pane / dual side-by-side / stacked when narrow). | STK-11/08 | M | T/D | `band_layout(width, mode)` yields the right panes, centre-box placement, and narrow-stack reflow (test); A/B panels mirror with the shared transmit box between them (demo). |
+| `FR-UI-13` | use a consistent **primary-button + context-row** interaction model: a fixed row of primaries (`MENU/Fn/DISPLAY/BAND/MAIN RX/SUB RX/TX`) each swaps a context sub-row of controls (mode-dependent where the K4 is). | STK-11 | S | T/D | State machine: tapping a primary toggles its row, only one open at a time; context items are mode-dependent (test). Visual reveal (demo). |
+| `FR-UI-14` | offer a **mini-pan** tuning aid (a narrow zoomed spectrum around the active VFO, invoked from the S-meter) for fine tuning. | STK-09/11 | C | D | A zoomed spectrum appears over the main pan and tracks the VFO. |
+| `FR-UI-15` | style the client after the references (`R-EXT-02`): a **dark layered theme** whose background/panel/control surfaces step up strictly in luminance, and a **proportional S-meter bar** on the K4 face (S1 ≈ −121 dBm … S9+60 ≈ −13 dBm, S9 = −73 dBm), green with a caution colour ≥ S9. | STK-11 | S | T/D | Shade palette is strictly luminance-ordered and `s_meter_fraction` maps the face endpoints/S9 correctly, clamped (test); themed panels/buttons/meters render per `ui-design.md` (demo). |
+| `FR-UI-16` | present the connect control as a function of the connection phase: **Connect** while idle, **Cancel** while an attempt is in flight (opening/handshaking or awaiting retry), and **Disconnect** once a session is up; tapping it while it shows **Cancel** shall abort the in-flight attempt and return to disconnected. The connect attempt shall not freeze the UI or the worker (`FR-UI-07`). | STK-01/11 | S | T/D | `connect_button(phase)` yields the correct (label, action) for each phase (test); a live attempt to a non-responsive host shows **Cancel**, and tapping it returns to **Connect** with the attempt aborted (demo). |
+| `FR-UI-17` | offer a **theme selector** cycling **Dark → Light → Contrast → System**, applied live to the whole UI; `System` follows the OS light/dark preference. Each theme resolves the surface-shade and semantic-role palettes (`FR-UI-10/15`). | STK-11 | C | T/D | `ThemeMode` cycles the four modes with distinct labels and resolves to a concrete palette (`System` per the detected OS preference) (test); each theme renders coherently (demo). |
+| `FR-UI-18` | provide an **About** affordance showing the author, the **software version**, the license, the project URL, and a **donate** link; the license, project URL, and donate entries shall open in the OS browser when activated. | STK-11 | C | T/D | The About constants (author/license+URL/project URL/donate URL) and `app_version()` are present (test); the About box shows them, the links open externally, and it dismisses (demo). |
+| `FR-UI-19` | when a primary softkey (`MENU/Fn/DISPLAY/BAND/MAIN RX/SUB RX/TX`) is active, display that primary's K4 **configuration screen in place of the spectrum frame** (`R-EXT-02`) — **not** replacing the mode/filter controls and **not** a separate window — and restore the spectrum when it is deselected. The screen shows the radio's *additional* functions (e.g. RX/TX equalizer, display setup, band stacking), not controls already present elsewhere in the UI; the VFO band, controls, softkey row, and lower panels stay visible and operational. | STK-11 | S | T/D | `menu_screen_synopsis` maps each primary to a distinct screen (test); selecting a primary swaps only the spectrum frame and deselecting restores it, with the rest of the UI untouched (demo). |
+| `FR-UI-20` | **seed the configuration screens from the radio** on connect: the connect GET burst requests each screen's values (`RE/TE/KP/KS/MI/MG/LO/AN/AR/VX/BN/#REF/#SPN/#SCL/#DPM/#WFC/#WFH`), the parsed `RadioState` is surfaced into the snapshot, and each screen (EQ/DISPLAY/TX/RX) reflects the radio's **current** values once per connection rather than local defaults; later user edits are not overwritten. | STK-11/04 | S | T/D | `RadioState::apply_cat` parses each RESP form (test); on connect the screens show the radio's reported values (demo/live). |
+| `FR-UI-21` | **start in a landscape window** (wider than tall), matching the horizontal layout. | STK-11 | C | T/D | `DEFAULT_WINDOW_SIZE` has width > height (test); the window opens landscape (demo). |
+| `FR-UI-22` | show a **phase-coloured connection indicator** in the header — a dot + label that is green when connected, amber while connecting, and grey when disconnected. | STK-01/11 | C | T/D | `conn_status(phase)` returns the correct (label, colour role) per phase (test); the header dot changes colour across a connect cycle (demo). |
+| `FR-UI-23` | provide an **application settings dialog** (opened from a settings affordance) housing the **connection** settings (host/port/TLS/password/serial), **audio-device** selection (`FR-AUD-DEV-01`), and **audio levels** (`FR-AUD-LVL-01`); the connection form **moves into this dialog** rather than occupying a permanent panel on the main window. | STK-11/12 | S | D | Opening settings shows connection + audio controls; connecting works from the dialog; the main window no longer carries the permanent connection panel. |
 
 ## L. Configuration — `FR-CFG`
 
@@ -170,6 +189,8 @@ Programmer's Reference rev. D12 (`PRG`) command mnemonics.
 | `FR-CFG-01` | persist and load connection profiles (host, port, audio profile, options). | STK-12 | S | T | A saved profile reloads identically across restarts. |
 | `FR-CFG-02` | persist UI/operating preferences (step size, default AI mode, audio device selection). | STK-12 | S | T | Preferences survive restart. |
 | `FR-CFG-03` | store the connection **password securely** (OS keychain or, at minimum, not in plaintext logs/config). | STK-12/14 | M | I/T | Password never written to logs; storage is not plaintext config. |
+| `FR-CFG-04` | maintain a **peer cache** of successfully-connected servers (name/host/port/TLS/username). Each peer's password shall be stored **either** in the OS **credential manager** **or** in the **local config file encrypted** under a key derived (KDF) from a user-supplied **master password** that is entered on connect to unlock decryption; passwords are **never** stored in plaintext. The operator shall be able to **select** a cached peer to populate the connection and **delete** the selected peer's entry. | STK-12/14 | S | T/D | Encrypt→decrypt of a peer password round-trips under the correct master password and **fails under a wrong one**; keychain mode stores/retrieves; a peer is added on a successful connect; deleting the selected peer removes it (config + secret). |
+| `FR-CFG-05` | **remember the last session and settings** across restarts: the last-connected peer (prefilled connection), the transport mode (TLS/serial), and user settings (theme, master-password storage mode, and — once implemented — audio device/level choices). | STK-12 | S | T/D | After a restart the app prefills the last connection and restores the saved settings. |
 
 ## M. Diagnostics — `FR-DIAG`
 
@@ -178,6 +199,23 @@ Programmer's Reference rev. D12 (`PRG`) command mnemonics.
 | `FR-DIAG-01` | provide structured, levelled logging of transport, CAT frames, and session events. | STK-17 | S | T | Log records carry level, timestamp, category; CAT frames optionally traced. |
 | `FR-DIAG-02` | offer a raw CAT command/console view for troubleshooting (send arbitrary command, see raw RESP). | STK-17 | C | D | Operator can send `IF;` and see the raw reply. |
 | `FR-DIAG-03` | never log secrets (passwords) or full audio payloads. | STK-14/17 | M | I | Inspection confirms redaction. |
+
+## N. Radio configuration commands (screen support) — `FR-EQ / FR-KEY / FR-AUD-CFG / FR-ANT / FR-MENU`
+
+*Control capabilities behind the K4 on-screen configuration screens
+([../concept/k4-screens.md](../concept/k4-screens.md), `FR-UI-19`). Command
+syntax per the Programmer's Reference D12, cross-checked vs QK4 (`R-EXT-03`).*
+
+| ID | Statement (the system shall…) | Up | Pri | Ver | Acceptance criteria |
+|---|---|---|---|---|---|
+| `FR-EQ-01` | control the **8-band graphic equalizer** for RX (per receiver) and TX — set each 100–3200 Hz band's gain (−16..+16 dB) and flatten (PRG `RE`/`TE`/`REF`). | STK-03/06 | S | T | `RE`/`TE` encode 8 signed 3-char band fields within ±16; `REF;` flattens. |
+| `FR-KEY-01` | configure the **CW keyer**: weight, paddle normal/reverse, iambic mode A/B, and speed (PRG `KP`/`KS`). | STK-07 | S | T | `KP`/`KS` encode within range (weight 90–125, speed 8–100 WPM). |
+| `FR-AUD-CFG-01` | configure **transmit audio input/output**: mic input source, mic gain, mic preamp/bias/buttons, and line in/out levels (PRG `MI`/`MG`/`MS`/`LI`/`LO`). | STK-06 | S | T | Each encoder emits the documented field layout within range. |
+| `FR-ANT-01` | select the **transmit antenna** (ANT1–3) and per-receiver **RX antenna** (PRG `AN`/`AR`). | STK-02 | C | T | `AN`/`AR` encode within range. |
+| `FR-MENU-01` | access the radio's **configuration menu** by item id — open, query definition, and set a menu parameter (PRG `MO`/`MEDF`/`ME`). | STK-11 | C | T | `MO`/`MEDF`/`ME` encode the 4-digit id (and value for set). |
+| `FR-SW-01` | **emulate front-panel switch** tap/hold by code (PRG `SW`) to reach functions that have no dedicated CAT command — notably quick memories M1–M4 (recall/store) and PF1–PF4 (the memory-channel `MC` command being pending in D12). | STK-02/11 | C | T | `switch(code)` encodes `SW<code>;`; the quick-memory/PF/switch tables carry the correct codes. |
+| `FR-VOX-01` | control **VOX** on/off per transmit mode (PRG `VX`). | STK-06 | C | T | `set_vox(mode,on)` encodes `VX<mode><0/1>;`. |
+| `FR-TX-MSG-01` | **send CW/DATA text messages** for transmission (PRG `KY`, ≤60 chars). | STK-07 | C | T | `send_text(text)` encodes `KY <text>;` and truncates to 60 chars. |
 
 ---
 
@@ -193,8 +231,11 @@ Programmer's Reference rev. D12 (`PRG`) command mnemonics.
 | `NFR-REL-01` | The client shall not crash on malformed/unknown CAT input; it shall degrade gracefully and keep the session. | STK-17 | M | T | Fuzz/garbage input test: no panic, parser resyncs. |
 | `NFR-SEC-01` | The remote connection password shall never appear in logs, crash reports, or telemetry. | STK-14 | M | I/T | Log/redaction test passes; inspection confirms. |
 | `NFR-SEC-02` | The application shall treat the network link as untrusted and document/recommend a secure tunnel (VPN) for Internet use. | STK-14 | S | I | Documentation present; no secret sent before handshake auth. |
+| `NFR-SEC-03` | Master-password encryption of cached peer passwords (`FR-CFG-04`) shall use a memory-hard KDF (Argon2) with a per-store random salt and an authenticated cipher (AEAD, e.g. ChaCha20-Poly1305) with a per-secret random nonce; a wrong master password shall fail decryption authentication rather than yield plaintext. | STK-14 | S | T | Tampered ciphertext or a wrong master password fails the AEAD tag check; salt/nonce are random per store/secret. |
 | `NFR-USE-01` | Operating-critical state (frequency, mode, TX/RX) shall be readable at a glance and update within 200 ms of a change. | STK-11 | M | D | Usability demo against checklist. |
 | `NFR-PORT-01` | The application shall build and run on Linux and at least one of Windows/macOS from a single Rust codebase. | STK-16 | S | D | CI builds the target platforms; app launches. |
+| `NFR-PORT-02` | The application shall build and run on **Raspberry Pi OS (arm64/aarch64)**, **Linux x86_64**, **Windows x86_64**, and **macOS**, from the single Rust codebase. | STK-16 | S | D | Each target builds in CI and the app launches on it. |
+| `NFR-PKG-01` | The project shall provide **distribution packaging**: a **Debian package** (`.deb`, x86_64 + arm64) and an **Arch `PKGBUILD`** for Linux, plus native bundles for **Windows x86_64** and **macOS**. | STK-16 | C | I/D | Each packaging recipe produces an installable artifact for its platform. |
 | `NFR-MAINT-01` | The codebase shall be organised into independently testable layers (transport, CAT, state, audio, UI) with no UI dependency in the protocol core. | STK-15 | M | I | Dependency check: protocol crate has no UI/iced dependency. |
 | `NFR-MAINT-LOG` | Diagnostic logging shall be sufficient to reconstruct a failed session's command/event sequence. | STK-17 | S | I | Replay from logs demonstrated. |
 | `NFR-TEST-01` | Every `M` and `S` functional/non-functional requirement shall be covered by ≥1 automated test referencing its ID (rule R3/R4). | STK-15 | M | I | Traceability gate `xtask trace` green. |
@@ -206,7 +247,7 @@ Programmer's Reference rev. D12 (`PRG`) command mnemonics.
 
 - ~~`OP-1`~~ **Resolved by `R-EXT-01`** (single multiplexed socket; ports 9205/9204; framing + PAN/audio layouts). Confirm on real radio (`ASM-05`).
 - ~~`OP-2`~~ **Resolved:** TX/RX share the `EM` encode negotiation; audio is one multiplexed stream over the control socket (not separate ports).
-- ~~`OP-3`~~ **Partially resolved:** audio is **12 kHz** (RX stereo, TX mono), Opus VOIP, frame size per `SL` tier. Still to decide: device-selection UX (`FR-CFG-02`).
+- ~~`OP-3`~~ **Partially resolved:** audio is **12 kHz** (RX stereo, TX mono), Opus VOIP, frame size per `SL` tier. Device-selection UX now specified (`FR-AUD-DEV-01`, in the settings dialog `FR-UI-23`).
 - `OP-4` Decide CW source: physical paddle via serial/USB at the client, on-screen, or keyboard — affects `FR-TX-CW-01` input layer. *(QK4 supports hardware keyers/K-Pod; out of our v1 scope.)*
 - `OP-5` Confirm required regulatory identification behaviour for `STK-13`/`FR-VFO-ID`.
 - `OP-6` Choose default transport security: plaintext+SHA-384 (9205) vs TLS-PSK (9204) for Internet use (`NFR-SEC-02`, `FR-AUTH-02`).
@@ -217,3 +258,14 @@ Programmer's Reference rev. D12 (`PRG`) command mnemonics.
 |---|---|---|---|
 | 2026-06-25 | 0.1 | DC0SK | Initial draft baseline (FR/NFR). |
 | 2026-06-25 | 0.2 | DC0SK | Added FR-STREAM/FR-AUTH groups; unblocked FR-AUD-04/FR-PAN-01 with concrete layouts; resolved OP-1..3; added OP-6. |
+| 2026-06-26 | 0.3 | DC0SK | Added FR-UI-08..14 (view mode, dot-grouped freq, semantic colour, two-line state buttons, A/B symmetry, primary+context model, mini-pan) from R-EXT-02 / ui-design.md / ADR-15. |
+| 2026-07-02 | 0.4 | DC0SK | Added FR-UI-15 (reference-faithful dark layered theme + proportional S-meter bar) — visual-identity pass per updated ADR-15 direction. |
+| 2026-07-02 | 0.5 | DC0SK | Added FR-UI-16 (phase-driven Connect/Cancel/Disconnect control; a connection attempt is cancellable and runs off the UI/worker blocking path). |
+| 2026-07-02 | 0.6 | DC0SK | Added FR-UI-17 (theme selector: dark/light/contrast/system) and FR-UI-18 (About box: author/license/URL). Also fixed dual-pane spectrum height to match single view (FR-UI-12). |
+| 2026-07-02 | 0.7 | DC0SK | Added FR-UI-19 (primary softkeys open a K4 config screen in place of the spectrum frame; controls/lower panels stay). Corrected scope after a wrong first attempt that replaced the controls box + duplicated existing controls. |
+| 2026-07-02 | 0.8 | DC0SK | Phase-0 config-screen commands: added §N (FR-EQ-01, FR-KEY-01, FR-AUD-CFG-01, FR-ANT-01, FR-MENU-01) + FR-VFO-07 (VFO copy/swap); extended FR-VFO-04 (direct band/stack/XVTR) and FR-PAN-CTL-01 (full `#` display family). CAT encoders + tests added to `k4-protocol` (`docs/concept/k4-screens.md` §3.2). |
+| 2026-07-02 | 0.9 | DC0SK | Added FR-SW-01 (front-panel switch emulation `SW`) — enables quick memories (M1–M4) and PF1–PF4 remotely, since the `MC` memory-channel command is pending in D12. |
+| 2026-07-02 | 0.10 | DC0SK | Added FR-VOX-01 (VOX `VX`) and FR-TX-MSG-01 (CW/DATA text send `KY`). Completed outbound-only screen work: BAND XVTR (`XV`), TX TEXT/VOX tabs, Fn Switches + DX-list tabs. |
+| 2026-07-03 | 0.11 | DC0SK | Added FR-UI-20 (config screens seed from the radio on connect — read-back). FR-AUTH-02 (TLS-PSK, port 9204) now **implemented** and verified live against a real K4 (`connect_tls`): learned the exact PSK scheme (identity empty, key = raw password bytes, TLS 1.2 `PSK-AES256-CBC-SHA384`) and fixed a handshake-timeout + OpenSSL-security-level bug. Keychain I/O moved off the UI thread (FR-UI-07 hardening). |
+| 2026-07-03 | 0.12 | DC0SK | UI polish: extended FR-UI-18 (About now shows version + donate link + openable license/project/donate links); added FR-UI-21 (landscape default window) and FR-UI-22 (phase-coloured connection indicator). Also: TX box CLR sized to match SPLIT/RIT/XIT (2×2 grid). |
+| 2026-07-03 | 0.13 | DC0SK | Recorded new (proposed) requirements: NFR-PORT-02 (targets: RPi OS arm64 / Linux x86_64 / Windows x86_64 / macOS) + NFR-PKG-01 (Debian .deb, Arch PKGBUILD, Windows/macOS bundles); FR-UI-23 (application settings dialog housing the connection form + audio controls); FR-AUD-DEV-01 (RX/TX audio-device selection dropdowns); FR-AUD-LVL-01 (RX volume + TX mic-level sliders). Not yet implemented. |

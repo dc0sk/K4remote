@@ -10,7 +10,11 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+pub mod crypto;
+pub mod peer;
 pub mod secret;
+pub use crypto::{CryptoError, MasterKey, Sealed};
+pub use peer::{Peer, PeerCache, PeerSecret};
 #[cfg(feature = "keychain")]
 pub use secret::KeyringStore;
 pub use secret::{MemoryStore, SecretError, SecretStore};
@@ -31,16 +35,43 @@ pub struct Profile {
     pub remember: bool,
 }
 
-/// Operating preferences (FR-CFG-02).
+/// Operating preferences (FR-CFG-02/05). Audio levels are stored as integer
+/// percents (unity = 100) so the struct stays `Eq` and the TOML stays clean.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Prefs {
     /// Tuning step, Hz.
     pub tune_step_hz: u32,
+    /// Selected RX playback device name (`None` = system default).
+    #[serde(default)]
+    pub audio_output: Option<String>,
+    /// Selected TX capture device name (`None` = system default).
+    #[serde(default)]
+    pub audio_input: Option<String>,
+    /// RX playback volume, percent (0–200; 100 = unity).
+    #[serde(default = "default_pct")]
+    pub volume_pct: u16,
+    /// TX mic capture gain, percent (0–300; 100 = unity).
+    #[serde(default = "default_pct")]
+    pub mic_gain_pct: u16,
+    /// Selected UI theme name (`dark`/`light`/`contrast`/`system`).
+    #[serde(default)]
+    pub theme: Option<String>,
+}
+
+fn default_pct() -> u16 {
+    100
 }
 
 impl Default for Prefs {
     fn default() -> Self {
-        Self { tune_step_hz: 100 }
+        Self {
+            tune_step_hz: 100,
+            audio_output: None,
+            audio_input: None,
+            volume_pct: 100,
+            mic_gain_pct: 100,
+            theme: None,
+        }
     }
 }
 
@@ -53,6 +84,9 @@ pub struct Config {
     /// Operating preferences.
     #[serde(default)]
     pub prefs: Prefs,
+    /// Cache of successfully-connected peers (FR-CFG-04).
+    #[serde(default)]
+    pub peers: PeerCache,
 }
 
 impl Config {

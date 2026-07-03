@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   width="512"
+   height="512"
+   viewBox="0 0 512 512"
+   version="1.1"
+   id="svg5"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <defs
+     id="defs4">
+    <linearGradient
+       id="bg"
+       x1="0"
+       y1="0"
+       x2="0"
+       y2="1">
+      <stop
+         offset="0"
+         stop-color="#1b1f26"
+         id="stop1" />
+      <stop
+         offset="1"
+         stop-color="#0a0c10"
+         id="stop2" />
+    </linearGradient>
+    <linearGradient
+       id="spec"
+       x1="0"
+       y1="0"
+       x2="0"
+       y2="1">
+      <stop
+         offset="0"
+         stop-color="#3D9BFF"
+         stop-opacity="0.85"
+         id="stop3" />
+      <stop
+         offset="1"
+         stop-color="#3D9BFF"
+         stop-opacity="0.04"
+         id="stop4" />
+    </linearGradient>
+  </defs>
+  <!-- Panel background (dark squircle, subtle blue edge) -->
+  <rect
+     x="16"
+     y="16"
+     width="480"
+     height="480"
+     rx="112"
+     fill="url(#bg)"
+     stroke="#2b3442"
+     stroke-width="6"
+     id="rect4" />
+  <!-- "K4" wordmark -->
+  <path
+     d="m 107.98242,132.3291 h 43.23731 v 61.20606 l 62.3291,-61.20606 h 50.20019 L 183.00195,211.72852 272.05957,300 H 217.92871 L 151.21973,233.96484 V 300 h -43.23731 z m 241.79199,35.60059 -47.39257,70.19043 h 47.39257 z m -7.1875,-35.60059 h 48.06641 v 105.79102 h 23.9209 v 31.333 h -23.9209 V 300 h -40.87891 v -30.54688 h -74.3457 v -37.06054 z"
+     id="text4"
+     style="font-weight:bold;font-size:230px;font-family:'DejaVu Sans', sans-serif;text-anchor:middle;fill:#eceff2"
+     aria-label="K4" />
+  <!-- Panadapter trace along the bottom -->
+  <path
+     d="M 70 450 L 110 442 L 138 398 L 162 448 L 205 436 L 240 356 L 266 444            L 316 430 L 356 372 L 392 438 L 430 446 L 442 450 L 442 462 L 70 462 Z"
+     fill="url(#spec)"
+     id="path4" />
+  <path
+     d="M 70 450 L 110 442 L 138 398 L 162 448 L 205 436 L 240 356 L 266 444            L 316 430 L 356 372 L 392 438 L 430 446 L 442 450"
+     fill="none"
+     stroke="#5BB0FF"
+     stroke-width="7"
+     stroke-linejoin="round"
+     stroke-linecap="round"
+     id="path5" />
+  <!-- Amber TX indicator -->
+  <circle
+     cx="424"
+     cy="96"
+     r="22"
+     fill="#FF9A1E"
+     id="circle5" />
+</svg>

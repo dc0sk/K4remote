@@ -10,6 +10,9 @@ description = "Transport abstraction to the K4 (Ethernet now, serial later) plus
 [features]
 # TLS-PSK transport (port 9204) via system OpenSSL. Opt-in.
 tls = ["dep:openssl"]
+# Like `tls`, but build OpenSSL from source (no system OpenSSL needed —
+# convenient for Windows/macOS packaging). Opt-in.
+vendored-tls = ["tls", "openssl/vendored"]
 # USB/serial CAT transport via the serialport crate (libudev on Linux). Opt-in.
 serial = ["dep:serialport"]
 

@@ -1,5 +1,6 @@
-//! Config tests. trace: FR-CFG-01, FR-CFG-02, FR-CFG-03, NFR-SEC-01
-use k4_config::{redact, Config, MemoryStore, Prefs, Profile, SecretStore};
+//! Config tests. trace: FR-CFG-01, FR-CFG-02, FR-CFG-03, FR-CFG-04, FR-CFG-05,
+//! NFR-SEC-01
+use k4_config::{redact, Config, MemoryStore, Peer, PeerSecret, Prefs, Profile, SecretStore};
 
 /// The `SecretStore` abstraction holds the password out of the config file
 /// (FR-CFG-03): set/get/delete round-trip via the in-memory backend.
@@ -30,7 +31,11 @@ fn fr_cfg_01_toml_roundtrip() {
             use_tls: true,
             remember: false,
         }),
-        prefs: Prefs { tune_step_hz: 50 },
+        prefs: Prefs {
+            tune_step_hz: 50,
+            ..Default::default()
+        },
+        peers: Default::default(),
     };
     let toml = cfg.to_toml().unwrap();
     assert_eq!(Config::from_toml(&toml).unwrap(), cfg);
@@ -91,9 +96,75 @@ fn fr_cfg_01_save_load_file_roundtrip() {
             use_tls: false,
             remember: true,
         }),
-        prefs: Prefs { tune_step_hz: 10 },
+        prefs: Prefs {
+            tune_step_hz: 10,
+            ..Default::default()
+        },
+        peers: Default::default(),
     };
     cfg.save(&path).unwrap();
     assert_eq!(Config::load(&path), cfg);
     let _ = std::fs::remove_file(&path);
+}
+
+/// The last session (connection profile) and peer cache persist across a
+/// save/load cycle — the app remembers them on restart (FR-CFG-05, FR-CFG-04).
+///
+/// trace: FR-CFG-05, FR-CFG-04
+#[test]
+fn fr_cfg_05_remembers_last_session_and_peers() {
+    let path = std::env::temp_dir().join(format!("k4cfg-peers-{}.toml", std::process::id()));
+    let mut peers = k4_config::PeerCache::default();
+    peers.upsert(Peer {
+        name: "radio".into(),
+        host: "radio.lan".into(),
+        port: 9204,
+        use_tls: true,
+        secret: PeerSecret::Keyring,
+    });
+    let cfg = Config {
+        last: Some(Profile {
+            host: "radio.lan".into(),
+            port: 9204,
+            use_tls: true,
+            remember: true,
+        }),
+        peers,
+        ..Default::default()
+    };
+    cfg.save(&path).unwrap();
+    let loaded = Config::load(&path);
+    assert_eq!(loaded.last, cfg.last);
+    assert_eq!(loaded.peers.peers.len(), 1);
+    assert_eq!(loaded.peers.peers[0].host, "radio.lan");
+    assert_eq!(loaded.peers.peers[0].secret, PeerSecret::Keyring);
+    // No plaintext password anywhere in the serialized config.
+    let toml = cfg.to_toml().unwrap().to_lowercase();
+    assert!(!toml.contains("password"));
+    let _ = std::fs::remove_file(&path);
+}
+
+/// Audio device selection + local levels + theme persist across save/load — the
+/// app remembers them on restart (FR-AUD-DEV-01, FR-AUD-LVL-01, FR-CFG-05).
+///
+/// trace: FR-AUD-DEV-01, FR-AUD-LVL-01, FR-CFG-05
+#[test]
+fn fr_aud_dev_lvl_settings_persist() {
+    let cfg = Config {
+        prefs: Prefs {
+            audio_output: Some("USB Audio".into()),
+            audio_input: Some("Default Mic".into()),
+            volume_pct: 150,
+            mic_gain_pct: 80,
+            theme: Some("contrast".into()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let back = Config::from_toml(&cfg.to_toml().unwrap()).unwrap();
+    assert_eq!(back.prefs.audio_output.as_deref(), Some("USB Audio"));
+    assert_eq!(back.prefs.audio_input.as_deref(), Some("Default Mic"));
+    assert_eq!(back.prefs.volume_pct, 150);
+    assert_eq!(back.prefs.mic_gain_pct, 80);
+    assert_eq!(back.prefs.theme.as_deref(), Some("contrast"));
 }

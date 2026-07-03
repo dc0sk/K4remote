@@ -1,8 +1,8 @@
 ---
 title: "External References"
 status: Draft
-version: "0.1"
-updated: 2026-06-25
+version: "0.3"
+updated: 2026-07-02
 authors:
   - Simon Keimer (DC0SK)
 owns: [R-EXT]
@@ -195,3 +195,90 @@ the real radio (`ASM-03`/`ASM-05`).
 - Confirm port behaviour (9204 TLS-PSK vs 9205 SHA-384) on current firmware.
 - Confirm PAN `version`/`pan type` field semantics and whether bins are ever >1 byte.
 - Confirm the `RDY;` dump contents/ordering for our state-seed (`FR-CAT-07`).
+
+---
+
+## R-EXT-02 — UI design references (K4 front panel + third-party panels)
+
+Visual/UX references that inform the GUI design. These are the source for the
+`FR-UI-*` layout requirements and `docs/concept/ui-design.md`. **Two distinct
+provenance classes — they are not treated the same:**
+
+### A. Elecraft K4 native LCD — *normative, interoperability-faithful*
+
+- **Sources (in `docs/references/external/`):**
+  - *Intro to the Elecraft K4, rev C5* — clean drawn renders of the 7" LCD in
+    every operating state (pp. 8–44): display zones, dual panadapter, mode/band
+    grids, RX/TX config rows, S-meter, RIT/XIT box, mini-pan, keyboard, memories,
+    EQ, status display.
+  - *K4 product photo* (`k4-front-white-bg-product.webp`) — front-panel layout.
+- **Author / status:** Elecraft (vendor). The K4's own on-screen layout, colour
+  semantics, and control grouping.
+- **Use:** Reproducing the **K4's own UI conventions** is *interoperability
+  faithfulness for the operator*, the same class as matching the CAT/streaming
+  protocol — an operator who knows the K4 should recognise our panel. We adopt the
+  **functional layout and semantics** (A/B symmetry, the shared TX/RIT box between
+  VFOs, the 7-primary + context-row model, semantic colours, two-line state
+  buttons, switchable single/dual panadapter). These are facts of the radio, not
+  third-party expression.
+
+### B. K4-Control for iOS (Roskosch) — *secondary, adapt-don't-clone*
+
+- **Sources:** `K4-Control for iOS.pdf` (the app's manual, incl. iPad/iPhone
+  screenshots) and `main-window-ipad.png`.
+- **What:** A mature **commercial** third-party iPad/iPhone remote panel for the
+  K4 — our problem domain on a touch device. Confirms that the K4's conventions
+  translate well to a software panel (segmented `Waterfall/Modes/Tools` switcher,
+  gradient S-meter, dual-VFO mirror, FT8/CW decode screens, connection flow on
+  port 9205).
+- **Provenance constraint (cf. `CON-09`):** this is **proprietary**. We adopt
+  its **UI conventions and visual language** — dark layered surfaces, grids of
+  rounded state buttons with a blue "engaged" fill, big white frequency
+  readouts, proportional S-meter bars, panel groupings (per the 2026-07-02
+  direction, see `ADR-15` rev.) — re-implemented from scratch with **our own
+  values** (palette constants, spacing, widget code). We do **not** copy its
+  assets, iconography, or branding, and we do not extract or reuse any of its
+  artwork or code.
+
+### What we adopt vs. deliberately diverge
+
+| Adopt (reference-faithful) | Diverge (ours) |
+|---|---|
+| A-left / B-right symmetry; shared TX/SPLIT/RIT-XIT box between the VFOs | Own palette *values* & widget code (re-implemented, no copied assets/icons/branding) |
+| Switchable view: single-A · single-B · dual (mirrors `PAN=A/B/A+B`) | Resizable desktop window with responsive stacking; narrow width stacks bands |
+| 7 fixed primary buttons → swap a context sub-row above them | A real menu/settings panel instead of a locked scroll list |
+| Semantic colour: amber=TX/transmit, blue=A/main, green=B/sub, white=RX | Mouse/widget controls; drop hardware-knob metaphors (XMTR/FILTER/RF-SQL) |
+| Two-line state buttons (`LABEL` + live value); dot-grouped freq readout | Explicit TX arm / emergency-stop affordances (our `FR-TX-SAFE` additions) |
+| Dark layered theme; rounded button grids with blue "engaged" fill; big white freq readouts; proportional S-meter bar (iOS app visual language, 2026-07-02 direction) | — |
+| Tap-to-edit; mini-pan zoom tuning aid; dual-pan; vertical scale in dBm/S-units | — |
+
+### Open confirmations (against the real radio — `ASM-05`)
+
+- Confirm the exact on-screen colour semantics (esp. the orange/amber transmit
+  family and the blue/green A/B coding) against current firmware.
+- Confirm `PAN=A/B/A+B` selection maps cleanly onto our `ViewMode` and the
+  per-receiver PAN packets (`receiver` field, `R-EXT-01`).
+
+---
+
+## R-EXT-03 — Elecraft vendor documents (normative)
+
+The authoritative Elecraft sources held in `docs/references/external/`. Unlike
+QK4 (`R-EXT-01`, GPL — facts only) these are vendor documents; we use them as the
+**normative** source for CAT commands and radio behaviour, reimplemented
+clean-room per `CON-09` (facts/interoperability, not copied text).
+
+| Document | Rev | Provides | Used for |
+|---|---|---|---|
+| **K4 Programmer's Reference** (`.pdf` / `.html`) | D12 | The full CAT command set: mnemonics, SET/GET/RESP syntax, ranges | **Normative CAT source** — resolves the command gaps in `concept/k4-screens.md` §3 (EQ, keyer, mic, line, band, `#`-display) and the `FR-CAT`/`FR-VFO`/`FR-RX`/`FR-TX` encoders |
+| **K4 Command Index** (by-description RevD5; RevD3) | D5/D3 | Quick command lookup by function/description | Fast mnemonic lookup while wiring screens |
+| **K4 Built-In Operating Manual** | D14 | Full operating behaviour of every feature/screen | Authoritative behaviour reference behind the screen specs (`concept/k4-screens.md`) and `FR-UI-*` |
+| **Intro to the Elecraft K4** | C5 | Drawn renders of the 7″ touchscreen in every state | Source of the on-screen screen catalog (`R-EXT-02`, `concept/k4-screens.md`) |
+| *Remote K4 On-Off Control Methods* | — | Remote power-on/off methods | `FR-CONN` / power-control (future) |
+
+- **HTML vs PDF:** `K4ProgrammersReferencerev.D12.html` is a Google-Docs export
+  (heavy inline CSS) — prefer the `.pdf` (or the Command Index) for lookup; the
+  `.html` is convenient for text search once the `<head>` CSS is stripped.
+- **Resolution rule:** any CAT command flagged "to confirm" in a spec or code
+  comment is resolved against the **Programmer's Reference D12** here, then
+  verified against a real radio (`ASM-05`) before being marked confirmed.

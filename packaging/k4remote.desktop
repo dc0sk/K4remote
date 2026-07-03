@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=K4 Remote
+GenericName=Elecraft K4 remote-control panel
+Comment=Remote-control panel for the Elecraft K4 transceiver
+Exec=k4remote
+Icon=k4remote
+Terminal=false
+Categories=HamRadio;Network;Utility;
+Keywords=elecraft;k4;ham;amateur;radio;transceiver;cat;panadapter;

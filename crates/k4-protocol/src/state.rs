@@ -86,6 +86,57 @@ pub struct RadioState {
     pub rit_on: Option<bool>,
     /// XIT on/off (`XT`).
     pub xit_on: Option<bool>,
+
+    // --- Configuration-screen state (read-back for FR-UI-19 screens) ---
+    /// RX graphic-EQ, 8 bands, dB (`RE`).
+    pub rx_eq: Option<[i8; 8]>,
+    /// TX graphic-EQ, 8 bands, dB (`TE`).
+    pub tx_eq: Option<[i8; 8]>,
+    /// Keyer: iambic-B (`true`) vs A, paddle reversed, weight 90–125 (`KP`).
+    pub keyer_iambic_b: Option<bool>,
+    pub keyer_paddle_rev: Option<bool>,
+    pub keyer_weight: Option<u16>,
+    /// Keyer speed, WPM (`KS`).
+    pub keyer_speed: Option<u8>,
+    /// Mic input 0–4 (`MI`) and mic gain 0–80 (`MG`).
+    pub mic_input: Option<u8>,
+    pub mic_gain: Option<u8>,
+    /// Line-out left/right level and RIGHT=LEFT gang (`LO`).
+    pub line_out_left: Option<u16>,
+    pub line_out_right: Option<u16>,
+    pub line_out_gang: Option<bool>,
+    /// Panadapter reference level, dBm (`#REF`).
+    pub pan_ref: Option<i16>,
+    /// Panadapter span, Hz (`#SPN`).
+    pub pan_span_hz: Option<u32>,
+    /// Panadapter scale, dB (`#SCL`).
+    pub pan_scale: Option<u16>,
+    /// Panadapter mode: 0=A, 1=B, 2=dual (`#DPM`).
+    pub pan_mode: Option<u8>,
+    /// Waterfall palette 0–4 (`#WFC`) and height 0–100 (`#WFH`).
+    pub wf_palette: Option<u8>,
+    pub wf_height: Option<u8>,
+    /// TX antenna 1–3 (`AN`), main/sub RX antenna 0–7 (`AR`/`AR$`).
+    pub tx_antenna: Option<u8>,
+    pub rx_antenna: Option<u8>,
+    pub rx_antenna_sub: Option<u8>,
+    /// Voice VOX on/off (`VX` mode `V`).
+    pub vox_voice: Option<bool>,
+    /// Current band number 00–25 (`BN`).
+    pub band: Option<u8>,
+}
+
+/// Parse 8 consecutive signed 3-char EQ fields (`+00-01…`) into `[i8; 8]`.
+fn parse_eq8(arg: &str) -> Option<[i8; 8]> {
+    let b = arg.as_bytes();
+    if b.len() < 24 {
+        return None;
+    }
+    let mut out = [0i8; 8];
+    for (i, slot) in out.iter_mut().enumerate() {
+        *slot = arg[i * 3..i * 3 + 3].parse::<i8>().ok()?;
+    }
+    Some(out)
 }
 
 impl RadioState {
@@ -201,6 +252,97 @@ impl RadioState {
             if let Some(m) = arg.bytes().next() {
                 self.xit_on = Some(m == b'1');
             }
+        } else if let Some(arg) = cmd.strip_prefix("RE") {
+            if let Some(eq) = parse_eq8(arg) {
+                self.rx_eq = Some(eq);
+            }
+        } else if let Some(arg) = cmd.strip_prefix("TE") {
+            if let Some(eq) = parse_eq8(arg) {
+                self.tx_eq = Some(eq);
+            }
+        } else if let Some(arg) = cmd.strip_prefix("KP") {
+            // `KPionnn`: iambic (A/B), paddle (N/R), weight (3 digits).
+            let b = arg.as_bytes();
+            if b.len() >= 5 {
+                self.keyer_iambic_b = Some(b[0] == b'B');
+                self.keyer_paddle_rev = Some(b[1] == b'R');
+                if let Ok(w) = arg[2..5].parse::<u16>() {
+                    self.keyer_weight = Some(w);
+                }
+            }
+        } else if let Some(arg) = cmd.strip_prefix("KS") {
+            if let Ok(v) = arg.parse::<u8>() {
+                self.keyer_speed = Some(v);
+            }
+        } else if let Some(arg) = cmd.strip_prefix("MI") {
+            if let Ok(v) = arg.parse::<u8>() {
+                self.mic_input = Some(v);
+            }
+        } else if let Some(arg) = cmd.strip_prefix("MG") {
+            if let Ok(v) = arg.parse::<u8>() {
+                self.mic_gain = Some(v);
+            }
+        } else if let Some(arg) = cmd.strip_prefix("LO") {
+            // `LO<left3><right3><gang1>`.
+            let b = arg.as_bytes();
+            if b.len() >= 7 {
+                if let Ok(l) = arg[0..3].parse::<u16>() {
+                    self.line_out_left = Some(l);
+                }
+                if let Ok(r) = arg[3..6].parse::<u16>() {
+                    self.line_out_right = Some(r);
+                }
+                self.line_out_gang = Some(b[6] == b'1');
+            }
+        } else if let Some(arg) = cmd.strip_prefix("#REF") {
+            if let Ok(v) = arg.parse::<i16>() {
+                self.pan_ref = Some(v);
+            }
+        } else if let Some(arg) = cmd.strip_prefix("#SPN") {
+            if let Ok(v) = arg.parse::<u32>() {
+                self.pan_span_hz = Some(v);
+            }
+        } else if let Some(arg) = cmd.strip_prefix("#SCL") {
+            if let Ok(v) = arg.parse::<u16>() {
+                self.pan_scale = Some(v);
+            }
+        } else if let Some(arg) = cmd.strip_prefix("#DPM") {
+            if let Ok(v) = arg.parse::<u8>() {
+                self.pan_mode = Some(v);
+            }
+        } else if let Some(arg) = cmd.strip_prefix("#WFC") {
+            if let Ok(v) = arg.parse::<u8>() {
+                self.wf_palette = Some(v);
+            }
+        } else if let Some(arg) = cmd.strip_prefix("#WFH") {
+            if let Ok(v) = arg.parse::<u8>() {
+                self.wf_height = Some(v);
+            }
+        } else if let Some(arg) = cmd.strip_prefix("AN") {
+            if let Ok(v) = arg.parse::<u8>() {
+                self.tx_antenna = Some(v);
+            }
+        } else if let Some(arg) = cmd.strip_prefix("AR$") {
+            if let Ok(v) = arg.parse::<u8>() {
+                self.rx_antenna_sub = Some(v);
+            }
+        } else if let Some(arg) = cmd.strip_prefix("AR") {
+            if let Ok(v) = arg.parse::<u8>() {
+                self.rx_antenna = Some(v);
+            }
+        } else if let Some(arg) = cmd.strip_prefix("VX") {
+            // `VXmn`: only the voice (`V`) mode is surfaced.
+            let b = arg.as_bytes();
+            if b.len() >= 2 && b[0] == b'V' {
+                self.vox_voice = Some(b[1] == b'1');
+            }
+        } else if let Some(arg) = cmd.strip_prefix("BN$") {
+            // Sub-RX band; kept distinct so it does not clobber the main band.
+            let _ = arg;
+        } else if let Some(arg) = cmd.strip_prefix("BN") {
+            if let Ok(v) = arg.parse::<u8>() {
+                self.band = Some(v);
+            }
         } else if let Some(arg) = cmd.strip_prefix("IF") {
             self.apply_if(arg);
         }
@@ -252,5 +394,10 @@ pub fn s_unit_label(dbm: i32) -> String {
 ///
 /// trace: FR-CAT-07
 pub fn connect_state_seed() -> &'static [&'static str] {
-    &["IF;", "FA;", "FB;", "MD;", "MD$;", "FT;", "SM;", "SMH;"]
+    &[
+        "IF;", "FA;", "FB;", "MD;", "MD$;", "FT;", "SM;", "SMH;", // core
+        // Configuration-screen read-back (FR-UI-19 screens):
+        "RE;", "TE;", "KP;", "KS;", "MI;", "MG;", "LO;", "AN;", "AR;", "AR$;", "VXV;", "BN;",
+        "#REF;", "#SPN;", "#SCL;", "#DPM;", "#WFC;", "#WFH;",
+    ]
 }

@@ -16,6 +16,48 @@ use crate::ring::SampleRing;
 /// K4 audio sample rate (Hz).
 pub const K4_RATE: u32 = 12_000;
 
+/// Names of available output (playback) devices (FR-AUD-DEV-01).
+pub fn output_device_names() -> Vec<String> {
+    cpal::default_host()
+        .output_devices()
+        .map(|it| it.filter_map(|d| d.name().ok()).collect())
+        .unwrap_or_default()
+}
+
+/// Names of available input (capture) devices (FR-AUD-DEV-01).
+pub fn input_device_names() -> Vec<String> {
+    cpal::default_host()
+        .input_devices()
+        .map(|it| it.filter_map(|d| d.name().ok()).collect())
+        .unwrap_or_default()
+}
+
+/// Resolve a named output device, or the default when `name` is `None`.
+fn pick_output(name: Option<&str>) -> Result<cpal::Device, AudioError> {
+    let host = cpal::default_host();
+    match name {
+        Some(n) => host
+            .output_devices()
+            .map_err(|e| AudioError::Config(e.to_string()))?
+            .find(|d| d.name().map(|dn| dn == n).unwrap_or(false))
+            .ok_or(AudioError::NoDevice),
+        None => host.default_output_device().ok_or(AudioError::NoDevice),
+    }
+}
+
+/// Resolve a named input device, or the default when `name` is `None`.
+fn pick_input(name: Option<&str>) -> Result<cpal::Device, AudioError> {
+    let host = cpal::default_host();
+    match name {
+        Some(n) => host
+            .input_devices()
+            .map_err(|e| AudioError::Config(e.to_string()))?
+            .find(|d| d.name().map(|dn| dn == n).unwrap_or(false))
+            .ok_or(AudioError::NoDevice),
+        None => host.default_input_device().ok_or(AudioError::NoDevice),
+    }
+}
+
 /// Errors opening an audio device.
 #[derive(Debug)]
 pub enum AudioError {
@@ -43,6 +85,8 @@ pub struct AudioOutput {
     _stream: cpal::Stream,
     ring: Arc<Mutex<SampleRing>>,
     channels: usize,
+    /// Local playback gain (FR-AUD-LVL-01), 0.0–2.0.
+    volume: f32,
     rs_left: LinearResampler,
     rs_right: LinearResampler,
 }
@@ -50,8 +94,12 @@ pub struct AudioOutput {
 impl AudioOutput {
     /// Open the default output device and start playback.
     pub fn new() -> Result<Self, AudioError> {
-        let host = cpal::default_host();
-        let device = host.default_output_device().ok_or(AudioError::NoDevice)?;
+        Self::with_device(None)
+    }
+
+    /// Open a named output device (or the default), and start playback.
+    pub fn with_device(name: Option<&str>) -> Result<Self, AudioError> {
+        let device = pick_output(name)?;
         let supported = device
             .default_output_config()
             .map_err(|e| AudioError::Config(e.to_string()))?;
@@ -86,9 +134,15 @@ impl AudioOutput {
             _stream: stream,
             ring,
             channels,
+            volume: 1.0,
             rs_left: LinearResampler::new(K4_RATE, rate),
             rs_right: LinearResampler::new(K4_RATE, rate),
         })
+    }
+
+    /// Set the local playback gain (FR-AUD-LVL-01), clamped to 0.0–2.0.
+    pub fn set_volume(&mut self, v: f32) {
+        self.volume = v.clamp(0.0, 2.0);
     }
 
     /// Submit interleaved 12 kHz stereo PCM (L = Main, R = Sub) for playback.
@@ -117,6 +171,12 @@ impl AudioOutput {
                 }
             }
         }
+        // Apply the local volume gain (FR-AUD-LVL-01) before buffering.
+        if self.volume != 1.0 {
+            for s in out.iter_mut() {
+                *s *= self.volume;
+            }
+        }
         if let Ok(mut rb) = self.ring.lock() {
             rb.push_slice(&out);
         }
@@ -127,13 +187,19 @@ impl AudioOutput {
 pub struct AudioInput {
     _stream: cpal::Stream,
     ring: Arc<Mutex<SampleRing>>,
+    /// Local capture gain (FR-AUD-LVL-01), applied on take.
+    gain: f32,
 }
 
 impl AudioInput {
     /// Open the default input device and start capture.
     pub fn new() -> Result<Self, AudioError> {
-        let host = cpal::default_host();
-        let device = host.default_input_device().ok_or(AudioError::NoDevice)?;
+        Self::with_device(None)
+    }
+
+    /// Open a named input device (or the default), and start capture.
+    pub fn with_device(name: Option<&str>) -> Result<Self, AudioError> {
+        let device = pick_input(name)?;
         let supported = device
             .default_input_config()
             .map_err(|e| AudioError::Config(e.to_string()))?;
@@ -173,10 +239,17 @@ impl AudioInput {
         Ok(Self {
             _stream: stream,
             ring,
+            gain: 1.0,
         })
     }
 
-    /// Take exactly `n` mono 12 kHz samples (one TX frame) if enough are buffered.
+    /// Set the local capture gain (FR-AUD-LVL-01), clamped to 0.0–3.0.
+    pub fn set_mic_gain(&mut self, g: f32) {
+        self.gain = g.clamp(0.0, 3.0);
+    }
+
+    /// Take exactly `n` mono 12 kHz samples (one TX frame) if enough are buffered,
+    /// with the local capture gain applied.
     pub fn take_frame(&self, n: usize) -> Option<Vec<f32>> {
         let mut r = self.ring.lock().ok()?;
         if r.len() < n {
@@ -184,7 +257,7 @@ impl AudioInput {
         }
         let mut frame = Vec::with_capacity(n);
         for _ in 0..n {
-            frame.push(r.pop()?);
+            frame.push(r.pop()? * self.gain);
         }
         Some(frame)
     }
