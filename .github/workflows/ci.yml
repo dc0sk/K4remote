@@ -1,0 +1,90 @@
+# K4 Remote — CI pipeline (NFR-PORT-02): fmt + clippy + tests + traceability
+# gate + dependency audit, across the target platforms
+# (Linux x86_64, Linux arm64 / Raspberry Pi OS, macOS, Windows).
+#
+# System libraries needed by the default features: libopus (audio codec),
+# ALSA (Linux audio), OpenSSL (TLS-PSK), libudev (serial), libsecret (keychain).
+# macOS/Windows build OpenSSL from source via the `vendored-tls` feature.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  fmt-clippy:
+    name: Format & Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: System libraries
+        run: sudo apt-get update && sudo apt-get install -y libopus-dev libasound2-dev libssl-dev libudev-dev libsecret-1-dev pkg-config
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+  # Full build + test on the Linux (x86_64 + arm64) and macOS targets.
+  test:
+    name: Test (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, name: linux-x86_64 }
+          - { os: ubuntu-24.04-arm, name: linux-arm64 } # Raspberry Pi OS arch
+          - { os: macos-latest, name: macos, features: "--features vendored-tls" }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: System libraries (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libopus-dev libasound2-dev libssl-dev libudev-dev libsecret-1-dev pkg-config
+      - name: System libraries (macOS)
+        if: runner.os == 'macOS'
+        run: brew install opus pkg-config
+      - name: Test (non-hardware)
+        run: cargo test --workspace ${{ matrix.features }}
+      - name: Traceability gate (R3/R4)
+        run: cargo run --quiet -p xtask
+      - name: TLS-PSK feature test
+        run: cargo test -p k4-transport ${{ matrix.features || '--features tls' }}
+
+  # Windows build (best-effort): libopus via vcpkg, OpenSSL vendored.
+  build-windows:
+    name: Build (windows-x86_64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: libopus (vcpkg)
+        run: vcpkg install opus:x64-windows-static-md
+      - name: Build
+        env:
+          VCPKGRS_TRIPLET: x64-windows-static-md
+        run: cargo build -p k4remote --release --features vendored-tls
+
+  audit:
+    name: Dependency Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - run: cargo audit

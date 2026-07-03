@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1b1f26"/>
+      <stop offset="1" stop-color="#0a0c10"/>
+    </linearGradient>
+    <linearGradient id="spec" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3D9BFF" stop-opacity="0.85"/>
+      <stop offset="1" stop-color="#3D9BFF" stop-opacity="0.04"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Panel background (dark squircle, subtle blue edge) -->
+  <rect x="16" y="16" width="480" height="480" rx="112"
+        fill="url(#bg)" stroke="#2b3442" stroke-width="6"/>
+
+  <!-- "K4" wordmark -->
+  <text x="256" y="300" text-anchor="middle"
+        font-family="DejaVu Sans, sans-serif" font-weight="bold"
+        font-size="230" fill="#ECEFF2">K4</text>
+
+  <!-- Panadapter trace along the bottom -->
+  <path d="M 70 450 L 110 442 L 138 398 L 162 448 L 205 436 L 240 356 L 266 444
+           L 316 430 L 356 372 L 392 438 L 430 446 L 442 450 L 442 462 L 70 462 Z"
+        fill="url(#spec)"/>
+  <path d="M 70 450 L 110 442 L 138 398 L 162 448 L 205 436 L 240 356 L 266 444
+           L 316 430 L 356 372 L 392 438 L 430 446 L 442 450"
+        fill="none" stroke="#5BB0FF" stroke-width="7"
+        stroke-linejoin="round" stroke-linecap="round"/>
+
+  <!-- Amber TX indicator -->
+  <circle cx="424" cy="96" r="22" fill="#FF9A1E"/>
+</svg>

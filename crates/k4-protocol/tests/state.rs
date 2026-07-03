@@ -158,3 +158,61 @@ fn fr_mtr_04_s_unit_label_mapping() {
     assert_eq!(s_unit_label(-121), "S1");
     assert_eq!(s_unit_label(-130), "S0");
 }
+
+/// Read-back of the configuration-screen commands (FR-UI-19 screens): the RESP
+/// forms parse into `RadioState`, seeding the EQ / keyer / mic / display / antenna
+/// / band / VOX screens on connect.
+///
+/// trace: FR-CAT-06, FR-UI-19, FR-UI-20
+#[test]
+fn fr_ui_19_config_screen_readback() {
+    let mut s = RadioState::new();
+    s.apply_cat("RE+00+02+05+01+00-01-02-04;");
+    s.apply_cat("TE+16-16+00+00+00+00+00+00;");
+    s.apply_cat("KPBR090;"); // iambic B, paddle reversed, weight 90
+    s.apply_cat("KS022;");
+    s.apply_cat("MI2;");
+    s.apply_cat("MG015;");
+    s.apply_cat("LO0100120;"); // left 10, right 12, gang off
+    s.apply_cat("AN2;");
+    s.apply_cat("AR4;");
+    s.apply_cat("AR$1;");
+    s.apply_cat("VXV1;");
+    s.apply_cat("BN14;");
+    s.apply_cat("BN$03;"); // sub band must NOT clobber the main band
+    s.apply_cat("#REF-130;");
+    s.apply_cat("#SPN50000;");
+    s.apply_cat("#SCL70;");
+    s.apply_cat("#DPM2;");
+    s.apply_cat("#WFC1;");
+    s.apply_cat("#WFH080;");
+
+    assert_eq!(s.rx_eq, Some([0, 2, 5, 1, 0, -1, -2, -4]));
+    assert_eq!(s.tx_eq, Some([16, -16, 0, 0, 0, 0, 0, 0]));
+    assert_eq!(s.keyer_iambic_b, Some(true));
+    assert_eq!(s.keyer_paddle_rev, Some(true));
+    assert_eq!(s.keyer_weight, Some(90));
+    assert_eq!(s.keyer_speed, Some(22));
+    assert_eq!(s.mic_input, Some(2));
+    assert_eq!(s.mic_gain, Some(15));
+    assert_eq!(s.line_out_left, Some(10));
+    assert_eq!(s.line_out_right, Some(12));
+    assert_eq!(s.line_out_gang, Some(false));
+    assert_eq!(s.tx_antenna, Some(2));
+    assert_eq!(s.rx_antenna, Some(4));
+    assert_eq!(s.rx_antenna_sub, Some(1));
+    assert_eq!(s.vox_voice, Some(true));
+    assert_eq!(s.band, Some(14));
+    assert_eq!(s.pan_ref, Some(-130));
+    assert_eq!(s.pan_span_hz, Some(50_000));
+    assert_eq!(s.pan_scale, Some(70));
+    assert_eq!(s.pan_mode, Some(2));
+    assert_eq!(s.wf_palette, Some(1));
+    assert_eq!(s.wf_height, Some(80));
+
+    // The connect seed now requests these screens' values.
+    let seed = connect_state_seed();
+    for g in ["RE;", "TE;", "KP;", "#REF;", "AR$;", "BN;"] {
+        assert!(seed.contains(&g), "seed missing {g}");
+    }
+}

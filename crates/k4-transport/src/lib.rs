@@ -130,8 +130,9 @@ impl TcpRemoteTransport {
     pub fn connect_tls<A: ToSocketAddrs>(addr: A, cfg: &ConnectConfig) -> io::Result<Self> {
         use openssl::ssl::{Ssl, SslContext, SslMethod, SslStream, SslVerifyMode, SslVersion};
 
+        // Do NOT set a short read timeout before the handshake — the multi-round
+        // TLS-PSK handshake would time out mid-way. It is applied afterwards.
         let tcp = TcpStream::connect(addr)?;
-        tcp.set_read_timeout(Some(cfg.read_timeout))?;
 
         let map = |e: openssl::error::ErrorStack| io::Error::other(e.to_string());
         let mut ctx = SslContext::builder(SslMethod::tls_client()).map_err(map)?;
@@ -141,7 +142,11 @@ impl TcpRemoteTransport {
         ctx.set_max_proto_version(Some(SslVersion::TLS1_2))
             .map_err(map)?;
         ctx.set_verify(SslVerifyMode::NONE); // PSK, no certificates
-        ctx.set_cipher_list("PSK").map_err(map)?;
+                                             // The K4 negotiates PSK-AES256-CBC-SHA384; OpenSSL 3.x's default security
+                                             // level 1 rejects that CBC PSK suite, so drop to level 0.
+        ctx.set_security_level(0);
+        ctx.set_cipher_list("PSK-AES256-CBC-SHA384:PSK-AES128-CBC-SHA256:PSK")
+            .map_err(map)?;
 
         let identity = cfg.identity.clone();
         let password = cfg.password.clone();
@@ -162,6 +167,8 @@ impl TcpRemoteTransport {
         stream
             .connect()
             .map_err(|e| io::Error::other(format!("TLS handshake: {e}")))?;
+        // Now that the handshake is done, apply the polling read timeout.
+        stream.get_ref().set_read_timeout(Some(cfg.read_timeout))?;
 
         let mut t = Self {
             stream: Box::new(stream),

@@ -1,0 +1,45 @@
+# Maintainer: Simon Keimer (DC0SK)
+# Arch / Manjaro package for K4 Remote (NFR-PKG-01).
+pkgname=k4remote
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Cross-platform remote-control panel for the Elecraft K4 transceiver"
+arch=('x86_64' 'aarch64')
+url="https://github.com/dc0sk/K4remote"
+license=('GPL-3.0-or-later')
+# Runtime libraries for the default features (audio/TLS/serial/keychain).
+depends=('alsa-lib' 'openssl' 'systemd-libs' 'libsecret')
+makedepends=('cargo' 'git')
+source=("git+https://github.com/dc0sk/K4remote.git#tag=v$pkgver")
+sha256sums=('SKIP')
+options=(!lto)
+
+prepare() {
+    cd "$srcdir/K4remote"
+    export RUSTUP_TOOLCHAIN=stable
+    cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+    cd "$srcdir/K4remote"
+    export RUSTUP_TOOLCHAIN=stable
+    export CARGO_TARGET_DIR=target
+    cargo build --frozen --release -p k4remote
+}
+
+package() {
+    cd "$srcdir/K4remote"
+    install -Dm755 "target/release/k4remote" "$pkgdir/usr/bin/k4remote"
+    install -Dm644 "packaging/k4remote.desktop" \
+        "$pkgdir/usr/share/applications/k4remote.desktop"
+    install -Dm644 "LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 "docs/README.md" "$pkgdir/usr/share/doc/$pkgname/README.md"
+
+    # Icons (hicolor theme).
+    install -Dm644 "packaging/icons/k4remote.svg" \
+        "$pkgdir/usr/share/icons/hicolor/scalable/apps/k4remote.svg"
+    for s in 16 24 32 48 64 128 256 512; do
+        install -Dm644 "packaging/icons/k4remote-$s.png" \
+            "$pkgdir/usr/share/icons/hicolor/${s}x${s}/apps/k4remote.png"
+    done
+}

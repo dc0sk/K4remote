@@ -1,8 +1,8 @@
 ---
 title: "Architecture & Concept"
 status: Draft
-version: "0.8"
-updated: 2026-06-25
+version: "0.13"
+updated: 2026-07-03
 authors:
   - Simon Keimer (DC0SK)
 owns: [ARC, ADR]
@@ -76,6 +76,7 @@ and keeps strict traceability tractable.
 | `ARC-12` | **Config store** | Profiles, prefs, secure secret storage. | FR-CFG-* |
 | `ARC-13` | **Diagnostics/logging** | Structured logs, redaction, optional raw CAT console. | FR-DIAG-*, NFR-MAINT-LOG |
 | `ARC-14` | **K4 protocol simulator (test)** | Mock server speaking the CAT/handshake protocol for hardware-free tests. | NFR-TEST-02 |
+| `ARC-15` | **UI view-model helpers** (`app/src/ui.rs`) | Pure, iced-free presentation logic: `ViewMode` (single-A/B/dual) cycling, dot-grouped frequency formatting, semantic-colour role selection, two-line button state derivation, shade palette + S-meter scale, and the connect-control phase mapping (`ConnPhase` → label/action). Keeps the iced view (`ARC-08`) a thin projection and makes the testable `FR-UI-*` items unit-testable. | FR-UI-08..19, NFR-USE-01 |
 
 ## 3. Proposed crate / module layout
 
@@ -130,6 +131,7 @@ k4remote/
 | `ADR-12` | **Implement to the community-verified K4/0 protocol (`R-EXT-01`) as a clean-room reimplementation**, confirmed against a real radio; treat facts as a `FrameCodec`/`StreamCodec`-local concern. | Resolves `RISK-01`; `CON-09` (GPL) requires fact-only reuse, no source copying; seam keeps corrections cheap. | FR-STREAM-*, FR-AUTH-*, FR-AUD-04, FR-PAN-01 |
 | `ADR-13` | **Single multiplexed socket** carries CAT + audio + spectrum (per `R-EXT-01`), not separate per-stream ports. | Matches the K4/0 server; simplifies transport; framing demuxes by type. | FR-STREAM-02 |
 | `ADR-14` | **v1 protocol bring-up uses synchronous `std::net` for `TcpRemoteTransport`**, behind the `Transport` trait. Async (tokio, ADR-06) migration is deferred until the session/audio layers need concurrency. | Minimises deps and makes the first L2 connect tests deterministic; the trait is the seam so the swap is localized and does not touch CAT/state. Supersedes ADR-06 *for the transport crate only* in v1. | FR-CONN-01, ADR-02, ADR-06 |
+| `ADR-15` | **UI is reference-faithful in layout, semantics and — rev. 2026-07-02 — visual language.** Reproduce the K4's operating conventions (A/B symmetry, shared TX/RIT box, switchable single/dual view mirroring `PAN=A/B/A+B`, 7-primary + context-row model, semantic colours, two-line state buttons) as *interoperability faithfulness for the operator*, and style them after the references (`R-EXT-02`): dark layered theme, rounded button grids with a blue "engaged" fill, big white frequency readouts, proportional S-meter bars (`FR-UI-15`). All styling is **re-implemented from scratch with our own values** — no assets, iconography, branding, or code from any third-party app is copied (cf. `CON-09`). Decidable presentation logic (incl. the shade palette and S-meter scale) lives in a pure, iced-free `ARC-15` module so the testable `FR-UI-*` items are unit-tested while layout/styling is demonstrated. *Rev. supersedes the original "original visual identity" stance on explicit user direction (2026-07-02).* | Familiar to K4 / reference-app operators; clean provenance (conventions adopted, expression re-implemented); pure view-model keeps the iced layer thin and the traceability gate green. | FR-UI-08..19, NFR-USE-01, R-EXT-02 |
 
 ## 6. Requirement → component coverage (design check, rule R5)
 
@@ -143,7 +145,7 @@ k4remote/
 | FR-TX-* / safety | ARC-06, ARC-07, ARC-08 |
 | FR-AUD-* | ARC-09, ARC-10 |
 | FR-PAN-* (P2) | ARC-10, ARC-11 |
-| FR-UI-* | ARC-08 |
+| FR-UI-* | ARC-08, ARC-15 |
 | FR-CFG-* | ARC-12 |
 | FR-DIAG-* | ARC-13 |
 | NFR-TEST-* | ARC-14, xtask |
@@ -171,4 +173,10 @@ per-test mapping is maintained in the traceability matrix.)*
 | 2026-06-25 | 0.5 | DC0SK | Added k4-config crate realizing ARC-12 (config store): TOML profiles/prefs, secret-free, redact. |
 | 2026-06-25 | 0.6 | DC0SK | Added k4-diag crate realizing ARC-13 (diagnostics): levelled bounded DiagLog; raw CAT console via Inbound.cat. |
 | 2026-06-25 | 0.7 | DC0SK | Implemented ARC-02b SerialTransport (CAT-only raw-line adapter as a CatLink) + LineDecoder. Second transport backend proves FR-CONN-ABSTRACT. |
+| 2026-06-26 | 0.8 | DC0SK | Added ARC-15 (UI view-model helpers) + ADR-15 (K4-faithful layout, original visual identity, switchable ViewMode) from R-EXT-02 UI study. |
 | 2026-06-25 | 0.8 | DC0SK | ARC-12 gains SecretStore (MemoryStore tested + KeyringStore feature) for OS-keychain password storage (FR-CFG-03). |
+| 2026-07-02 | 0.9 | DC0SK | ADR-15 revised on user direction: visual language now reference-faithful (dark layered theme, blue-engaged button grids, proportional S-meter — FR-UI-15), still re-implemented from scratch, no copied assets. |
+| 2026-07-02 | 0.10 | DC0SK | FR-UI-16: connect control is phase-driven (Connect/Cancel/Disconnect) via `ConnPhase` in ARC-15; the worker bridge runs the blocking connect handshake on a short-lived thread and polls its result, so an attempt never freezes the UI/worker and is cancellable. |
+| 2026-07-02 | 0.11 | DC0SK | FR-UI-17 theme selector (dark/light/contrast/system) via `ThemeMode` + per-theme shade/role palettes in ARC-15; the iced view resolves colours against the active theme. FR-UI-18 About box (`about_lines`). Dual-pane spectrum height matched to single view. |
+| 2026-07-02 | 0.12 | DC0SK | FR-UI-19: primary softkey opens a K4 config screen (`menu_screen_synopsis`) in the spectrum frame only; controls box + lower panels untouched. Per-screen content pending definition. |
+| 2026-07-03 | 0.13 | DC0SK | ARC-02a TLS-PSK (`connect_tls`) realized + live-verified; ARC-05 `RadioState` extended for config-screen read-back and surfaced via the snapshot to seed the screens on connect (FR-UI-20). Keychain writes moved off the UI thread. |

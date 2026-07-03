@@ -1,9 +1,15 @@
 //! CAT encoding tests. trace: FR-VFO-01, FR-VFO-04, FR-VFO-06, FR-MODE-01,
 //! FR-MODE-02, FR-RX-01, FR-RX-02
 use k4_protocol::cat::{
-    band_down, band_up, clear_rit_xit, set_af_gain, set_agc, set_attenuator, set_bandwidth_hz,
-    set_mode, set_mode_sub, set_nb, set_nr, set_preamp, set_rf_gain, set_rit, set_split,
-    set_vfo_a_hz, set_vfo_b_hz, set_xit,
+    band_down, band_stack_next, band_up, clear_rit_xit, menu_open, menu_query_def, menu_set,
+    rx_eq_flat, send_text, set_af_gain, set_agc, set_attenuator, set_band, set_band_sub,
+    set_bandwidth_hz, set_keyer, set_keyer_speed, set_line_in, set_line_out, set_mic_gain,
+    set_mic_input, set_mic_setup, set_mode, set_mode_sub, set_nb, set_nr, set_pan_average,
+    set_pan_mode, set_pan_nb, set_pan_nb_level, set_pan_peak, set_pan_ref, set_pan_scale,
+    set_pan_span_hz, set_preamp, set_rf_gain, set_rit, set_rx_antenna, set_rx_antenna_sub,
+    set_rx_eq, set_split, set_transverter_band, set_tx_antenna, set_tx_eq, set_vfo_a_hz,
+    set_vfo_b_hz, set_vox, set_waterfall_height, set_waterfall_palette, set_xit, switch,
+    vfo_copy_swap,
 };
 
 /// trace: FR-VFO-01
@@ -63,4 +69,114 @@ fn fr_vfo_05_rit_xit() {
     assert_eq!(set_rit(true), "RT1;");
     assert_eq!(set_xit(false), "XT0;");
     assert_eq!(clear_rit_xit(), "RC;");
+}
+
+// --- Phase-0 configuration-screen commands (FR-UI-19) ----------------------
+
+/// trace: FR-EQ-01
+#[test]
+fn fr_eq_01_rx_tx_graphic_equalizer() {
+    // 8 signed 3-char band fields; positive/negative/zero all width-3.
+    assert_eq!(
+        set_rx_eq([0, 2, 5, 1, 0, -1, -2, -4]),
+        "RE+00+02+05+01+00-01-02-04;"
+    );
+    // Clamp to ±16.
+    assert_eq!(
+        set_tx_eq([99, -99, 0, 0, 0, 0, 0, 0]),
+        "TE+16-16+00+00+00+00+00+00;"
+    );
+    assert_eq!(rx_eq_flat(), "REF;");
+}
+
+/// trace: FR-KEY-01
+#[test]
+fn fr_key_01_keyer_config() {
+    assert_eq!(set_keyer(false, false, 110), "KPAN110;");
+    assert_eq!(set_keyer(true, true, 90), "KPBR090;");
+    assert_eq!(set_keyer(false, false, 999), "KPAN125;"); // weight clamped
+    assert_eq!(set_keyer_speed(20), "KS020;");
+    assert_eq!(set_keyer_speed(200), "KS100;"); // clamped
+}
+
+/// trace: FR-AUD-CFG-01
+#[test]
+fn fr_aud_cfg_01_mic_and_line() {
+    assert_eq!(set_mic_input(2), "MI2;");
+    assert_eq!(set_mic_gain(15), "MG015;");
+    assert_eq!(set_mic_gain(200), "MG080;"); // clamped
+    assert_eq!(set_mic_setup(2, true, false, 1, true), "MS21011;");
+    assert_eq!(set_line_in(20, 5, true), "LI0200051;");
+    assert_eq!(set_line_out(10, 12, false), "LO0100120;");
+}
+
+/// trace: FR-VFO-04
+#[test]
+fn fr_vfo_04_direct_band_and_stack() {
+    assert_eq!(set_band(0), "BN00;"); // 160 m
+    assert_eq!(set_band(10), "BN10;"); // 6 m
+    assert_eq!(set_band_sub(5), "BN$05;");
+    assert_eq!(band_stack_next(), "BN^;");
+    assert_eq!(set_transverter_band(3), "XV03;");
+    assert_eq!(set_transverter_band(12), "XV12;");
+}
+
+/// trace: FR-VOX-01, FR-TX-MSG-01
+#[test]
+fn fr_vox_and_text_message() {
+    assert_eq!(set_vox('V', true), "VXV1;");
+    assert_eq!(set_vox('C', false), "VXC0;");
+    assert_eq!(send_text("CQ CQ"), "KY CQ CQ;");
+    // Truncated to 60 chars.
+    let long = "X".repeat(80);
+    assert_eq!(send_text(&long).len(), "KY ".len() + 60 + 1);
+}
+
+/// trace: FR-PAN-CTL-01
+#[test]
+fn fr_pan_ctl_01_display_family() {
+    assert_eq!(set_pan_mode(2), "#DPM2;"); // dual
+    assert_eq!(set_pan_span_hz(50_000), "#SPN50000;");
+    assert_eq!(set_pan_span_hz(1), "#SPN6000;"); // clamped low
+    assert_eq!(set_pan_ref(-130), "#REF-130;");
+    assert_eq!(set_pan_scale(70), "#SCL70;");
+    assert_eq!(set_pan_average(10), "#AVG10;");
+    assert_eq!(set_pan_peak(true), "#PKM1;");
+    assert_eq!(set_waterfall_palette(1), "#WFC1;");
+    assert_eq!(set_waterfall_height(100), "#WFH100;");
+    assert_eq!(set_pan_nb(2), "#NB2;");
+    assert_eq!(set_pan_nb_level(14), "#NBL14;");
+}
+
+/// trace: FR-VFO-07
+#[test]
+fn fr_vfo_07_copy_swap() {
+    assert_eq!(vfo_copy_swap(0), "AB0;"); // A → B freq
+    assert_eq!(vfo_copy_swap(2), "AB2;"); // swap freq
+    assert_eq!(vfo_copy_swap(9), "AB5;"); // clamped
+}
+
+/// trace: FR-ANT-01
+#[test]
+fn fr_ant_01_antenna_select() {
+    assert_eq!(set_tx_antenna(2), "AN2;");
+    assert_eq!(set_tx_antenna(9), "AN3;"); // clamped
+    assert_eq!(set_rx_antenna(4), "AR4;");
+    assert_eq!(set_rx_antenna_sub(1), "AR$1;");
+}
+
+/// trace: FR-MENU-01
+#[test]
+fn fr_menu_01_menu_addressed_access() {
+    assert_eq!(menu_open(101), "MO0101;");
+    assert_eq!(menu_query_def(73), "MEDF0073;");
+    assert_eq!(menu_set(101, "0005"), "ME0101.0005;");
+}
+
+/// trace: FR-SW-01
+#[test]
+fn fr_sw_01_switch_emulation() {
+    assert_eq!(switch(17), "SW17;"); // tap M1
+    assert_eq!(switch(162), "SW162;"); // hold M1 (store)
+    assert_eq!(switch(153), "SW153;"); // PF1
 }

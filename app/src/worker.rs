@@ -9,10 +9,12 @@
 //! reassembled RX frames are counted so the pipeline is observable.
 
 use std::collections::VecDeque;
-use std::sync::mpsc::{Receiver, TryRecvError};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
+
+use crate::ui::ConnPhase;
 
 use k4_audio::{AudioInput, AudioOutput, JitterBuffer, OpusDecoder, OpusEncoder};
 use k4_diag::{DiagLog, Level};
@@ -100,22 +102,46 @@ pub enum WorkerCmd {
     EmergencyStop,
     /// Send an arbitrary raw CAT command (diagnostics console, FR-DIAG-02).
     SendRawCat(String),
+    /// Set the 8-band RX graphic equalizer (`RE`, FR-EQ-01).
+    SetRxEq([i8; 8]),
+    /// Set the 8-band TX graphic equalizer (`TE`, FR-EQ-01).
+    SetTxEq([i8; 8]),
+    /// Flatten the RX graphic equalizer (`REF`, FR-EQ-01).
+    RxEqFlat,
+    /// Send a pre-encoded CAT command built by the UI via `k4_protocol::cat`
+    /// (display/band screens, FR-PAN-CTL-01/FR-VFO-04). Distinct from
+    /// `SendRawCat` (operator console) — logged at debug, not info.
+    Cat(String),
+    /// Select the RX playback device by name (`None` = default) — FR-AUD-DEV-01.
+    SetOutputDevice(Option<String>),
+    /// Select the TX capture device by name (`None` = default) — FR-AUD-DEV-01.
+    SetInputDevice(Option<String>),
+    /// RX playback volume gain (FR-AUD-LVL-01), 0.0–2.0.
+    SetVolume(f32),
+    /// TX mic capture gain (FR-AUD-LVL-01), 0.0–3.0.
+    SetMicGain(f32),
 }
 
 /// Snapshot the UI renders from (FR-UI-02/03/06). Written by the worker.
 #[derive(Debug, Clone, Default)]
 pub struct UiSnapshot {
     pub connected: bool,
+    /// Connection lifecycle phase, driving the connect/cancel control (FR-UI-16).
+    pub phase: ConnPhase,
     pub transmitting: bool,
     pub tx_armed: bool,
     pub vfo_a_hz: Option<u64>,
     pub vfo_b_hz: Option<u64>,
     pub mode_a: Option<&'static str>,
+    /// Sub-RX / VFO B mode (for the dual view).
+    pub mode_b: Option<&'static str>,
     pub split: Option<bool>,
     /// Main-RX S-meter bar count (`SM`).
     pub s_meter_bars: Option<u8>,
     /// Main-RX high-resolution S-meter, dBm (`SMH`).
     pub s_meter_dbm: Option<i32>,
+    /// Sub-RX high-resolution S-meter, dBm (`SMH$`).
+    pub s_meter_dbm_sub: Option<i32>,
     /// Receive bandwidth, Hz (`BW`).
     pub bandwidth_hz: Option<u32>,
     /// RX attenuator: dB and on/off (`RA`).
@@ -140,6 +166,40 @@ pub struct UiSnapshot {
     pub diag_lines: Vec<String>,
     /// Human-readable status / last error.
     pub status: String,
+    /// Full radio state model, for the config screens to read back their current
+    /// values on connect (FR-UI-19 read-back). `None` fields = not yet reported.
+    pub radio: RadioState,
+}
+
+/// Sample snapshot for offline UI inspection (`--demo`). Lets the GUI show the
+/// coloured frequency readouts, the strong-signal (yellow) S-meter, and the
+/// two-line state chips with no radio or sim attached. Not used in normal runs.
+pub fn demo_snapshot() -> UiSnapshot {
+    UiSnapshot {
+        connected: true,
+        phase: ConnPhase::Connected,
+        transmitting: false,
+        tx_armed: false,
+        vfo_a_hz: Some(14_074_000),
+        vfo_b_hz: Some(14_061_100),
+        mode_a: Some("USB"),
+        mode_b: Some("CW"),
+        split: Some(false),
+        s_meter_bars: Some(7),
+        s_meter_dbm: Some(-68), // ≥ −73 → "caution" yellow (FR-UI-10)
+        s_meter_dbm_sub: Some(-110),
+        bandwidth_hz: Some(2800),
+        atten_db: Some(6),
+        atten_on: Some(true),
+        agc_mode: Some(1),
+        nb_on: Some(false),
+        nr_on: Some(true),
+        preamp_on: Some(true),
+        rit_on: Some(false),
+        xit_on: Some(false),
+        status: "DEMO MODE — sample state (no radio). Switch A / B / A+B to reflow.".into(),
+        ..Default::default()
+    }
 }
 
 /// Short label for a [`Mode`].
@@ -214,7 +274,21 @@ struct WorkerState {
     connect_params: Option<ConnectTarget>,
     backoff: Backoff,
     next_attempt: Option<Instant>,
+    // In-flight connect attempt running on a short-lived thread, so the blocking
+    // TCP/TLS handshake cannot freeze the worker and the attempt is cancellable
+    // (FR-UI-16). `None` when no attempt is being awaited.
+    pending_connect: Option<Receiver<ConnectOutcome>>,
+    // Audio device selection + local levels (FR-AUD-DEV-01/LVL-01), applied when
+    // the device streams are (re-)created per connection.
+    out_device: Option<String>,
+    in_device: Option<String>,
+    volume: f32,
+    mic_gain: f32,
 }
+
+/// Result handed back from the connect thread: the opened link + its session
+/// profile, or a redacted error message.
+type ConnectOutcome = Result<(AnyLink, SessionConfig), String>;
 
 impl WorkerState {
     fn new() -> Self {
@@ -235,6 +309,11 @@ impl WorkerState {
             connect_params: None,
             backoff: Backoff::default(),
             next_attempt: None,
+            pending_connect: None,
+            out_device: None,
+            in_device: None,
+            volume: 1.0,
+            mic_gain: 1.0,
         }
     }
     /// Reset per-connection state. The Opus codecs and device streams are
@@ -242,8 +321,14 @@ impl WorkerState {
     fn reset(&mut self) {
         self.rx_audio = JitterBuffer::new(8);
         self.rx_decoder = OpusDecoder::rx().ok();
-        self.audio_out = AudioOutput::new().ok();
-        self.audio_in = AudioInput::new().ok();
+        self.audio_out = AudioOutput::with_device(self.out_device.as_deref()).ok();
+        if let Some(out) = self.audio_out.as_mut() {
+            out.set_volume(self.volume);
+        }
+        self.audio_in = AudioInput::with_device(self.in_device.as_deref()).ok();
+        if let Some(inp) = self.audio_in.as_mut() {
+            inp.set_mic_gain(self.mic_gain);
+        }
         self.tx_encoder = OpusEncoder::mono().ok();
         self.tx_seq = 0;
         self.audio_frames = 0;
@@ -264,6 +349,15 @@ fn set_status(snapshot: &Arc<Mutex<UiSnapshot>>, status: impl Into<String>) {
     }
 }
 
+/// Publish the connection phase, keeping the `connected` bool consistent
+/// (FR-UI-16).
+fn set_phase(snapshot: &Arc<Mutex<UiSnapshot>>, phase: ConnPhase) {
+    if let Ok(mut s) = snapshot.lock() {
+        s.phase = phase;
+        s.connected = phase == ConnPhase::Connected;
+    }
+}
+
 fn publish(snapshot: &Arc<Mutex<UiSnapshot>>, ws: &WorkerState) {
     let Some(session) = ws.session.as_ref() else {
         return;
@@ -271,14 +365,21 @@ fn publish(snapshot: &Arc<Mutex<UiSnapshot>>, ws: &WorkerState) {
     let st: &RadioState = session.state();
     if let Ok(mut s) = snapshot.lock() {
         s.connected = session.is_connected();
+        // A live session means we are connected; the disconnect/reconnect paths
+        // move us out of this phase (FR-UI-16).
+        if s.connected {
+            s.phase = ConnPhase::Connected;
+        }
         s.transmitting = session.is_transmitting();
         s.tx_armed = session.is_tx_armed();
         s.vfo_a_hz = st.vfo_a_hz;
         s.vfo_b_hz = st.vfo_b_hz;
         s.mode_a = st.mode_a.map(mode_label);
+        s.mode_b = st.mode_b.map(mode_label);
         s.split = st.split;
         s.s_meter_bars = st.s_meter_bars;
         s.s_meter_dbm = st.s_meter_dbm;
+        s.s_meter_dbm_sub = st.s_meter_dbm_sub;
         s.bandwidth_hz = st.bandwidth_hz;
         s.atten_db = st.atten_db;
         s.atten_on = st.atten_on;
@@ -293,77 +394,146 @@ fn publish(snapshot: &Arc<Mutex<UiSnapshot>>, ws: &WorkerState) {
         s.spectrum_latest = ws.spectrum_latest.clone();
         s.waterfall = ws.waterfall.iter().cloned().collect();
         s.diag_lines = ws.diag.recent(30);
+        s.radio = st.clone();
     }
 }
 
-/// Attempt to (re)connect using the retained params. On success, set up the
-/// session + audio and clear the backoff; on failure, schedule the next retry.
-fn attempt_connect(ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnapshot>>) {
+/// Human-readable description of a connect target (no secrets).
+fn describe(target: &ConnectTarget) -> String {
+    match target {
+        ConnectTarget::Tcp {
+            host,
+            port,
+            use_tls,
+            ..
+        } => {
+            let scheme = if *use_tls { "tls" } else { "tcp" };
+            format!("{host}:{port} ({scheme})")
+        }
+        ConnectTarget::Serial { path, baud } => format!("{path}@{baud}"),
+    }
+}
+
+/// Open the link and run the (blocking) handshake for `target`, returning the
+/// ready link + its session profile or a redacted error. Pure w.r.t. worker
+/// state so it can run on a short-lived connect thread (FR-UI-16): the blocking
+/// TCP/TLS handshake never freezes the worker, and the attempt is cancellable.
+fn open_link(target: ConnectTarget) -> ConnectOutcome {
+    // Serial has no PING/PONG, so its keep-alive + link-loss are disabled.
+    let timeout = Duration::from_millis(100);
+    let desc = describe(&target);
+    let (result, session_cfg, secret): (std::io::Result<AnyLink>, _, String) = match &target {
+        ConnectTarget::Tcp {
+            host,
+            port,
+            password,
+            use_tls,
+        } => {
+            let cfg = ConnectConfig {
+                password: password.clone(),
+                read_timeout: timeout,
+                ..Default::default()
+            };
+            (
+                open_tcp(host, *port, &cfg, *use_tls).map(AnyLink::Tcp),
+                SessionConfig::default(),
+                password.clone(),
+            )
+        }
+        ConnectTarget::Serial { path, baud } => (
+            SerialPortTransport::open(path, *baud, timeout).map(AnyLink::Serial),
+            SessionConfig {
+                ping_interval: Duration::from_secs(3600),
+                link_timeout: Duration::from_secs(86_400),
+            },
+            String::new(),
+        ),
+    };
+
+    match result {
+        Ok(link) => Ok((link, session_cfg)),
+        // Defensively redact any secret in case an error echoes it (NFR-SEC-01).
+        Err(e) => Err(k4_config::redact(
+            &format!("connect to {desc} failed: {e}"),
+            &secret,
+        )),
+    }
+}
+
+/// Start a connection attempt on a background thread (FR-UI-16). Sets the phase
+/// to `Connecting` immediately; the result is collected later by
+/// [`poll_pending`]. A no-op if an attempt is already in flight.
+fn begin_connect(ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnapshot>>) {
+    if ws.pending_connect.is_some() {
+        return;
+    }
     let Some(target) = ws.connect_params.clone() else {
         return;
     };
+    let desc = describe(&target);
+    let (tx, rx) = mpsc::channel();
+    // The connect thread owns the blocking handshake. If the attempt is
+    // cancelled, the receiver is dropped and the eventual send is discarded
+    // (dropping the freshly-opened link, which closes the socket).
+    thread::spawn(move || {
+        let _ = tx.send(open_link(target));
+    });
+    ws.pending_connect = Some(rx);
+    ws.diag
+        .log(Level::Info, "net", &format!("connecting to {desc}"));
+    set_phase(snapshot, ConnPhase::Connecting);
+    set_status(snapshot, format!("connecting to {desc}…"));
+}
 
-    // Open the link and pick a session profile. Serial has no PING/PONG, so its
-    // keep-alive + link-loss are effectively disabled.
-    let timeout = Duration::from_millis(100);
-    let (result, session_cfg, desc, secret): (std::io::Result<AnyLink>, _, _, String) =
-        match &target {
-            ConnectTarget::Tcp {
-                host,
-                port,
-                password,
-                use_tls,
-            } => {
-                let cfg = ConnectConfig {
-                    password: password.clone(),
-                    read_timeout: timeout,
-                    ..Default::default()
-                };
-                let scheme = if *use_tls { "tls" } else { "tcp" };
-                (
-                    open_tcp(host, *port, &cfg, *use_tls).map(AnyLink::Tcp),
-                    SessionConfig::default(),
-                    format!("{host}:{port} ({scheme})"),
-                    password.clone(),
-                )
-            }
-            ConnectTarget::Serial { path, baud } => (
-                SerialPortTransport::open(path, *baud, timeout).map(AnyLink::Serial),
-                SessionConfig {
-                    ping_interval: Duration::from_secs(3600),
-                    link_timeout: Duration::from_secs(86_400),
-                },
-                format!("{path}@{baud}"),
-                String::new(),
-            ),
-        };
-
-    match result {
-        Ok(link) => {
+/// Collect the result of an in-flight connect attempt, if any has finished
+/// (FR-UI-16). On success install the session; on failure schedule a backoff
+/// retry while remaining in the `Connecting` phase (still cancellable).
+fn poll_pending(ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnapshot>>) {
+    let Some(rx) = ws.pending_connect.as_ref() else {
+        return;
+    };
+    match rx.try_recv() {
+        Ok(Ok((link, session_cfg))) => {
+            ws.pending_connect = None;
             let mut s = Session::new(link, SystemClock, session_cfg);
             let _ = s.seed();
             ws.reset();
             ws.session = Some(s);
             ws.backoff.reset();
             ws.next_attempt = None;
-            let msg = format!("connected to {desc}");
+            let msg = ws
+                .connect_params
+                .as_ref()
+                .map(|t| format!("connected to {}", describe(t)))
+                .unwrap_or_else(|| "connected".to_string());
             ws.diag.log(Level::Info, "net", &msg);
+            set_phase(snapshot, ConnPhase::Connected);
             set_status(snapshot, msg);
         }
-        Err(e) => {
-            let delay = ws.backoff.next_delay();
-            ws.next_attempt = Some(Instant::now() + delay);
-            // Defensively redact any secret in case an error echoes it (NFR-SEC-01).
-            let msg = k4_config::redact(
-                &format!(
-                    "connect to {desc} failed: {e} — retry in {:?} (attempt {})",
+        Ok(Err(msg)) => {
+            ws.pending_connect = None;
+            if ws.connect_params.is_some() {
+                // Retry with backoff; stay in Connecting so the button keeps
+                // offering Cancel throughout the wait.
+                let delay = ws.backoff.next_delay();
+                ws.next_attempt = Some(Instant::now() + delay);
+                let msg = format!(
+                    "{msg} — retry in {:?} (attempt {})",
                     delay,
                     ws.backoff.attempts()
-                ),
-                &secret,
-            );
-            ws.diag.log(Level::Warn, "net", &msg);
-            set_status(snapshot, msg);
+                );
+                ws.diag.log(Level::Warn, "net", &msg);
+                set_status(snapshot, msg);
+            } else {
+                // Cancelled meanwhile: go quiet.
+                set_phase(snapshot, ConnPhase::Disconnected);
+                set_status(snapshot, "disconnected");
+            }
+        }
+        Err(TryRecvError::Empty) => {} // still connecting
+        Err(TryRecvError::Disconnected) => {
+            // Connect thread died without a result; drop and let retry logic run.
+            ws.pending_connect = None;
         }
     }
 }
@@ -381,14 +551,20 @@ fn run(rx: Receiver<WorkerCmd>, snapshot: Arc<Mutex<UiSnapshot>>) {
             }
         }
 
-        // 2. Service the link, attempt a scheduled reconnect, or idle.
+        // 2. Collect any finished connect attempt (FR-UI-16).
+        poll_pending(&mut ws, &snapshot);
+
+        // 3. Service the link, start a scheduled (re)connect, or idle.
         if ws.session.is_some() {
             service(&mut ws, &snapshot);
         } else {
-            if let Some(at) = ws.next_attempt {
-                if Instant::now() >= at {
-                    ws.next_attempt = None;
-                    attempt_connect(&mut ws, &snapshot);
+            // Start the next attempt when due and none is already in flight.
+            if ws.pending_connect.is_none() {
+                if let Some(at) = ws.next_attempt {
+                    if Instant::now() >= at {
+                        ws.next_attempt = None;
+                        begin_connect(&mut ws, &snapshot);
+                    }
                 }
             }
             // Publish diagnostics even while disconnected (connect errors, etc.).
@@ -477,6 +653,8 @@ fn service(ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnapshot>>) {
         if ws.connect_params.is_some() {
             let delay = ws.backoff.next_delay();
             ws.next_attempt = Some(Instant::now() + delay);
+            // Back to Connecting so the control offers Cancel during the wait.
+            set_phase(snapshot, ConnPhase::Connecting);
             set_status(
                 snapshot,
                 format!(
@@ -485,6 +663,8 @@ fn service(ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnapshot>>) {
                     ws.backoff.attempts()
                 ),
             );
+        } else {
+            set_phase(snapshot, ConnPhase::Disconnected);
         }
     }
 }
@@ -495,18 +675,30 @@ fn handle_cmd(cmd: WorkerCmd, ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnaps
             ws.connect_params = Some(target);
             ws.backoff.reset();
             ws.next_attempt = None;
-            attempt_connect(ws, snapshot);
+            begin_connect(ws, snapshot);
         }
         WorkerCmd::Disconnect => {
+            // Also serves as "cancel" while an attempt is in flight (FR-UI-16):
+            // drop the pending receiver so the connect thread's result (and its
+            // freshly-opened link) is discarded.
+            let was_connecting =
+                ws.session.is_none() && (ws.pending_connect.is_some() || ws.next_attempt.is_some());
             if let Some(s) = ws.session.as_mut() {
                 let _ = s.disconnect();
             }
             ws.session = None;
-            ws.connect_params = None; // stop auto-reconnect
+            ws.pending_connect = None;
+            ws.connect_params = None; // stop auto-reconnect / retry
             ws.next_attempt = None;
             ws.backoff.reset();
-            ws.diag.log(Level::Info, "net", "disconnected");
-            set_status(snapshot, "disconnected");
+            let msg = if was_connecting {
+                "connection attempt cancelled"
+            } else {
+                "disconnected"
+            };
+            ws.diag.log(Level::Info, "net", msg);
+            set_phase(snapshot, ConnPhase::Disconnected);
+            set_status(snapshot, msg);
         }
         WorkerCmd::SetFreqA(hz) => {
             if let Some(s) = ws.session.as_mut() {
@@ -600,6 +792,59 @@ fn handle_cmd(cmd: WorkerCmd, ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnaps
             if let Some(s) = ws.session.as_mut() {
                 let _ = s.send(&cmd);
                 ws.diag.log(Level::Info, "tx", &cmd);
+            }
+        }
+        WorkerCmd::SetRxEq(bands) => {
+            if let Some(s) = ws.session.as_mut() {
+                let _ = s.send(&k4_protocol::cat::set_rx_eq(bands));
+            }
+        }
+        WorkerCmd::SetTxEq(bands) => {
+            if let Some(s) = ws.session.as_mut() {
+                let _ = s.send(&k4_protocol::cat::set_tx_eq(bands));
+            }
+        }
+        WorkerCmd::RxEqFlat => {
+            if let Some(s) = ws.session.as_mut() {
+                let _ = s.send(k4_protocol::cat::rx_eq_flat());
+            }
+        }
+        WorkerCmd::Cat(cmd) => {
+            if let Some(s) = ws.session.as_mut() {
+                let _ = s.send(&cmd);
+                ws.diag.log(Level::Debug, "tx", &cmd);
+            }
+        }
+        // Audio device / level control (FR-AUD-DEV-01 / FR-AUD-LVL-01). Device
+        // changes recreate the stream (only while a session's streams exist).
+        WorkerCmd::SetOutputDevice(name) => {
+            ws.out_device = name;
+            if ws.audio_out.is_some() {
+                ws.audio_out = AudioOutput::with_device(ws.out_device.as_deref()).ok();
+                if let Some(out) = ws.audio_out.as_mut() {
+                    out.set_volume(ws.volume);
+                }
+            }
+        }
+        WorkerCmd::SetInputDevice(name) => {
+            ws.in_device = name;
+            if ws.audio_in.is_some() {
+                ws.audio_in = AudioInput::with_device(ws.in_device.as_deref()).ok();
+                if let Some(inp) = ws.audio_in.as_mut() {
+                    inp.set_mic_gain(ws.mic_gain);
+                }
+            }
+        }
+        WorkerCmd::SetVolume(v) => {
+            ws.volume = v;
+            if let Some(out) = ws.audio_out.as_mut() {
+                out.set_volume(v);
+            }
+        }
+        WorkerCmd::SetMicGain(g) => {
+            ws.mic_gain = g;
+            if let Some(inp) = ws.audio_in.as_mut() {
+                inp.set_mic_gain(g);
             }
         }
     }

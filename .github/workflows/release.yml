@@ -1,0 +1,66 @@
+# K4 Remote — release packaging (NFR-PKG-01). On a `vX.Y.Z` tag, build release
+# binaries per platform and publish a GitHub Release with:
+#   - Debian .deb  (x86_64 + arm64/Raspberry Pi OS)  via cargo-deb
+#   - .tar.gz binaries (Linux x86_64/arm64, macOS)
+#   - .zip binary (Windows x86_64)
+# The Arch PKGBUILD (packaging/PKGBUILD) is published separately to the AUR.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # create the release + upload assets
+
+jobs:
+  package:
+    name: Package (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, name: linux-x86_64, deb: true }
+          - { os: ubuntu-24.04-arm, name: linux-arm64, deb: true }
+          - { os: macos-latest, name: macos, features: "--features vendored-tls" }
+          - { os: windows-latest, name: windows-x86_64, features: "--features vendored-tls" }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: System libraries (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libopus-dev libasound2-dev libssl-dev libudev-dev libsecret-1-dev pkg-config
+      - name: System libraries (macOS)
+        if: runner.os == 'macOS'
+        run: brew install opus pkg-config
+      - name: libopus (Windows / vcpkg)
+        if: runner.os == 'Windows'
+        run: vcpkg install opus:x64-windows-static-md
+
+      - name: Build release binary
+        env:
+          VCPKGRS_TRIPLET: x64-windows-static-md
+        run: cargo build -p k4remote --release ${{ matrix.features }}
+
+      - name: Debian package (.deb)
+        if: matrix.deb
+        run: |
+          cargo install cargo-deb --locked
+          cargo deb -p k4remote --no-build --output "k4remote-${{ matrix.name }}.deb"
+
+      - name: Archive binary (Unix)
+        if: runner.os != 'Windows'
+        run: tar -C target/release -czf "k4remote-${{ matrix.name }}.tar.gz" k4remote
+      - name: Archive binary (Windows)
+        if: runner.os == 'Windows'
+        run: Compress-Archive -Path target/release/k4remote.exe -DestinationPath "k4remote-${{ matrix.name }}.zip"
+
+      - name: Publish to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            k4remote-${{ matrix.name }}.deb
+            k4remote-${{ matrix.name }}.tar.gz
+            k4remote-${{ matrix.name }}.zip
+          fail_on_unmatched_files: false

@@ -4,12 +4,54 @@ edition.workspace = true
 version.workspace = true
 authors.workspace = true
 rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
 publish = false
-description = "K4 Remote — GUI application (ARC-08, iced)."
+description = "K4 Remote — cross-platform remote-control panel for the Elecraft K4."
 
 [[bin]]
 name = "k4remote"
 path = "src/main.rs"
+
+# Debian/Raspberry Pi OS package (`cargo deb`) — NFR-PKG-01. Runtime libraries
+# for the default features: ALSA (audio), OpenSSL (TLS-PSK), libudev (serial),
+# libsecret (keychain).
+[package.metadata.deb]
+name = "k4remote"
+maintainer = "Simon Keimer (DC0SK)"
+copyright = "2026, Simon Keimer (DC0SK)"
+license-file = ["../LICENSE", "0"]
+extended-description = "A cross-platform (Linux/RPi/Windows/macOS) remote-control panel for the Elecraft K4 transceiver: CAT control, panadapter, and Opus audio over the K4/0 protocol."
+section = "hamradio"
+priority = "optional"
+depends = "$auto, libasound2, libssl3, libudev1, libsecret-1-0"
+assets = [
+    ["target/release/k4remote", "usr/bin/", "755"],
+    ["../packaging/k4remote.desktop", "usr/share/applications/", "644"],
+    ["../docs/README.md", "usr/share/doc/k4remote/README.md", "644"],
+    ["../packaging/icons/k4remote.svg", "usr/share/icons/hicolor/scalable/apps/k4remote.svg", "644"],
+    ["../packaging/icons/k4remote-16.png", "usr/share/icons/hicolor/16x16/apps/k4remote.png", "644"],
+    ["../packaging/icons/k4remote-32.png", "usr/share/icons/hicolor/32x32/apps/k4remote.png", "644"],
+    ["../packaging/icons/k4remote-48.png", "usr/share/icons/hicolor/48x48/apps/k4remote.png", "644"],
+    ["../packaging/icons/k4remote-64.png", "usr/share/icons/hicolor/64x64/apps/k4remote.png", "644"],
+    ["../packaging/icons/k4remote-128.png", "usr/share/icons/hicolor/128x128/apps/k4remote.png", "644"],
+    ["../packaging/icons/k4remote-256.png", "usr/share/icons/hicolor/256x256/apps/k4remote.png", "644"],
+    ["../packaging/icons/k4remote-512.png", "usr/share/icons/hicolor/512x512/apps/k4remote.png", "644"],
+]
+
+# macOS .app bundle (`cargo bundle`) — NFR-PKG-01. cargo-bundle builds an `.icns`
+# from these PNGs.
+[package.metadata.bundle]
+name = "K4 Remote"
+identifier = "org.dc0sk.k4remote"
+short_description = "Elecraft K4 remote-control panel"
+category = "public.app-category.utilities"
+icon = [
+    "../packaging/icons/k4remote-32.png",
+    "../packaging/icons/k4remote-128.png",
+    "../packaging/icons/k4remote-256.png",
+    "../packaging/icons/k4remote-512.png",
+]
 
 [features]
 # Real audio capture/playback (cpal) and TLS-PSK (OpenSSL). On by default (the
@@ -18,6 +60,8 @@ path = "src/main.rs"
 default = ["audio-device", "tls", "keychain"]
 audio-device = ["k4-audio/device"]
 tls = ["k4-transport/tls"]
+# TLS with OpenSSL built from source (Windows/macOS packaging convenience).
+vendored-tls = ["k4-transport/vendored-tls"]
 keychain = ["k4-config/keychain"]
 
 [dependencies]
@@ -29,4 +73,8 @@ k4-stream = { path = "../crates/k4-stream" }
 k4-audio = { path = "../crates/k4-audio" }
 k4-config = { path = "../crates/k4-config" }
 k4-diag = { path = "../crates/k4-diag" }
-iced = { version = "0.13", features = ["tokio", "canvas"] }
+iced = { version = "0.13", features = ["tokio", "canvas", "image"] }
+
+# Embed the app icon into the Windows .exe (NFR-PKG-01); no-op elsewhere.
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
