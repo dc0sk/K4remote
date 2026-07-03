@@ -63,7 +63,9 @@ jobs:
       - name: TLS-PSK feature test
         run: cargo test -p k4-transport ${{ matrix.features || '--features tls' }}
 
-  # Windows build (best-effort): libopus via vcpkg, OpenSSL vendored.
+  # Windows build: libopus and OpenSSL are both built from source
+  # (audiopus_sys + openssl `vendored`), so only a C toolchain, NASM, and CMake
+  # are needed — all provided below / preinstalled on the runner.
   build-windows:
     name: Build (windows-x86_64)
     runs-on: windows-latest
@@ -71,11 +73,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: libopus (vcpkg)
-        run: vcpkg install opus:x64-windows-static-md
+      - name: NASM (vendored OpenSSL asm)
+        uses: ilammy/setup-nasm@v1
       - name: Build
         env:
-          VCPKGRS_TRIPLET: x64-windows-static-md
+          # CMake 4.x rejects libopus's pre-3.5 cmake_minimum_required; allow it.
+          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
         run: cargo build -p k4remote --release --features vendored-tls
 
   audit:

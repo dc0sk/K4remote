@@ -34,13 +34,15 @@ jobs:
       - name: System libraries (macOS)
         if: runner.os == 'macOS'
         run: brew install opus pkg-config
-      - name: libopus (Windows / vcpkg)
+      - name: NASM (Windows / vendored OpenSSL asm)
         if: runner.os == 'Windows'
-        run: vcpkg install opus:x64-windows-static-md
+        uses: ilammy/setup-nasm@v1
 
       - name: Build release binary
         env:
-          VCPKGRS_TRIPLET: x64-windows-static-md
+          # Windows builds libopus + OpenSSL from source; CMake 4.x needs this to
+          # accept libopus's pre-3.5 cmake_minimum_required. No-op elsewhere.
+          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
         run: cargo build -p k4remote --release ${{ matrix.features }}
 
       - name: Debian package (.deb)
