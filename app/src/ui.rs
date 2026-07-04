@@ -298,10 +298,11 @@ pub fn conn_status(phase: ConnPhase) -> (&'static str, ColorRole) {
     }
 }
 
-/// Default window size at launch (FR-UI-21) — landscape (wider than tall), since
-/// the layout is horizontal (VFO band + panels across the width).
+/// Default window size at launch (FR-UI-21) — landscape (wider than tall). The
+/// height fits the fixed-height content (VFO band + screen slot + panels) so the
+/// window opens without a scrollbar.
 /// trace: FR-UI-21
-pub const DEFAULT_WINDOW_SIZE: (f32, f32) = (1280.0, 800.0);
+pub const DEFAULT_WINDOW_SIZE: (f32, f32) = (1280.0, 884.0);
 
 /// Colour role for a VFO's header given which receiver it is, whether it is the
 /// transmit VFO (split-aware), and whether the radio is transmitting. Transmit
