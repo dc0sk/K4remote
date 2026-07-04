@@ -1825,12 +1825,14 @@ impl App {
             Some(d.freeze),
             Some(Message::Disp(DispMsg::Freeze(!d.freeze))),
         );
+        // Steppers laid out on a fixed 3-column grid so labels, −/+ buttons and
+        // values align across rows and columns.
+        let grid_row = || Row::new().spacing(12);
         Column::new()
             .spacing(10)
             .push(view_row)
             .push(
-                Row::new()
-                    .spacing(18)
+                grid_row()
                     .push(disp_stepper(
                         "REF",
                         format!("{} dBm", d.ref_db),
@@ -1842,17 +1844,16 @@ impl App {
                         format!("{:.0} kHz", f64::from(d.span_hz) / 1000.0),
                         Message::Disp(DispMsg::Span(d.span_hz / 2)),
                         Message::Disp(DispMsg::Span(d.span_hz.saturating_mul(2))),
-                    )),
-            )
-            .push(
-                Row::new()
-                    .spacing(18)
+                    ))
                     .push(disp_stepper(
                         "SCALE",
                         d.scale.to_string(),
                         Message::Disp(DispMsg::Scale(d.scale.saturating_sub(5))),
                         Message::Disp(DispMsg::Scale(d.scale + 5)),
-                    ))
+                    )),
+            )
+            .push(
+                grid_row()
                     .push(disp_stepper(
                         "AVG",
                         d.avg.to_string(),
@@ -1868,7 +1869,7 @@ impl App {
             )
             .push(
                 Row::new()
-                    .spacing(10)
+                    .spacing(12)
                     .align_y(Alignment::Center)
                     .push(peak)
                     .push(freeze)
@@ -2361,7 +2362,8 @@ impl App {
         )
         .style(panel_style)
         .padding(12)
-        .width(Length::Fill);
+        .width(Length::Fill)
+        .height(Length::Fixed(BOTTOM_PANEL_H));
 
         // Connection panel (FR-UI-01) — Ethernet or serial fields.
         let fields: Column<Message> = if self.serial_mode {
@@ -2489,11 +2491,14 @@ impl App {
                     .size(11)
                     .color(dim),
                 )
-                .push(log_col),
+                // Scroll the log within the fixed panel height so it can't push
+                // DIAGNOSTICS taller than TRANSMIT.
+                .push(scrollable(log_col).height(Length::Fill)),
         )
         .style(panel_style)
         .padding(12)
-        .width(Length::Fill);
+        .width(Length::Fill)
+        .height(Length::Fixed(BOTTOM_PANEL_H));
 
         let bottom: Element<Message> = if bl.stacked {
             Column::new()
@@ -2863,6 +2868,11 @@ const VFO_BAND_H: f32 = 160.0;
 /// Matches the panadapter footprint so the layout doesn't jump.
 const SCREEN_H: f32 = 300.0;
 
+/// Shared height of the bottom TRANSMIT / DIAGNOSTICS panels so they line up
+/// (the scrollable body can't stretch them to match, so fix it). The diagnostics
+/// log scrolls within this height.
+const BOTTOM_PANEL_H: f32 = 168.0;
+
 /// Visual kind of a styled button (FR-UI-10/15): rest-state control, engaged
 /// (blue fill, like the reference client), transmit-critical (red edge),
 /// destructive (red fill), or transmitting-now (amber fill).
@@ -3046,18 +3056,21 @@ fn small_btn_string(label: String, msg: Message) -> Element<'static, Message> {
 }
 
 /// A `label · − · value · +` stepper row for the DISPLAY screen (FR-PAN-CTL-01).
+/// One DISPLAY-grid cell: `label [−] value [+]`, a fixed total width so the
+/// label / buttons / value line up in columns across every row (FR-PAN-CTL-01).
 fn disp_stepper(
     label: &'static str,
     value: String,
     dn: Message,
     up: Message,
 ) -> Element<'static, Message> {
-    Row::new()
+    let cell = Row::new()
         .spacing(6)
         .align_y(Alignment::Center)
         .push(
             Text::new(label)
                 .size(11)
+                .width(Length::Fixed(46.0))
                 .color(role_color(ui::ColorRole::Inactive)),
         )
         .push(small_btn("−", dn))
@@ -3067,8 +3080,8 @@ fn disp_stepper(
                 .width(Length::Fixed(76.0))
                 .align_x(Alignment::Center),
         )
-        .push(small_btn("+", up))
-        .into()
+        .push(small_btn("+", up));
+    Container::new(cell).width(Length::Fixed(200.0)).into()
 }
 
 /// K4 `#DPM` display-mode code for a [`ViewMode`] (FR-PAN-CTL-01).
