@@ -269,3 +269,21 @@ fn fr_mtr_03_tx_metering() {
     assert_eq!(s.tx_fwd_w, Some(50));
     assert_eq!(s.tx_swr_x10, Some(15));
 }
+
+/// The `ACM` RX-antenna access mask limits which AR$ values are in rotation.
+///
+/// trace: FR-ANT-01
+#[test]
+fn fr_ant_01_rx_antenna_access_mask() {
+    let mut s = RadioState::new();
+    // USE SUBSET: ANT1 (→AR$5), RX1 (→AR$4), =TX ANT (→AR$2) enabled.
+    s.apply_cat("ACM01001010;");
+    let avail = s.rx_ant_avail.unwrap();
+    assert!(avail & (1 << 5) != 0);
+    assert!(avail & (1 << 4) != 0);
+    assert!(avail & (1 << 2) != 0);
+    assert!(avail & (1 << 6) == 0); // ANT2 not enabled
+                                    // DISPLAY ALL → all of AR$1..=7.
+    s.apply_cat("ACM10000000;");
+    assert_eq!(s.rx_ant_avail, Some(0b1111_1110));
+}
