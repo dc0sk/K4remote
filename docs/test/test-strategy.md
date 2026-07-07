@@ -1,7 +1,7 @@
 ---
 title: "Test Strategy & Traceability"
 status: Draft
-version: "0.60"
+version: "0.61"
 updated: 2026-07-07
 authors:
   - Simon Keimer (DC0SK)
@@ -259,3 +259,4 @@ FR-SES-MULTI, FR-DIAG-02, etc. — get `TC` IDs when promoted to `Approved`.)*
 | 2026-07-07 | 0.58 | DC0SK | Sub-RX read-back: parse the `$` RX RESP variants (BW/AG/RG/SQ/IS/NM/NA/AP) into sub-receiver fields + seed them (FR-CAT-05, state test); the RX frame now shows the *active* VFO's control states (notch/APF via accessors, sliders synced on view switch), so RX B reflects the sub receiver and the notch disable-fix works there too. 131 tests. |
 | 2026-07-07 | 0.59 | DC0SK | RX-frame layout + fixes: diagnostics log defaults OFF; dissolved the filter cluster into three rows (row1 chips + NOTCH/AUTO/APF right of DIV; row2 tune + FL1/2/3/NORMALIZE right of SCAN; row3 sliders SHIFT·AF·RF·SQL·PITCH); active-RX-VFO now also detected from the SUB RX softkey (not just single-B view), fixing the RX A/B label; ATT/PRE/NB retargeted to the active VFO via `$` toggle forms (RA/·PA/·NB/), removing the SW-tap worker paths. Window 1052→980 px. (NR/AGC sub-targeting still pending.) |
 | 2026-07-07 | 0.60 | DC0SK | Text decode (FR-TXT-01): `set_text_decode` (`TD`) + parse the `TB` buffered-text RESP into a rolling `decode_text` (embedded `;` preserved — verified by the whole-payload framing; state test); TX→TEXT tab gains a DECODE toggle and a scrolling decoded-text view, polled from `TB$;` at ~2.5 Hz only while decode is ON (no idle traffic). 133 tests. |
+| 2026-07-07 | 0.61 | DC0SK | Active-RX selection + chip sub-state: explicit `active_rx_b` drives the RX A/B label + control targeting, set by the header A/B AND by clicking a spectrum pane (needed in the A+B view); parse `$` variants of RA/GT/NB/NR/PA into sub fields + seed; ATT/PRE/NB/NR/AGC chips now read the active VFO; NR and AGC retargeted to the active VFO (NR via NR$ level+mode, AGC via GT$) with re-query (removed the SW-tap/worker paths). 133 tests. |
