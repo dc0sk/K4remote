@@ -70,8 +70,13 @@ pub struct RadioState {
     pub rf_gain_db: Option<u8>,
     /// Squelch threshold, 0–40 (`SQ`).
     pub squelch: Option<u8>,
-    /// Transmit power, watts (`PC`).
+    /// Transmit power, raw `nnn` field for the current range (`PC`).
     pub tx_power: Option<u16>,
+    /// Transmit power range (`PC` `r`): `H` QRO / `L` QRP / `X` mW.
+    pub tx_power_range: Option<char>,
+    /// VOX gain 0–60 (`VG`) and anti-VOX/inhibit level 0–60 (`VI`).
+    pub vox_gain: Option<u8>,
+    pub anti_vox: Option<u8>,
     /// Speech compression, 0–30 (`CP`).
     pub compression: Option<u8>,
     /// CW sidetone pitch, Hz (`CW`).
@@ -298,10 +303,11 @@ impl RadioState {
                 _ => (arg, ""),
             };
             if let Ok(n) = digits.parse::<u16>() {
-                self.tx_power = Some(match range {
-                    "H" => n,
-                    "X" => 0,
-                    _ => n / 10,
+                self.tx_power = Some(n); // raw nnn for the current range
+                self.tx_power_range = Some(match range {
+                    "H" => 'H',
+                    "X" => 'X',
+                    _ => 'L',
                 });
             }
         } else if let Some(arg) = cmd.strip_prefix("CP") {
@@ -538,6 +544,17 @@ impl RadioState {
             if let Ok(v) = arg.parse::<u8>() {
                 self.rx_antenna = Some(v);
             }
+        } else if let Some(arg) = cmd.strip_prefix("VG") {
+            // `VGmnnn` — VOX gain (m = V/D); surface the level.
+            if arg.len() >= 4 {
+                if let Ok(v) = arg[1..4].parse::<u8>() {
+                    self.vox_gain = Some(v);
+                }
+            }
+        } else if let Some(arg) = cmd.strip_prefix("VI") {
+            if let Ok(v) = arg.parse::<u8>() {
+                self.anti_vox = Some(v);
+            }
         } else if let Some(arg) = cmd.strip_prefix("VX") {
             // `VXmn`: only the voice (`V`) mode is surfaced.
             let b = arg.as_bytes();
@@ -663,6 +680,7 @@ pub fn connect_state_seed() -> &'static [&'static str] {
         "SN;",  // K4 serial number (for config-export filenames)
         "RO;",  // RIT/XIT offset (Hz)
         "ML0;", "ML1;", "ML2;", // monitor levels (CW / AF-data / voice)
+        "VGV;", "VI;", // VOX gain (voice) + anti-VOX level
         // Configuration-screen read-back (FR-UI-19 screens):
         "RE;", "TE;", "KP;", "KS;", "MI;", "MG;", "LO;", "AN;", "AR;", "AR$;", "VXV;", "BN;",
         "#REF;", "#SPN;", "#SCL;", "#DPM;", "#WFC;", "#WFH;",

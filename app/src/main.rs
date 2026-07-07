@@ -168,7 +168,13 @@ struct App {
     squelch: u8,
     // TX levels: power (W, QRO) and speech compression 0–30 (FR-TX-02, FR-TX-CMP-01).
     tx_power: u16,
+    tx_pwr_range: char,
     compression: u8,
+    // RX DSP + VOX level sliders (local mirrors for smooth dragging).
+    nb_level: u8,
+    nr_level: u8,
+    vox_gain: u8,
+    anti_vox: u8,
     // CW sidetone pitch Hz (FR-KEY-02); full-QSK + VOX/QSK delay 10-ms (FR-TX-DLY-01).
     cw_pitch: u16,
     qsk_full: bool,
@@ -423,6 +429,11 @@ enum Message {
     AdjustRitOffset(i16),
     SetMonitor(u8),
     Autospot,
+    SetTxPowerRange(char),
+    SetNbLevel(u8),
+    SetNrLevel(u8),
+    SetVoxGain(u8),
+    SetAntiVox(u8),
     ToggleArm,
     ToggleKey,
     EmergencyStop,
@@ -614,6 +625,11 @@ impl App {
             rf_gain: 0,
             squelch: 0,
             tx_power: 10,
+            tx_pwr_range: 'H',
+            nb_level: 5,
+            nr_level: 5,
+            vox_gain: 20,
+            anti_vox: 0,
             compression: 0,
             cw_pitch: 600,
             qsk_full: false,
@@ -740,7 +756,7 @@ impl App {
             c.push(cat::set_attenuator(db, on));
         }
         if let Some(v) = r.tx_power {
-            c.push(cat::set_tx_power(v));
+            c.push(cat::set_tx_power_range(v, r.tx_power_range.unwrap_or('H')));
         }
         if let Some(v) = r.compression {
             c.push(cat::set_compression(v));
@@ -1161,7 +1177,51 @@ impl App {
             }
             Message::SetTxPower(v) => {
                 self.tx_power = v;
-                self.send(WorkerCmd::Cat(k4_protocol::cat::set_tx_power(v)));
+                self.send(WorkerCmd::Cat(k4_protocol::cat::set_tx_power_range(
+                    v,
+                    self.tx_pwr_range,
+                )));
+            }
+            Message::SetTxPowerRange(r) => {
+                self.tx_pwr_range = r;
+                let max = if r == 'H' { 110 } else { 100 };
+                self.tx_power = self.tx_power.min(max);
+                self.send(WorkerCmd::Cat(k4_protocol::cat::set_tx_power_range(
+                    self.tx_power,
+                    r,
+                )));
+            }
+            Message::SetNbLevel(v) => {
+                self.nb_level = v;
+                self.send(WorkerCmd::Cat(target_rx(
+                    k4_protocol::cat::set_nb_level(
+                        v,
+                        self.rx_nb_on() == Some(true),
+                        self.ui.radio.nb_filter.unwrap_or(0),
+                    ),
+                    self.active_sub(),
+                )));
+            }
+            Message::SetNrLevel(v) => {
+                self.nr_level = v;
+                let mode = u8::from(self.rx_nr_on() == Some(true));
+                self.send(WorkerCmd::Cat(target_rx(
+                    k4_protocol::cat::set_nr(v, mode),
+                    self.active_sub(),
+                )));
+            }
+            Message::SetVoxGain(v) => {
+                self.vox_gain = v;
+                let m = if self.tx_mode_class() == 'D' {
+                    'D'
+                } else {
+                    'V'
+                };
+                self.send(WorkerCmd::Cat(k4_protocol::cat::set_vox_gain(m, v)));
+            }
+            Message::SetAntiVox(v) => {
+                self.anti_vox = v;
+                self.send(WorkerCmd::Cat(k4_protocol::cat::set_antivox(v)));
             }
             Message::SetCompression(v) => {
                 self.compression = v;
@@ -2174,11 +2234,31 @@ impl App {
                     .padding([4, 8])
                     .on_press(Message::Autospot),
             );
+        // VOX gain + anti-VOX (VG/VI) sliders (FR-VOX-02).
+        let rxv = role_color(ui::ColorRole::RxValue);
+        let vox_slider = |label: &'static str, val: u8, msg: fn(u8) -> Message| {
+            Row::new()
+                .spacing(6)
+                .align_y(Alignment::Center)
+                .push(Text::new(label).size(10).color(dim))
+                .push(
+                    slider(0..=60u8, val, msg)
+                        .step(1u8)
+                        .width(Length::Fixed(90.0)),
+                )
+                .push(Text::new(format!("{val}")).size(10).color(rxv))
+        };
+        let vox_row = Row::new()
+            .spacing(14)
+            .align_y(Alignment::Center)
+            .push(vox_slider("VOX G", self.vox_gain, Message::SetVoxGain))
+            .push(vox_slider("A-VOX", self.anti_vox, Message::SetAntiVox));
         Column::new()
             .spacing(6)
             .push(Text::new("Switches (tap · hold)").size(10).color(dim))
             .push(grid)
             .push(mon_row)
+            .push(vox_row)
             .into()
     }
 
@@ -2511,11 +2591,26 @@ impl App {
         if let Some(v) = r.tx_power {
             self.tx_power = v;
         }
+        if let Some(rng) = r.tx_power_range {
+            self.tx_pwr_range = rng;
+        }
         if let Some(v) = r.compression {
             self.compression = v;
         }
         if let Some(v) = r.cw_pitch {
             self.cw_pitch = v;
+        }
+        if let Some(v) = if sub { r.sub_nb_level } else { r.nb_level } {
+            self.nb_level = v;
+        }
+        if let Some(v) = if sub { r.sub_nr_level } else { r.nr_level } {
+            self.nr_level = v;
+        }
+        if let Some(v) = r.vox_gain {
+            self.vox_gain = v;
+        }
+        if let Some(v) = r.anti_vox {
+            self.anti_vox = v;
         }
     }
 
@@ -3535,6 +3630,34 @@ impl App {
                 5000,
                 Message::SetNotchPitch,
             ));
+        // NB / NR level sliders for the active RX (FR-RX-04).
+        let level_slider = |label: &'static str, val: u8, max: u8, msg: fn(u8) -> Message| {
+            Row::new()
+                .spacing(6)
+                .align_y(Alignment::Center)
+                .push(Text::new(label).size(11).color(dim))
+                .push(
+                    slider(0..=max, val, msg)
+                        .step(1u8)
+                        .width(Length::Fixed(96.0)),
+                )
+                .push(Text::new(format!("{val}")).size(11).color(rxv))
+        };
+        let dsp_row = Row::new()
+            .spacing(18)
+            .align_y(Alignment::Center)
+            .push(level_slider(
+                "NB LVL",
+                self.nb_level,
+                15,
+                Message::SetNbLevel,
+            ))
+            .push(level_slider(
+                "NR LVL",
+                self.nr_level,
+                10,
+                Message::SetNrLevel,
+            ));
         let controls = Container::new(
             Column::new()
                 .spacing(8)
@@ -3551,7 +3674,8 @@ impl App {
                         .push(chips),
                 )
                 .push(tune_row)
-                .push(gain_row),
+                .push(gain_row)
+                .push(dsp_row),
         )
         .style(panel_style)
         .padding(12)
@@ -3736,12 +3860,31 @@ impl App {
             .push(key)
             .push(estop)
             .push(horizontal_space())
-            .push(Text::new("PWR").size(11).color(dim))
+            .push(Text::new("PWR").size(11).color(dim));
+        // Power range H (QRO) / L (QRP) / X (mW) selector (FR-TX-02).
+        let range_btn = |lbl: &'static str, r: char, cur: char| {
+            Button::new(Text::new(lbl).size(10))
+                .style(btn_style(if cur == r {
+                    BtnKind::Active
+                } else {
+                    BtnKind::Plain
+                }))
+                .padding([2, 6])
+                .on_press(Message::SetTxPowerRange(r))
+        };
+        let pmax = if self.tx_pwr_range == 'H' { 110 } else { 100 };
+        let pval = match self.tx_pwr_range {
+            'H' => format!("{} W", self.tx_power),
+            'X' => format!("{:.1} mW", f32::from(self.tx_power) / 10.0),
+            _ => format!("{:.1} W", f32::from(self.tx_power) / 10.0),
+        };
+        let ptt_row = ptt_row
+            .push(range_btn("H", 'H', self.tx_pwr_range))
+            .push(range_btn("L", 'L', self.tx_pwr_range))
+            .push(range_btn("X", 'X', self.tx_pwr_range))
+            .push(slider(0..=pmax, self.tx_power, Message::SetTxPower).width(Length::Fixed(110.0)))
             .push(
-                slider(0..=110u16, self.tx_power, Message::SetTxPower).width(Length::Fixed(130.0)),
-            )
-            .push(
-                Text::new(format!("{} W", self.tx_power))
+                Text::new(pval)
                     .size(11)
                     .color(role_color(ui::ColorRole::RxValue)),
             );
