@@ -121,6 +121,7 @@ Programmer's Reference rev. D12 (`PRG`) command mnemonics.
 |---|---|---|---|---|---|
 | `FR-TX-01` | initiate and end transmit (PTT) explicitly (`TX;`/`RX;`) only on deliberate operator action. | STK-06/13 | M | T | TX requires an explicit arm+activate; no implicit path sets TX. |
 | `FR-TX-02` | set transmit power (`PC`). | STK-06 | S | T | Power 50 W emits documented `PC…;`. |
+| `FR-TX-CMP-01` | set speech compression 0–30 (`CP`, SSB modes) and reflect the RESP. | STK-06 | C | T | `set_compression(15)` emits `CP015;`, clamps to 30, and reflects the `CP` RESP. |
 | `FR-TX-CW-01` | send CW from a connected paddle/key by emitting the remote key data stream (`KZ` with `.`/`-`/`U`/`D`/`P` elements; PRG `KZ`). | STK-07 | M | T | A dit then dah produces the documented `KZ` element sequence. |
 | `FR-TX-CW-02` | apply the configurable key-down initial delay (`KZL`, default 80 ms) and honour it in the stream timing. | STK-07 | S | T | `KZL` value is sent and used in stream scheduling. |
 | `FR-TX-CW-03` | send CW message/text keying (`KY`) for stored messages. | STK-07 | C | T | A stored message emits a `KY` command with the text. |

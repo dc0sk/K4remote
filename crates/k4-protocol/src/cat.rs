@@ -127,6 +127,21 @@ pub fn set_squelch(level: u8) -> String {
     format!("SQ{:03};", level.min(40))
 }
 
+/// Set transmit power in the high (QRO) range, 0–110 W (`PC…H`). The K4 also
+/// supports low (`L`, 0.1–10 W) and milliwatt (`X`) ranges — D12.
+///
+/// trace: FR-TX-02
+pub fn set_tx_power(watts: u16) -> String {
+    format!("PC{:03}H;", watts.min(110))
+}
+
+/// Set speech compression, 0–30 (`CP`; SSB modes only) — D12.
+///
+/// trace: FR-TX-CMP-01
+pub fn set_compression(level: u8) -> String {
+    format!("CP{:03};", level.min(30))
+}
+
 /// Set the RX attenuator: `db` ∈ {0,3,6,9,12,15,18,21}, on/off (`RA`).
 ///
 /// Example: `(12, true)` → `"RA121;"`.
