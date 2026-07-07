@@ -10,7 +10,7 @@ use iced::{Color, Pixels, Point, Rectangle, Renderer, Size, Theme};
 use k4_stream::render::{dbm_to_color, dbm_to_y};
 
 /// Canvas program drawing a spectrum trace (top) and waterfall (bottom).
-pub struct Spectrum<'a> {
+pub struct Spectrum<'a, Message> {
     /// Latest trace, downsampled dBm bins.
     pub latest: &'a [f32],
     /// Waterfall rows, newest first, downsampled dBm bins.
@@ -19,10 +19,69 @@ pub struct Spectrum<'a> {
     pub top_dbm: f32,
     /// dB span of the spectrum window.
     pub range_db: f32,
+    /// This pane's VFO (false = A, true = B), passed to the interaction hooks.
+    pub is_b: bool,
+    /// Pane centre frequency + span (Hz), mapping a click-x to a frequency for
+    /// click-to-QSY. `span_hz == 0` disables QSY (span unknown / fixed-tune).
+    pub center_hz: u64,
+    pub span_hz: u32,
+    /// Left-click → tune this VFO to the clicked frequency.
+    pub on_qsy: fn(bool, u64) -> Message,
+    /// Wheel scroll → step this VFO up (`+1`) / down (`-1`).
+    pub on_wheel: fn(bool, i32) -> Message,
 }
 
-impl<Message> canvas::Program<Message> for Spectrum<'_> {
+impl<Message> canvas::Program<Message> for Spectrum<'_, Message> {
     type State = ();
+
+    /// Click-to-QSY + wheel-tuning on the panadapter.
+    /// trace: FR-PAN-04
+    fn update(
+        &self,
+        _state: &mut (),
+        event: canvas::Event,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> (canvas::event::Status, Option<Message>) {
+        let Some(pos) = cursor.position_in(bounds) else {
+            return (canvas::event::Status::Ignored, None);
+        };
+        match event {
+            // Click → QSY. Return `Ignored` so a wrapping mouse_area can still
+            // select this pane's TX VFO in dual view.
+            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
+                if self.span_hz > 0 =>
+            {
+                let frac = (pos.x / bounds.width).clamp(0.0, 1.0) as f64 - 0.5;
+                let hz = (self.center_hz as f64 + frac * self.span_hz as f64).max(0.0) as u64;
+                (
+                    canvas::event::Status::Ignored,
+                    Some((self.on_qsy)(self.is_b, hz)),
+                )
+            }
+            canvas::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
+                let y = match delta {
+                    mouse::ScrollDelta::Lines { y, .. } | mouse::ScrollDelta::Pixels { y, .. } => y,
+                };
+                let dir = if y > 0.0 {
+                    1
+                } else if y < 0.0 {
+                    -1
+                } else {
+                    0
+                };
+                if dir != 0 {
+                    (
+                        canvas::event::Status::Captured,
+                        Some((self.on_wheel)(self.is_b, dir)),
+                    )
+                } else {
+                    (canvas::event::Status::Ignored, None)
+                }
+            }
+            _ => (canvas::event::Status::Ignored, None),
+        }
+    }
 
     fn draw(
         &self,
