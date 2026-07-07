@@ -115,6 +115,11 @@ pub struct RadioState {
     pub qsk_full: Option<bool>,
     /// VOX/QSK delay, 10-ms units (`SD` zzz).
     pub qsk_delay: Option<u8>,
+    /// TX metering (`TM`), delivered during transmit.
+    pub tx_alc: Option<u16>, // ALC (bars)
+    pub tx_cmp: Option<u16>,     // compression, dB
+    pub tx_fwd_w: Option<u16>,   // forward power (W in QRO)
+    pub tx_swr_x10: Option<u16>, // SWR in 1/10 units
     /// Text-decode mode (`TD`); 0 = off.
     pub decode_mode: Option<u8>,
     /// Accumulated decoded receive text (`TB` `s` field), newest at the end.
@@ -324,6 +329,14 @@ impl RadioState {
                     *sub_or(&mut self.apf_width, &mut self.sub_apf_width, sub) =
                         Some((b[1] - b'0').min(2));
                 }
+            }
+        } else if let Some(arg) = cmd.strip_prefix("TM") {
+            // `aaabbbcccddd`: ALC, CMP(dB), FWD power, SWR(×0.1). Auto-delivered.
+            if arg.len() >= 12 {
+                self.tx_alc = arg[0..3].parse().ok();
+                self.tx_cmp = arg[3..6].parse().ok();
+                self.tx_fwd_w = arg[6..9].parse().ok();
+                self.tx_swr_x10 = arg[9..12].parse().ok();
             }
         } else if let Some(arg) = cmd.strip_prefix("TB") {
             // `TB[$]trrs`: t=TX queue, rr=RX char count, s=decoded text (may
@@ -569,6 +582,7 @@ pub fn connect_state_seed() -> &'static [&'static str] {
         // Sub-receiver read-back of the same RX controls (RX-B display):
         "BW$;", "AG$;", "RG$;", "SQ$;", "IS$;", "NM$;", "NA$;", "AP$;", //
         "RA$;", "GT$;", "NB$;", "NR$;", "PA$;",
+        "TM1;", // enable auto TX metering (RF/ALC/SWR/CMP during transmit)
         // Configuration-screen read-back (FR-UI-19 screens):
         "RE;", "TE;", "KP;", "KS;", "MI;", "MG;", "LO;", "AN;", "AR;", "AR$;", "VXV;", "BN;",
         "#REF;", "#SPN;", "#SCL;", "#DPM;", "#WFC;", "#WFH;",

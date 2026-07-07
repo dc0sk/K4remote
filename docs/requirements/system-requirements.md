@@ -116,7 +116,7 @@ Programmer's Reference rev. D12 (`PRG`) command mnemonics.
 |---|---|---|---|---|---|
 | `FR-MTR-01` | display the receive S-meter, updated automatically (`SM`/`SMH` auto-delivery under AI; PRG `SM`/`SMH`). | STK-04 | M | T | Pushed `SM$08;` updates the meter without a GET. |
 | `FR-MTR-02` | display the high-resolution S-meter in dBm when available (`SMH`). | STK-04 | S | T | `SMH-073;` shows −73 dBm. |
-| `FR-MTR-03` | during transmit, display available TX metering (power, SWR, ALC) where the radio reports them. | STK-04 | S | T | TX metering fields populate from RESP during a simulated TX. |
+| `FR-MTR-03` | during transmit, display the TX meters — RF power, SWR, ALC, and CMP (voice) — from the auto-delivered `TM` data. | STK-04 | S | T | `TM…;` populates `tx_alc`/`tx_cmp`/`tx_fwd_w`/`tx_swr_x10`. |
 | `FR-MTR-04` | represent meter values on a calibrated scale (bars/dBm/S-units) consistent with the K4 bar graph. | STK-04/11 | S | A/T | Mapping function: bar 00→S0 baseline, 42→top, monotonic; unit-tested. |
 
 ## H. Transmit, Keying & Safety — `FR-TX`
