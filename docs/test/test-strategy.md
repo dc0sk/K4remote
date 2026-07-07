@@ -1,7 +1,7 @@
 ---
 title: "Test Strategy & Traceability"
 status: Draft
-version: "0.67"
+version: "0.68"
 updated: 2026-07-07
 authors:
   - Simon Keimer (DC0SK)
@@ -266,3 +266,4 @@ FR-SES-MULTI, FR-DIAG-02, etc. — get `TC` IDs when promoted to `Approved`.)*
 | 2026-07-07 | 0.65 | DC0SK | RX/SUB antenna cycling honors the enabled subset: parse the `ACM`/`ACS` RX-antenna access masks into `rx_ant_avail`/`sub_ant_avail` bitmasks (+ seed ACM;/ACS;); RX ANT (SW70) / SUB ANT (SW157) now step via AR/AR$ through only the enabled AR$ values, falling back to the switch tap when the mask is unknown (FR-ANT-01, state test). The mask a–g→AR$ mapping is a documented best-effort pending live verification. 135 tests. |
 | 2026-07-07 | 0.66 | DC0SK | Startup + config backup: app no longer pre-opens BAND (starts on the spectrum); on connect it adopts the radio's display layout from `#DPM` (single-A/B / dual). New `k4-config::backup` (FR-CFG-06): export the tracked K4 settings to `K4-<serial>-<UTC>.cfg` (replayable CAT commands, SHA-256 header), and Load+Play a file back — Settings gains a "K4 settings backup" section. Parse `SN` serial + `ACM`/`ACS` already seeded. 136 tests. |
 | 2026-07-07 | 0.67 | DC0SK | Periodic K4 resync + settings scrollbar fix: the connected tick now pulls the radio state into the local slider values every ~3 s (sync_locals, extended to TX power/compression/CW pitch) and re-queries the full settings burst every ~8 s, so changes made directly at the K4 (e.g. HF power) sync back (FR-CAT-07). Settings dialog content inset 16 px so the scrollbar no longer overlaps it. 136 tests. |
+| 2026-07-07 | 0.68 | DC0SK | HI/LO-cut filter (FR-FIL-02): `passband_edges`/`set_passband_edges_hz` derive the edges from BW+IS (no dedicated K4 command); a SHFT⇄HI/LO toggle in the MAIN RX slider row swaps the SHIFT slider for LO+HI sliders, each mapping to a combined BW+IS update on the active VFO (50 Hz min width). 137 tests. |
