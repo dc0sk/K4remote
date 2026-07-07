@@ -399,6 +399,8 @@ enum Message {
     CycleAgc,
     CycleBandwidth,
     SelectTxVfo(bool),
+    PaneQsy(bool, u64),
+    PaneWheel(bool, i32),
     SetAfGain(u8),
     SetRfGain(u8),
     SetSquelch(u8),
@@ -1153,6 +1155,24 @@ impl App {
                 // split *transition*, so a stale read-back can't revert it.
                 self.tx_vfo_b = is_b;
                 self.send(WorkerCmd::Cat(k4_protocol::cat::set_split(is_b)));
+            }
+            Message::PaneQsy(is_b, hz) => {
+                // Click-to-QSY: tune the pane's VFO to the clicked frequency.
+                // (In dual view a wrapping mouse_area also selects the TX VFO.)
+                if is_b {
+                    self.send(WorkerCmd::SetFreqB(hz));
+                } else {
+                    self.send(WorkerCmd::SetFreqA(hz));
+                }
+            }
+            Message::PaneWheel(is_b, dir) => {
+                let cmd = match (is_b, dir > 0) {
+                    (false, true) => "UP;",
+                    (false, false) => "DN;",
+                    (true, true) => "UPB;",
+                    (true, false) => "DNB;",
+                };
+                self.send(WorkerCmd::Cat(cmd.to_string()));
             }
             Message::SetAfGain(v) => {
                 self.af_gain = v;
@@ -3715,6 +3735,16 @@ impl App {
                     waterfall,
                     top_dbm: -30.0,
                     range_db: 100.0,
+                    is_b: p.is_b(),
+                    center_hz: if p.is_b() {
+                        self.ui.vfo_b_hz
+                    } else {
+                        self.ui.vfo_a_hz
+                    }
+                    .unwrap_or(0),
+                    span_hz: self.ui.radio.pan_span_hz.unwrap_or(0),
+                    on_qsy: Message::PaneQsy,
+                    on_wheel: Message::PaneWheel,
                 })
                 .width(Length::Fill)
                 .height(Length::Fill)
