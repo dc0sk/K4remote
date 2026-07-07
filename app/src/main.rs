@@ -155,11 +155,17 @@ struct App {
     // Which VFO transmits (B under split); tracks the radio, set optimistically
     // when a spectrum frame is clicked so the highlight moves immediately.
     tx_vfo_b: bool,
+    // Ticks to keep the optimistic tx_vfo_b before resuming the split read-back,
+    // so the highlight doesn't flicker back before the radio's echo lands.
+    tx_vfo_hold: u8,
     // Main-RX levels (seeded from the radio, driven by sliders): AF gain 0–60,
     // RF-gain attenuation 0–60 dB, squelch 0–40 (FR-RX-01, FR-RX-SQL-01).
     af_gain: u8,
     rf_gain: u8,
     squelch: u8,
+    // TX levels: power (W, QRO) and speech compression 0–30 (FR-TX-02, FR-TX-CMP-01).
+    tx_power: u16,
+    compression: u8,
 }
 
 /// Which graphic equalizer a screen edits (FR-EQ-01).
@@ -351,6 +357,8 @@ enum Message {
     SetAfGain(u8),
     SetRfGain(u8),
     SetSquelch(u8),
+    SetTxPower(u16),
+    SetCompression(u8),
     ToggleNb,
     ToggleNr,
     TogglePreamp,
@@ -536,9 +544,12 @@ impl App {
             log_len: 0,
             bw_hz: 2800,
             tx_vfo_b: false,
+            tx_vfo_hold: 0,
             af_gain: 30,
             rf_gain: 0,
             squelch: 0,
+            tx_power: 10,
+            compression: 0,
         };
         (app, Task::none())
     }
@@ -801,8 +812,10 @@ impl App {
             }
             Message::SelectTxVfo(is_b) => {
                 // TX VFO = B under split, A otherwise (FT / split). FR-UI-12.
-                // Move the highlight immediately; the radio's echo keeps it honest.
+                // Move the highlight immediately and hold it ~1.5 s while the
+                // radio's split echo makes its way back (else it flickers back).
                 self.tx_vfo_b = is_b;
+                self.tx_vfo_hold = 10;
                 self.send(WorkerCmd::Cat(k4_protocol::cat::set_split(is_b)));
             }
             Message::SetAfGain(v) => {
@@ -816,6 +829,14 @@ impl App {
             Message::SetSquelch(v) => {
                 self.squelch = v;
                 self.send(WorkerCmd::Cat(k4_protocol::cat::set_squelch(v)));
+            }
+            Message::SetTxPower(v) => {
+                self.tx_power = v;
+                self.send(WorkerCmd::Cat(k4_protocol::cat::set_tx_power(v)));
+            }
+            Message::SetCompression(v) => {
+                self.compression = v;
+                self.send(WorkerCmd::Cat(k4_protocol::cat::set_compression(v)));
             }
             Message::ToggleNb => self.send(WorkerCmd::ToggleNb),
             Message::ToggleNr => self.send(WorkerCmd::ToggleNr),
@@ -970,8 +991,12 @@ impl App {
                     self.peer_cached = false;
                     self.power_off_armed = false;
                 }
-                // Track the radio's transmit VFO (split) when it reports one.
-                if let Some(s) = self.ui.split {
+                // Track the radio's transmit VFO (split) when it reports one, but
+                // not during the post-click hold window (avoids a flicker-back
+                // before the radio's echo lands).
+                if self.tx_vfo_hold > 0 {
+                    self.tx_vfo_hold -= 1;
+                } else if let Some(s) = self.ui.split {
                     self.tx_vfo_b = s;
                 }
                 // Follow the newest log line while auto-scroll is on (only when
@@ -1628,6 +1653,23 @@ impl App {
                     )),
             )
             .push(
+                // Speech compression (FR-TX-CMP-01), SSB modes.
+                Row::new()
+                    .spacing(6)
+                    .align_y(Alignment::Center)
+                    .push(Text::new("CMP").size(11).color(dim))
+                    .push(
+                        slider(0..=30u8, self.compression, Message::SetCompression)
+                            .width(Length::Fixed(150.0)),
+                    )
+                    .push(
+                        Text::new(self.compression.to_string())
+                            .size(11)
+                            .color(role_color(ui::ColorRole::RxValue)),
+                    )
+                    .push(Text::new("(SSB)").size(10).color(dim)),
+            )
+            .push(
                 Text::new("Front mic shown; rear-mic + button config deferred (§1.6).")
                     .size(10)
                     .color(dim),
@@ -1856,6 +1898,12 @@ impl App {
         }
         if let Some(v) = r.squelch {
             self.squelch = v;
+        }
+        if let Some(v) = r.tx_power {
+            self.tx_power = v;
+        }
+        if let Some(v) = r.compression {
+            self.compression = v;
         }
         if let Some(v) = r.rx_eq {
             self.rx_eq = v;
@@ -2588,12 +2636,29 @@ impl App {
             .style(btn_style(BtnKind::Danger))
             .padding([6, 10])
             .on_press(Message::EmergencyStop);
+        // Transmit power slider (FR-TX-02) inline with PTT/e-stop — no extra
+        // height. Seeded from the radio, QRO watts.
+        let ptt_row = Row::new()
+            .spacing(8)
+            .align_y(Alignment::Center)
+            .push(key)
+            .push(estop)
+            .push(horizontal_space())
+            .push(Text::new("PWR").size(11).color(dim))
+            .push(
+                slider(0..=110u16, self.tx_power, Message::SetTxPower).width(Length::Fixed(130.0)),
+            )
+            .push(
+                Text::new(format!("{} W", self.tx_power))
+                    .size(11)
+                    .color(role_color(ui::ColorRole::RxValue)),
+            );
         let tx_panel = Container::new(
             Column::new()
                 .spacing(8)
                 .push(Text::new("TRANSMIT").size(11).color(dim))
                 .push(arm)
-                .push(Row::new().spacing(8).push(key).push(estop))
+                .push(ptt_row)
                 .push(self.tx_switch_grid()),
         )
         .style(panel_style)

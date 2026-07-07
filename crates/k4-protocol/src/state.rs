@@ -68,6 +68,10 @@ pub struct RadioState {
     pub rf_gain_db: Option<u8>,
     /// Squelch threshold, 0–40 (`SQ`).
     pub squelch: Option<u8>,
+    /// Transmit power, watts (`PC`).
+    pub tx_power: Option<u16>,
+    /// Speech compression, 0–30 (`CP`).
+    pub compression: Option<u8>,
     /// RX attenuator value, dB (`RA`).
     pub atten_db: Option<u8>,
     /// RX attenuator on/off (`RA`).
@@ -214,6 +218,24 @@ impl RadioState {
             // Main squelch only; `SQ$…` (sub) starts with `$` and is skipped.
             if let Ok(v) = arg.parse::<u8>() {
                 self.squelch = Some(v);
+            }
+        } else if let Some(arg) = cmd.strip_prefix("PC") {
+            // `nnn` + optional range letter L/H/X (L assumed if omitted). Store
+            // watts: H = watts as-is, L/(none) = 0.1 W units, X (mW) ≈ 0.
+            let (digits, range) = match arg.as_bytes().last() {
+                Some(b'H') | Some(b'L') | Some(b'X') => arg.split_at(arg.len() - 1),
+                _ => (arg, ""),
+            };
+            if let Ok(n) = digits.parse::<u16>() {
+                self.tx_power = Some(match range {
+                    "H" => n,
+                    "X" => 0,
+                    _ => n / 10,
+                });
+            }
+        } else if let Some(arg) = cmd.strip_prefix("CP") {
+            if let Ok(v) = arg.parse::<u8>() {
+                self.compression = Some(v);
             }
         } else if let Some(arg) = cmd.strip_prefix("RA") {
             // `nn` (dB) followed by a single on/off digit `m`.
@@ -404,6 +426,7 @@ pub fn connect_state_seed() -> &'static [&'static str] {
     &[
         "IF;", "FA;", "FB;", "MD;", "MD$;", "FT;", "SM;", "SMH;", // core
         "BW;", "AG;", "RG;", "SQ;", // RX levels (bandwidth, AF/RF gain, squelch)
+        "PC;", "CP;", // TX power, speech compression
         // Configuration-screen read-back (FR-UI-19 screens):
         "RE;", "TE;", "KP;", "KS;", "MI;", "MG;", "LO;", "AN;", "AR;", "AR$;", "VXV;", "BN;",
         "#REF;", "#SPN;", "#SCL;", "#DPM;", "#WFC;", "#WFH;",
