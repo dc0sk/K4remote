@@ -148,10 +148,14 @@ pub struct UiSnapshot {
     pub audio_frames: u64,
     /// Bin count of the most recent spectrum frame.
     pub spectrum_bins: usize,
-    /// Latest spectrum trace (downsampled dBm bins).
+    /// Latest spectrum trace for the main RX / VFO A (downsampled dBm bins).
     pub spectrum_latest: Vec<f32>,
-    /// Waterfall history, newest row first (downsampled dBm bins).
+    /// Latest spectrum trace for the sub RX / VFO B.
+    pub spectrum_sub: Vec<f32>,
+    /// Waterfall history (main RX / VFO A), newest row first.
     pub waterfall: Vec<Vec<f32>>,
+    /// Waterfall history for the sub RX / VFO B.
+    pub waterfall_sub: Vec<Vec<f32>>,
     /// Recent diagnostic log lines (FR-DIAG-01/02).
     pub diag_lines: Vec<String>,
     /// Human-readable status / last error.
@@ -257,8 +261,10 @@ struct WorkerState {
     tx_seq: u8,
     audio_frames: u64,
     spectrum_bins: usize,
-    spectrum_latest: Vec<f32>,
-    waterfall: VecDeque<Vec<f32>>,
+    // Per-receiver spectrum/waterfall, indexed by `PanFrame.receiver` (0=main/A,
+    // 1=sub/B), so a dual-pan view shows each RX's own trace (FR-PAN-02).
+    spectrum_latest: [Vec<f32>; 2],
+    waterfall: [VecDeque<Vec<f32>>; 2],
     diag: DiagLog,
     // Reconnect (FR-SES-RECONNECT): retained target + backoff schedule.
     connect_params: Option<ConnectTarget>,
@@ -292,8 +298,8 @@ impl WorkerState {
             tx_seq: 0,
             audio_frames: 0,
             spectrum_bins: 0,
-            spectrum_latest: Vec::new(),
-            waterfall: VecDeque::new(),
+            spectrum_latest: [Vec::new(), Vec::new()],
+            waterfall: [VecDeque::new(), VecDeque::new()],
             // Debug level so the raw CAT console shows traffic; bounded ring.
             diag: DiagLog::new(300, Level::Debug),
             connect_params: None,
@@ -323,8 +329,10 @@ impl WorkerState {
         self.tx_seq = 0;
         self.audio_frames = 0;
         self.spectrum_bins = 0;
-        self.spectrum_latest.clear();
-        self.waterfall.clear();
+        for rx in 0..2 {
+            self.spectrum_latest[rx].clear();
+            self.waterfall[rx].clear();
+        }
     }
 }
 
@@ -381,8 +389,10 @@ fn publish(snapshot: &Arc<Mutex<UiSnapshot>>, ws: &WorkerState) {
         s.xit_on = st.xit_on;
         s.audio_frames = ws.audio_frames;
         s.spectrum_bins = ws.spectrum_bins;
-        s.spectrum_latest = ws.spectrum_latest.clone();
-        s.waterfall = ws.waterfall.iter().cloned().collect();
+        s.spectrum_latest = ws.spectrum_latest[0].clone();
+        s.spectrum_sub = ws.spectrum_latest[1].clone();
+        s.waterfall = ws.waterfall[0].iter().cloned().collect();
+        s.waterfall_sub = ws.waterfall[1].iter().cloned().collect();
         s.diag_lines = ws.diag.recent(30);
         s.radio = st.clone();
     }
@@ -601,12 +611,13 @@ fn service(ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnapshot>>) {
         // Spectrum → downsampled trace + waterfall history (FR-PAN-02/03).
         for payload in &inbound.spectrum {
             if let Some(frame) = PanFrame::decode(payload) {
+                let rx = usize::from(frame.receiver.min(1)); // 0=main/A, 1=sub/B
                 ws.spectrum_bins = frame.bins_dbm.len();
                 let row = downsample(&frame.bins_dbm, SPECTRUM_WIDTH);
-                ws.spectrum_latest = row.clone();
-                ws.waterfall.push_front(row);
-                while ws.waterfall.len() > WATERFALL_ROWS {
-                    ws.waterfall.pop_back();
+                ws.spectrum_latest[rx] = row.clone();
+                ws.waterfall[rx].push_front(row);
+                while ws.waterfall[rx].len() > WATERFALL_ROWS {
+                    ws.waterfall[rx].pop_back();
                 }
             }
         }

@@ -3455,7 +3455,13 @@ impl App {
             } else {
                 ui::ColorRole::VfoA
             };
-            let plot: Element<Message> = if self.ui.spectrum_latest.is_empty() {
+            // Each pane draws its own receiver's trace/waterfall (FR-PAN-02).
+            let (latest, waterfall) = if p.is_b() {
+                (&self.ui.spectrum_sub, &self.ui.waterfall_sub)
+            } else {
+                (&self.ui.spectrum_latest, &self.ui.waterfall)
+            };
+            let plot: Element<Message> = if latest.is_empty() {
                 Container::new(
                     Text::new("spectrum + waterfall — waiting for data")
                         .size(12)
@@ -3467,8 +3473,8 @@ impl App {
                 .into()
             } else {
                 Canvas::new(spectrum::Spectrum {
-                    latest: &self.ui.spectrum_latest,
-                    waterfall: &self.ui.waterfall,
+                    latest,
+                    waterfall,
                     top_dbm: -30.0,
                     range_db: 100.0,
                 })
