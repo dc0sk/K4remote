@@ -195,6 +195,29 @@ pub fn set_diversity(on: bool) -> String {
     format!("DV{};", on as u8)
 }
 
+/// Set the manual notch (`NM`; `$`=sub): pitch 150–5000 Hz + on/off. Applies to
+/// CW/SSB/DATA/AM — D12.
+///
+/// trace: FR-RX-NOTCH-01
+pub fn set_manual_notch(on: bool, pitch_hz: u16) -> String {
+    format!("NM{:04}{};", pitch_hz.clamp(150, 5000), on as u8)
+}
+
+/// Set the auto notch on/off (`NA`; `$`=sub). SSB modes only — D12.
+///
+/// trace: FR-RX-NOTCH-01
+pub fn set_auto_notch(on: bool) -> String {
+    format!("NA{};", on as u8)
+}
+
+/// Set the audio peaking filter (`AP`; `$`=sub): on/off + bandwidth `b`
+/// (0 = 30 Hz, 1 = 50 Hz, 2 = 150 Hz). CW mode only — D12.
+///
+/// trace: FR-RX-APF-01
+pub fn set_apf(on: bool, width: u8) -> String {
+    format!("AP{}{};", on as u8, width.min(2))
+}
+
 /// Set the RX attenuator: `db` ∈ {0,3,6,9,12,15,18,21}, on/off (`RA`).
 ///
 /// Example: `(12, true)` → `"RA121;"`.

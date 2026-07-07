@@ -103,6 +103,8 @@ Programmer's Reference rev. D12 (`PRG`) command mnemonics.
 | `FR-RX-02` | control the RX attenuator (`RA`) and preamp where present, including on/off and level. | STK-03 | M | T | Attenuator 12 dB on emits documented `RA…;`; state reflects RESP. |
 | `FR-RX-03` | select AGC mode off/slow/fast (`GT`/`GT$`). | STK-03 | S | T | AGC fast reflected in state. |
 | `FR-RX-04` | control the noise blanker (`NB`) and noise reduction (`NR`) on/off (and level where defined). | STK-03 | S | T | NB on/off and level round-trip. |
+| `FR-RX-NOTCH-01` | control the **manual notch** (on/off + pitch 150–5000 Hz, `NM`) and **auto-notch** (`NA`) per receiver. | STK-03 | C | T | `set_manual_notch(true,1000)` emits `NM10001;`; `set_auto_notch(true)` emits `NA1;`; RESP reflected. |
+| `FR-RX-APF-01` | toggle the **audio peaking filter** and select its bandwidth 30/50/150 Hz (`AP`), in CW. | STK-03 | C | T | `set_apf(true,2)` emits `AP12;`; RESP reflected. |
 | `FR-RX-05` | select the RX antenna where applicable (`AR`/`AN`). | STK-03 | C | T | Antenna selection reflected in state. |
 | `FR-RX-06` | enable/disable and balance the sub receiver (`SB`, `BL`). | STK-03 | C | T | Sub-RX on and balance reflected in state. |
 | `FR-RX-SQL-01` | set and display the main-receiver squelch threshold 0–40 (`SQ`; `$`=sub). | STK-03 | S | T | `set_squelch(22)` emits `SQ022;`, clamps to 40, and reflects the `SQ` RESP. |

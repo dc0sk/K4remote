@@ -173,6 +173,9 @@ struct App {
     qsk_delay: u8,
     // Passband shift / AF center pitch, Hz (FR-FIL-01).
     shift_hz: u16,
+    // Manual-notch pitch Hz (FR-RX-NOTCH-01); on/off + auto-notch + APF read live
+    // from the radio state.
+    notch_pitch: u16,
 }
 
 /// Which graphic equalizer a screen edits (FR-EQ-01).
@@ -375,6 +378,11 @@ enum Message {
     FilterNormalize,
     ToggleSubRx,
     ToggleDiversity,
+    ToggleManualNotch,
+    SetNotchPitch(u16),
+    ToggleAutoNotch,
+    ToggleApf,
+    CycleApfWidth,
     ToggleNb,
     ToggleNr,
     TogglePreamp,
@@ -570,6 +578,7 @@ impl App {
             qsk_full: false,
             qsk_delay: 30,
             shift_hz: 1500,
+            notch_pitch: 1000,
         };
         (app, Task::none())
     }
@@ -896,6 +905,32 @@ impl App {
             Message::ToggleDiversity => {
                 let on = self.ui.radio.diversity != Some(true);
                 self.send(WorkerCmd::Cat(k4_protocol::cat::set_diversity(on)));
+            }
+            Message::ToggleManualNotch => {
+                let on = self.ui.radio.notch_on != Some(true);
+                self.send(WorkerCmd::Cat(k4_protocol::cat::set_manual_notch(
+                    on,
+                    self.notch_pitch,
+                )));
+            }
+            Message::SetNotchPitch(p) => {
+                self.notch_pitch = p;
+                let on = self.ui.radio.notch_on == Some(true);
+                self.send(WorkerCmd::Cat(k4_protocol::cat::set_manual_notch(on, p)));
+            }
+            Message::ToggleAutoNotch => {
+                let on = self.ui.radio.auto_notch != Some(true);
+                self.send(WorkerCmd::Cat(k4_protocol::cat::set_auto_notch(on)));
+            }
+            Message::ToggleApf => {
+                let on = self.ui.radio.apf_on != Some(true);
+                let w = self.ui.radio.apf_width.unwrap_or(1);
+                self.send(WorkerCmd::Cat(k4_protocol::cat::set_apf(on, w)));
+            }
+            Message::CycleApfWidth => {
+                let w = (self.ui.radio.apf_width.unwrap_or(0) + 1) % 3;
+                let on = self.ui.radio.apf_on == Some(true);
+                self.send(WorkerCmd::Cat(k4_protocol::cat::set_apf(on, w)));
             }
             Message::ToggleNb => self.send(WorkerCmd::ToggleNb),
             Message::ToggleNr => self.send(WorkerCmd::ToggleNr),
@@ -1434,31 +1469,9 @@ impl App {
             ),
             _ => self.eq_screen(EqTarget::Rx, "RX equalizer", None),
         };
-        let body = Column::new().spacing(12).push(tabs).push(content);
-        if sub {
-            // Two invisible columns: the equalizer/tabs on the left (so it sits
-            // exactly like MAIN RX), the SUB + DIVERSITY toggles stacked on the
-            // right (FR-RX-06, FR-DIV-01).
-            let side = Column::new()
-                .spacing(6)
-                .push(two_line_btn(
-                    ui::toggle_button("SUB", self.ui.radio.sub_rx),
-                    self.ui.radio.sub_rx,
-                    Some(Message::ToggleSubRx),
-                ))
-                .push(two_line_btn(
-                    ui::toggle_button("DIVERSITY", self.ui.radio.diversity),
-                    self.ui.radio.diversity,
-                    Some(Message::ToggleDiversity),
-                ));
-            Row::new()
-                .spacing(16)
-                .push(body.width(Length::Fill))
-                .push(side)
-                .into()
-        } else {
-            body.into()
-        }
+        // SUB + DIVERSITY now live in the MAIN RX chip row; the sub screen is a
+        // clean single column, identical in layout to MAIN RX.
+        Column::new().spacing(12).push(tabs).push(content).into()
     }
 
     /// RX → FILTER sub-panel: per-mode filter presets (`FP`, FR-MODE-03),
@@ -1498,8 +1511,54 @@ impl App {
                     Message::CycleBandwidth,
                 )),
             )
+            // Notch + APF (FR-RX-NOTCH-01, FR-RX-APF-01).
+            .push(Text::new("Notch / APF").size(12).color(rxv))
             .push(
-                Text::new("Shift = IS AF center pitch; presets FP1–3 are per-mode. Sub-RX filter pending.")
+                Row::new()
+                    .spacing(6)
+                    .align_y(Alignment::Center)
+                    .push(two_line_btn(
+                        ui::toggle_button("NOTCH", self.ui.radio.notch_on),
+                        self.ui.radio.notch_on,
+                        Some(Message::ToggleManualNotch),
+                    ))
+                    .push(Text::new("PITCH").size(11).color(dim))
+                    .push(
+                        slider(150..=5000u16, self.notch_pitch, Message::SetNotchPitch)
+                            .step(10u16)
+                            .width(Length::Fixed(140.0)),
+                    )
+                    .push(Text::new(format!("{} Hz", self.notch_pitch)).size(11).color(rxv))
+                    .push(two_line_btn(
+                        ui::toggle_button("AUTO NCH", self.ui.radio.auto_notch),
+                        self.ui.radio.auto_notch,
+                        Some(Message::ToggleAutoNotch),
+                    )),
+            )
+            .push(
+                Row::new()
+                    .spacing(6)
+                    .align_y(Alignment::Center)
+                    .push(two_line_btn(
+                        ui::toggle_button("APF", self.ui.radio.apf_on),
+                        self.ui.radio.apf_on,
+                        Some(Message::ToggleApf),
+                    ))
+                    .push(small_btn_string(
+                        format!(
+                            "APF BW: {}  (cycle)",
+                            match self.ui.radio.apf_width {
+                                Some(0) => "30 Hz",
+                                Some(1) => "50 Hz",
+                                Some(2) => "150 Hz",
+                                _ => "—",
+                            }
+                        ),
+                        Message::CycleApfWidth,
+                    )),
+            )
+            .push(
+                Text::new("Shift = IS AF center pitch. Notch: CW/SSB/DATA/AM; auto-notch SSB; APF CW only.")
                     .size(10)
                     .color(dim),
             )
@@ -2099,6 +2158,9 @@ impl App {
         if let Some(v) = r.shift_hz {
             self.shift_hz = v;
         }
+        if let Some(v) = r.notch_pitch {
+            self.notch_pitch = v;
+        }
         if let Some(v) = r.rx_eq {
             self.rx_eq = v;
         }
@@ -2617,6 +2679,16 @@ impl App {
                 ui::agc_button(self.ui.agc_mode),
                 None,
                 Some(Message::CycleAgc),
+            ))
+            .push(two_line_btn(
+                ui::toggle_button("SUB", self.ui.radio.sub_rx),
+                self.ui.radio.sub_rx,
+                Some(Message::ToggleSubRx),
+            ))
+            .push(two_line_btn(
+                ui::toggle_button("DIV", self.ui.radio.diversity),
+                self.ui.radio.diversity,
+                Some(Message::ToggleDiversity),
             ));
         let mode_btn = |label: &'static str, digit: u8| -> Element<'_, Message> {
             let active = self.ui.mode_a == Some(label);
