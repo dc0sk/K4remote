@@ -1,7 +1,7 @@
 ---
 title: "Test Strategy & Traceability"
 status: Draft
-version: "0.61"
+version: "0.62"
 updated: 2026-07-07
 authors:
   - Simon Keimer (DC0SK)
@@ -260,3 +260,4 @@ FR-SES-MULTI, FR-DIAG-02, etc. — get `TC` IDs when promoted to `Approved`.)*
 | 2026-07-07 | 0.59 | DC0SK | RX-frame layout + fixes: diagnostics log defaults OFF; dissolved the filter cluster into three rows (row1 chips + NOTCH/AUTO/APF right of DIV; row2 tune + FL1/2/3/NORMALIZE right of SCAN; row3 sliders SHIFT·AF·RF·SQL·PITCH); active-RX-VFO now also detected from the SUB RX softkey (not just single-B view), fixing the RX A/B label; ATT/PRE/NB retargeted to the active VFO via `$` toggle forms (RA/·PA/·NB/), removing the SW-tap worker paths. Window 1052→980 px. (NR/AGC sub-targeting still pending.) |
 | 2026-07-07 | 0.60 | DC0SK | Text decode (FR-TXT-01): `set_text_decode` (`TD`) + parse the `TB` buffered-text RESP into a rolling `decode_text` (embedded `;` preserved — verified by the whole-payload framing; state test); TX→TEXT tab gains a DECODE toggle and a scrolling decoded-text view, polled from `TB$;` at ~2.5 Hz only while decode is ON (no idle traffic). 133 tests. |
 | 2026-07-07 | 0.61 | DC0SK | Active-RX selection + chip sub-state: explicit `active_rx_b` drives the RX A/B label + control targeting, set by the header A/B AND by clicking a spectrum pane (needed in the A+B view); parse `$` variants of RA/GT/NB/NR/PA into sub fields + seed; ATT/PRE/NB/NR/AGC chips now read the active VFO; NR and AGC retargeted to the active VFO (NR via NR$ level+mode, AGC via GT$) with re-query (removed the SW-tap/worker paths). 133 tests. |
+| 2026-07-07 | 0.62 | DC0SK | In-panadapter meters: new `meter.rs` Canvas draws a labelled RX S-meter (S1/3/5/7/9, +20/+40/+60 dB, minor +10/+30/+50) and, on the TX-VFO pane while transmitting, the RF/ALC/SWR/CMP bars (CMP voice-only). Parse `TM` auto-metering into tx_alc/cmp/fwd_w/swr_x10 + enable via TM1 on connect (FR-MTR-03, state test). 134 tests. |

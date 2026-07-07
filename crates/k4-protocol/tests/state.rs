@@ -256,3 +256,16 @@ fn fr_txt_01_tb_decode_buffer() {
     s.apply_cat("TB$003 DE;"); // append
     assert_eq!(s.decode_text, "CQ CQ DE");
 }
+
+/// `TM` TX-metering auto-response populates ALC / CMP / FWD power / SWR.
+///
+/// trace: FR-MTR-03
+#[test]
+fn fr_mtr_03_tx_metering() {
+    let mut s = RadioState::new();
+    s.apply_cat("TM005012050015;"); // ALC 5, CMP 12, FWD 50 W, SWR 1.5
+    assert_eq!(s.tx_alc, Some(5));
+    assert_eq!(s.tx_cmp, Some(12));
+    assert_eq!(s.tx_fwd_w, Some(50));
+    assert_eq!(s.tx_swr_x10, Some(15));
+}

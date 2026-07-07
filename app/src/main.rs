@@ -7,6 +7,7 @@
 //! ADR-15): a dark layered theme, banded frame, grids of two-line state
 //! buttons, and proportional S-meter bars (FR-UI-08..15).
 
+mod meter;
 mod spectrum;
 mod ui;
 mod worker;
@@ -3063,7 +3064,31 @@ impl App {
                         .color(role_color(ui::ColorRole::TxActive)),
                 );
             }
-            let pane = Container::new(Column::new().spacing(6).push(header).push(plot))
+            // Thin in-panadapter meter: the labelled S-meter on receive, or the
+            // TX bar graphs (RF/ALC/SWR/CMP) on the transmit-VFO pane while
+            // transmitting (FR-UI-10/15, FR-MTR-03).
+            let is_tx_pane = self.ui.transmitting && p.is_b() == self.tx_vfo_b;
+            let s_dbm = if p.is_b() {
+                self.ui.s_meter_dbm_sub
+            } else {
+                self.ui.s_meter_dbm
+            };
+            let meter_h = if is_tx_pane { 46.0 } else { 22.0 };
+            let meter = Canvas::new(meter::Meter {
+                tx: is_tx_pane,
+                s_dbm,
+                alc: self.ui.radio.tx_alc.unwrap_or(0),
+                cmp: self.ui.radio.tx_cmp.unwrap_or(0),
+                fwd_w: self.ui.radio.tx_fwd_w.unwrap_or(0),
+                swr_x10: self.ui.radio.tx_swr_x10.unwrap_or(0),
+                show_cmp: matches!(
+                    self.ui.mode_a,
+                    Some("LSB") | Some("USB") | Some("AM") | Some("FM")
+                ),
+            })
+            .width(Length::Fill)
+            .height(Length::Fixed(meter_h));
+            let pane = Container::new(Column::new().spacing(6).push(header).push(meter).push(plot))
                 .style(pane_style(selected))
                 .padding(8)
                 .width(Length::Fill)
