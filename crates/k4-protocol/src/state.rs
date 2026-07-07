@@ -180,6 +180,11 @@ pub struct RadioState {
     pub tx_antenna: Option<u8>,
     pub rx_antenna: Option<u8>,
     pub rx_antenna_sub: Option<u8>,
+    /// Enabled RX-antenna values as a bitmask over `AR$` values 0–7, from the
+    /// main (`ACM`) and sub (`ACS`) RX-antenna access masks. Bit `v` set = the
+    /// `AR$v` antenna is in the switch rotation.
+    pub rx_ant_avail: Option<u8>,
+    pub sub_ant_avail: Option<u8>,
     /// Voice VOX on/off (`VX` mode `V`).
     pub vox_voice: Option<bool>,
     /// Current band number 00–25 (`BN`).
@@ -480,6 +485,10 @@ impl RadioState {
             if let Ok(v) = arg.parse::<u8>() {
                 self.wf_height = Some(v);
             }
+        } else if let Some(arg) = cmd.strip_prefix("ACM") {
+            self.rx_ant_avail = Some(parse_ant_mask(arg));
+        } else if let Some(arg) = cmd.strip_prefix("ACS") {
+            self.sub_ant_avail = Some(parse_ant_mask(arg));
         } else if let Some(arg) = cmd.strip_prefix("AN") {
             if let Ok(v) = arg.parse::<u8>() {
                 self.tx_antenna = Some(v);
@@ -536,6 +545,30 @@ impl RadioState {
     }
 }
 
+/// Parse an RX-antenna access mask (`ACM`/`ACS` = `zabcdefg`) into a bitmask
+/// over `AR$` antenna values 0–7. `z=1` (DISPLAY ALL) enables all sources
+/// (`AR$1..=7`); otherwise the a–g flags map to their `AR$` value.
+/// NOTE: the a–g → `AR$` mapping is a documented best-effort (unverified live).
+fn parse_ant_mask(arg: &str) -> u8 {
+    let b = arg.as_bytes();
+    if b.len() < 8 {
+        return 0;
+    }
+    if b[0] == b'1' {
+        return 0b1111_1110; // DISPLAY ALL → AR$ 1..=7
+    }
+    // (mask index within `zabcdefg`, AR$ value): a=ANT1→5, b=ANT2→6, c=ANT3→7,
+    // d=RX1→4, e=RX2→1, f==TX ANT→2. (g ==OPP TX ANT has no distinct AR$.)
+    const MAP: [(usize, u8); 6] = [(1, 5), (2, 6), (3, 7), (4, 4), (5, 1), (6, 2)];
+    let mut avail = 0u8;
+    for (i, ar) in MAP {
+        if b[i] == b'1' {
+            avail |= 1 << ar;
+        }
+    }
+    avail
+}
+
 /// Split a RESP argument on a leading `$` (sub-receiver) modifier: returns
 /// `(is_sub, remainder)`.
 fn split_sub(arg: &str) -> (bool, &str) {
@@ -589,7 +622,7 @@ pub fn connect_state_seed() -> &'static [&'static str] {
         "BW$;", "AG$;", "RG$;", "SQ$;", "IS$;", "NM$;", "NA$;", "AP$;", //
         "RA$;", "GT$;", "NB$;", "NR$;", "PA$;",
         "TM1;", // enable auto TX metering (RF/ALC/SWR/CMP during transmit)
-        "AT;",  // ATU mode (in/bypass), for switch-state feedback
+        "AT;", "ACM;", "ACS;", // ATU mode + RX/sub antenna access masks
         // Configuration-screen read-back (FR-UI-19 screens):
         "RE;", "TE;", "KP;", "KS;", "MI;", "MG;", "LO;", "AN;", "AR;", "AR$;", "VXV;", "BN;",
         "#REF;", "#SPN;", "#SCL;", "#DPM;", "#WFC;", "#WFH;",

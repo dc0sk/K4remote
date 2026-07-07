@@ -1154,14 +1154,38 @@ impl App {
             Message::VfoOp(op) => self.send(WorkerCmd::Cat(k4_protocol::cat::vfo_copy_swap(op))),
             Message::MenuOpen(id) => self.send(WorkerCmd::Cat(k4_protocol::cat::menu_open(id))),
             Message::Switch(code) => {
+                use k4_protocol::cat;
                 self.switch_flash = Some(code);
                 self.switch_flash_ticks = 4; // ~0.6 s tap highlight
                 match code {
-                    16 => self.tune_on = !self.tune_on, // TUNE (toggle, no read-back)
-                    131 => self.tune_lp_on = !self.tune_lp_on, // TUNE LP
-                    _ => {}
+                    16 => {
+                        self.tune_on = !self.tune_on; // TUNE (toggle, no read-back)
+                        self.send(WorkerCmd::Cat(cat::switch(16)));
+                    }
+                    131 => {
+                        self.tune_lp_on = !self.tune_lp_on; // TUNE LP
+                        self.send(WorkerCmd::Cat(cat::switch(131)));
+                    }
+                    // RX ANT / SUB ANT: step through only the enabled antennas
+                    // (ACM/ACS mask) via AR/AR$; fall back to the switch tap if
+                    // the mask isn't known.
+                    70 => {
+                        match next_avail_ant(self.ui.radio.rx_ant_avail, self.ui.radio.rx_antenna) {
+                            Some(n) => self.send(WorkerCmd::Cat(cat::set_rx_antenna(n))),
+                            None => self.send(WorkerCmd::Cat(cat::switch(70))),
+                        }
+                    }
+                    157 => {
+                        match next_avail_ant(
+                            self.ui.radio.sub_ant_avail,
+                            self.ui.radio.rx_antenna_sub,
+                        ) {
+                            Some(n) => self.send(WorkerCmd::Cat(cat::set_rx_antenna_sub(n))),
+                            None => self.send(WorkerCmd::Cat(cat::switch(157))),
+                        }
+                    }
+                    _ => self.send(WorkerCmd::Cat(cat::switch(code))),
                 }
-                self.send(WorkerCmd::Cat(k4_protocol::cat::switch(code)));
             }
             Message::MenuFilter(q) => self.menu_filter = q,
             Message::SelectXvtr(n) => {
@@ -4132,6 +4156,20 @@ fn shade(s: ui::Shade) -> Color {
 /// Keychain account key for a connection (`host:port`).
 fn account_key(host: &str, port: u16) -> String {
     format!("{host}:{port}")
+}
+
+/// Next enabled RX-antenna value after `cur`, cycling within an `AR$`-value
+/// availability bitmask (bit `v` = value `v` enabled). `None` if no mask / none
+/// enabled — the caller then falls back to the raw switch tap.
+fn next_avail_ant(avail: Option<u8>, cur: Option<u8>) -> Option<u8> {
+    let mask = avail?;
+    if mask == 0 {
+        return None;
+    }
+    let cur = cur.unwrap_or(0);
+    (1..=8u8)
+        .map(|step| (cur + step) % 8)
+        .find(|&v| mask & (1 << v) != 0)
 }
 
 /// Retarget a 2-letter RX command at the sub receiver by inserting the `$`
