@@ -177,6 +177,8 @@ struct App {
     // Manual-notch pitch Hz (FR-RX-NOTCH-01); on/off + auto-notch + APF read live
     // from the radio state.
     notch_pitch: u16,
+    // Filter slider view: false = SHIFT (BW+shift), true = LO/HI edges (FR-FIL-02).
+    filter_edge_view: bool,
     // Text decode (FR-TXT-01): on/off + a poll-rate divider for the TB reads.
     decode_on: bool,
     decode_tick: u8,
@@ -396,6 +398,9 @@ enum Message {
     ToggleQskFull,
     SetQskDelay(u8),
     SetShift(u16),
+    ToggleFilterEdgeView,
+    SetLoCut(u16),
+    SetHiCut(u16),
     FilterPreset(u8),
     FilterNormalize,
     ToggleSubRx,
@@ -607,6 +612,7 @@ impl App {
             qsk_delay: 30,
             shift_hz: 1500,
             notch_pitch: 1000,
+            filter_edge_view: false,
             decode_on: false,
             decode_tick: 0,
             resync_tick: 0,
@@ -1166,6 +1172,9 @@ impl App {
                     self.active_sub(),
                 )));
             }
+            Message::ToggleFilterEdgeView => self.filter_edge_view = !self.filter_edge_view,
+            Message::SetLoCut(lo) => self.set_passband_edge(Some(lo), None),
+            Message::SetHiCut(hi) => self.set_passband_edge(None, Some(hi)),
             Message::FilterPreset(n) => self.send(WorkerCmd::Cat(target_rx(
                 k4_protocol::cat::set_filter_preset(n),
                 self.active_sub(),
@@ -2347,6 +2356,25 @@ impl App {
         }
     }
 
+    /// Move one passband edge (lo/hi) — derived from BW+IS — and send the
+    /// resulting BW/IS pair to the active RX VFO (FR-FIL-02). The unmoved edge
+    /// holds; a 50 Hz minimum width is enforced.
+    fn set_passband_edge(&mut self, lo: Option<u16>, hi: Option<u16>) {
+        use k4_protocol::cat;
+        let (cur_lo, cur_hi) = cat::passband_edges(self.bw_hz, self.shift_hz);
+        let (lo, hi) = match (lo, hi) {
+            (Some(l), None) => (l.min(cur_hi.saturating_sub(50)), cur_hi),
+            (None, Some(h)) => (cur_lo, h.max(cur_lo + 50)),
+            _ => (cur_lo, cur_hi),
+        };
+        self.bw_hz = u32::from(hi - lo);
+        self.shift_hz = (((u32::from(lo) + u32::from(hi)) / 2 + 5) / 10 * 10) as u16;
+        let (bw_cmd, is_cmd) = cat::set_passband_edges_hz(lo, hi);
+        let sub = self.active_sub();
+        self.send(WorkerCmd::Cat(target_rx(bw_cmd, sub)));
+        self.send(WorkerCmd::Cat(target_rx(is_cmd, sub)));
+    }
+
     /// Load the local slider values (BW/AF/RF/SQL/shift/notch-pitch) from the
     /// active RX VFO's radio state, so they reflect A or B after a view switch.
     fn sync_locals(&mut self) {
@@ -3350,16 +3378,39 @@ impl App {
                     )
                     .push(Text::new(format!("{val} Hz")).size(11).color(rxv))
             };
-        let gain_row = Row::new()
-            .spacing(18)
-            .align_y(Alignment::Center)
-            .push(hz_slider(
+        // Filter view toggles the SHIFT slider for LO/HI-cut edges (FR-FIL-02).
+        let (lo_edge, hi_edge) = k4_protocol::cat::passband_edges(self.bw_hz, self.shift_hz);
+        let mut gain_row = Row::new().spacing(14).align_y(Alignment::Center).push(
+            Button::new(
+                Text::new(if self.filter_edge_view {
+                    "HI/LO"
+                } else {
+                    "SHFT"
+                })
+                .size(11),
+            )
+            .style(btn_style(if self.filter_edge_view {
+                BtnKind::Active
+            } else {
+                BtnKind::Plain
+            }))
+            .padding([5, 8])
+            .on_press(Message::ToggleFilterEdgeView),
+        );
+        gain_row = if self.filter_edge_view {
+            gain_row
+                .push(hz_slider("LO", lo_edge, 0, 3000, Message::SetLoCut))
+                .push(hz_slider("HI", hi_edge, 100, 5000, Message::SetHiCut))
+        } else {
+            gain_row.push(hz_slider(
                 "SHIFT",
                 self.shift_hz,
                 200,
                 3000,
                 Message::SetShift,
             ))
+        };
+        let gain_row = gain_row
             .push(gain("AF", self.af_gain, 60, Message::SetAfGain, ""))
             .push(gain("RF", self.rf_gain, 60, Message::SetRfGain, " dB"))
             .push(gain("SQL", self.squelch, 40, Message::SetSquelch, ""))

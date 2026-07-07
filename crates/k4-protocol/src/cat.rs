@@ -180,6 +180,34 @@ pub fn set_shift_hz(hz: u16) -> String {
     format!("IS{:04};", hz / 10)
 }
 
+/// Audio passband edges `(lo, hi)` Hz from bandwidth + center pitch. The K4 has
+/// no dedicated hi/lo-cut command; its FILTER-knob HI/LO view is an alternate
+/// presentation of `BW` + `IS` — D14 "FILTER Knob".
+///
+/// trace: FR-FIL-02
+pub fn passband_edges(bw_hz: u32, center_hz: u16) -> (u16, u16) {
+    let half = (bw_hz / 2) as i64;
+    let lo = (center_hz as i64 - half).max(0) as u16;
+    let hi = (center_hz as i64 + half) as u16;
+    (lo, hi)
+}
+
+/// The `BW` + `IS` command pair realising the passband `[lo, hi]` Hz:
+/// `BW = hi − lo` (≥50 Hz), `IS = midpoint` rounded to the 10 Hz wire grid.
+/// Example: `(300, 2700)` → `("BW0240;", "IS0150;")`.
+///
+/// trace: FR-FIL-02
+pub fn set_passband_edges_hz(lo_hz: u16, hi_hz: u16) -> (String, String) {
+    let (lo, hi) = if lo_hz <= hi_hz {
+        (lo_hz, hi_hz)
+    } else {
+        (hi_hz, lo_hz)
+    };
+    let bw = (hi - lo).max(50) as u32;
+    let center = (((u32::from(lo) + u32::from(hi)) / 2 + 5) / 10) * 10;
+    (set_bandwidth_hz(bw), set_shift_hz(center as u16))
+}
+
 /// Turn the sub receiver on/off (`SB`) — D12.
 ///
 /// trace: FR-RX-06
