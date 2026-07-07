@@ -471,13 +471,6 @@ pub struct ContextRow {
 }
 
 impl ContextRow {
-    /// Start with a given primary's context row already open (e.g. `BAND`
-    /// pre-selected at launch).
-    /// trace: FR-UI-13
-    pub fn opened(p: Primary) -> Self {
-        ContextRow { open: Some(p) }
-    }
-
     /// Tap a primary: open its row, or close it if it was already the open one.
     /// trace: FR-UI-13
     pub fn tap(&mut self, p: Primary) {
@@ -1094,8 +1087,9 @@ mod tests {
         assert!(ctx.active().is_none());
         assert_eq!(ctx.active(), None);
 
-        // `opened` pre-selects a primary (e.g. BAND at launch).
-        let pre = ContextRow::opened(Primary::Band);
+        // Tapping a fresh row opens the primary.
+        let mut pre = ContextRow::default();
+        pre.tap(Primary::Band);
         assert_eq!(pre.active(), Some(Primary::Band));
         assert!(pre.is_open(Primary::Band));
 

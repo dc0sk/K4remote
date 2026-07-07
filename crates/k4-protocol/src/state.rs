@@ -189,6 +189,8 @@ pub struct RadioState {
     pub vox_voice: Option<bool>,
     /// Current band number 00–25 (`BN`).
     pub band: Option<u8>,
+    /// K4 serial number (`SN`).
+    pub serial: Option<String>,
 }
 
 /// Parse 8 consecutive signed 3-char EQ fields (`+00-01…`) into `[i8; 8]`.
@@ -307,6 +309,10 @@ impl RadioState {
             let (sub, a) = split_sub(arg);
             if let Ok(v) = a.parse::<u16>() {
                 *sub_or(&mut self.shift_hz, &mut self.sub_shift_hz, sub) = Some(v * 10);
+            }
+        } else if let Some(arg) = cmd.strip_prefix("SN") {
+            if !arg.is_empty() {
+                self.serial = Some(arg.to_string());
             }
         } else if let Some(arg) = cmd.strip_prefix("SB") {
             self.sub_rx = Some(arg == "1");
@@ -623,6 +629,7 @@ pub fn connect_state_seed() -> &'static [&'static str] {
         "RA$;", "GT$;", "NB$;", "NR$;", "PA$;",
         "TM1;", // enable auto TX metering (RF/ALC/SWR/CMP during transmit)
         "AT;", "ACM;", "ACS;", // ATU mode + RX/sub antenna access masks
+        "SN;",  // K4 serial number (for config-export filenames)
         // Configuration-screen read-back (FR-UI-19 screens):
         "RE;", "TE;", "KP;", "KS;", "MI;", "MG;", "LO;", "AN;", "AR;", "AR$;", "VXV;", "BN;",
         "#REF;", "#SPN;", "#SCL;", "#DPM;", "#WFC;", "#WFH;",

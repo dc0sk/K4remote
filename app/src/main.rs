@@ -191,6 +191,11 @@ struct App {
     // on tap, cleared when transmit ends).
     tune_on: bool,
     tune_lp_on: bool,
+    // K4 settings export/import (FR-CFG-06): a path to load and the commands
+    // parsed from it, plus a status/feedback line.
+    import_path: String,
+    loaded_commands: Vec<String>,
+    backup_status: String,
 }
 
 /// Which graphic equalizer a screen edits (FR-EQ-01).
@@ -427,6 +432,10 @@ enum Message {
     VolumeChanged(f32),
     MicGainChanged(f32),
     SaveSettings,
+    ExportConfig,
+    ImportPathChanged(String),
+    LoadConfig,
+    PlaybackConfig,
     // Remote power control (FR-PWR-01).
     PowerRestart,
     PowerOffArm,
@@ -546,7 +555,8 @@ impl App {
             snapshot,
             ui: initial,
             view_mode: ViewMode::default(),
-            context: ui::ContextRow::opened(ui::Primary::Band),
+            // Start on the spectrum/waterfall, not a pre-opened BAND screen.
+            context: ui::ContextRow::default(),
             window_w: 1280.0,
             theme_mode,
             system_is_dark: detect_system_dark(),
@@ -601,6 +611,9 @@ impl App {
             switch_flash_ticks: 0,
             tune_on: false,
             tune_lp_on: false,
+            import_path: String::new(),
+            loaded_commands: Vec::new(),
+            backup_status: String::new(),
         };
         (app, Task::none())
     }
@@ -630,6 +643,215 @@ impl App {
 
     /// Write the full config (last session + peer cache) to disk (FR-CFG-01/04/05).
     /// The peer cache is included so a save never wipes it.
+    /// Generate replayable CAT commands for the K4 settings the app tracks, from
+    /// the current radio state (FR-CFG-06). Main + sub RX variants included.
+    fn export_commands(&self) -> Vec<String> {
+        use k4_protocol::cat;
+        let r = &self.ui.radio;
+        let mut c: Vec<String> = Vec::new();
+        if let Some(v) = r.vfo_a_hz {
+            c.push(cat::set_vfo_a_hz(v));
+        }
+        if let Some(v) = r.vfo_b_hz {
+            c.push(cat::set_vfo_b_hz(v));
+        }
+        if let Some(m) = r.mode_a {
+            c.push(cat::set_mode(md_digit(m)));
+        }
+        if let Some(m) = r.mode_b {
+            c.push(cat::set_mode_sub(md_digit(m)));
+        }
+        // RX levels + filter/notch, for main (false) then sub (true).
+        for (sub, bw, ag, rg, sq, is, non, npi, an, ap, aw) in [
+            (
+                false,
+                r.bandwidth_hz,
+                r.af_gain,
+                r.rf_gain_db,
+                r.squelch,
+                r.shift_hz,
+                r.notch_on,
+                r.notch_pitch,
+                r.auto_notch,
+                r.apf_on,
+                r.apf_width,
+            ),
+            (
+                true,
+                r.sub_bandwidth_hz,
+                r.sub_af_gain,
+                r.sub_rf_gain_db,
+                r.sub_squelch,
+                r.sub_shift_hz,
+                r.sub_notch_on,
+                r.sub_notch_pitch,
+                r.sub_auto_notch,
+                r.sub_apf_on,
+                r.sub_apf_width,
+            ),
+        ] {
+            if let Some(v) = bw {
+                c.push(target_rx(cat::set_bandwidth_hz(v), sub));
+            }
+            if let Some(v) = ag {
+                c.push(target_rx(cat::set_af_gain(v), sub));
+            }
+            if let Some(v) = rg {
+                c.push(target_rx(cat::set_rf_gain(v), sub));
+            }
+            if let Some(v) = sq {
+                c.push(target_rx(cat::set_squelch(v), sub));
+            }
+            if let Some(v) = is {
+                c.push(target_rx(cat::set_shift_hz(v), sub));
+            }
+            if let (Some(on), Some(p)) = (non, npi) {
+                c.push(target_rx(cat::set_manual_notch(on, p), sub));
+            }
+            if let Some(on) = an {
+                c.push(target_rx(cat::set_auto_notch(on), sub));
+            }
+            if let (Some(on), Some(w)) = (ap, aw) {
+                c.push(target_rx(cat::set_apf(on, w), sub));
+            }
+        }
+        if let Some(v) = r.agc_mode {
+            c.push(cat::set_agc(v));
+        }
+        if let (Some(db), Some(on)) = (r.atten_db, r.atten_on) {
+            c.push(cat::set_attenuator(db, on));
+        }
+        if let Some(v) = r.tx_power {
+            c.push(cat::set_tx_power(v));
+        }
+        if let Some(v) = r.compression {
+            c.push(cat::set_compression(v));
+        }
+        if let Some(v) = r.cw_pitch {
+            c.push(cat::set_cw_pitch(v));
+        }
+        if let (Some(ib), Some(pr), Some(w)) =
+            (r.keyer_iambic_b, r.keyer_paddle_rev, r.keyer_weight)
+        {
+            c.push(cat::set_keyer(ib, pr, w));
+        }
+        if let Some(v) = r.keyer_speed {
+            c.push(cat::set_keyer_speed(v));
+        }
+        if let Some(v) = r.mic_input {
+            c.push(cat::set_mic_input(v));
+        }
+        if let Some(v) = r.mic_gain {
+            c.push(cat::set_mic_gain(v));
+        }
+        if let Some(v) = r.tx_antenna {
+            c.push(cat::set_tx_antenna(v));
+        }
+        if let Some(v) = r.rx_antenna {
+            c.push(cat::set_rx_antenna(v));
+        }
+        if let Some(v) = r.rx_antenna_sub {
+            c.push(cat::set_rx_antenna_sub(v));
+        }
+        if let Some(on) = r.sub_rx {
+            c.push(cat::set_sub_rx(on));
+        }
+        if let Some(on) = r.diversity {
+            c.push(cat::set_diversity(on));
+        }
+        if let Some(on) = r.vox_voice {
+            c.push(cat::set_vox('V', on));
+        }
+        if let Some(eq) = r.rx_eq {
+            c.push(cat::set_rx_eq(eq));
+        }
+        if let Some(eq) = r.tx_eq {
+            c.push(cat::set_tx_eq(eq));
+        }
+        if let Some(v) = r.pan_ref {
+            c.push(cat::set_pan_ref(v));
+        }
+        if let Some(v) = r.pan_span_hz {
+            c.push(cat::set_pan_span_hz(v));
+        }
+        if let Some(v) = r.pan_scale {
+            c.push(cat::set_pan_scale(v as u8));
+        }
+        if let Some(v) = r.pan_mode {
+            c.push(cat::set_pan_mode(v));
+        }
+        if let Some(v) = r.wf_palette {
+            c.push(cat::set_waterfall_palette(v));
+        }
+        if let Some(v) = r.wf_height {
+            c.push(cat::set_waterfall_height(v));
+        }
+        c
+    }
+
+    /// Export the current K4 settings to `K4-<serial>-<timestamp>.cfg` beside the
+    /// app config, with a SHA-256 integrity hash (FR-CFG-06).
+    fn export_config(&mut self) {
+        let serial = self
+            .ui
+            .radio
+            .serial
+            .clone()
+            .unwrap_or_else(|| "unknown".into());
+        let ts = timestamp_now();
+        let snap = k4_config::backup::Snapshot {
+            serial: serial.clone(),
+            timestamp: ts.clone(),
+            commands: self.export_commands(),
+        };
+        if snap.commands.is_empty() {
+            self.backup_status = "Nothing to export — connect and let settings load first.".into();
+            return;
+        }
+        let dir = self
+            .config_path
+            .as_deref()
+            .and_then(|p| p.parent())
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        let file = dir.join(format!("K4-{serial}-{ts}.cfg"));
+        match std::fs::write(&file, k4_config::backup::export(&snap)) {
+            Ok(()) => {
+                self.backup_status = format!(
+                    "Exported {} settings → {}",
+                    snap.commands.len(),
+                    file.display()
+                );
+            }
+            Err(e) => self.backup_status = format!("Export failed: {e}"),
+        }
+    }
+
+    /// Load and verify a `.cfg` from `import_path`, staging its commands for
+    /// playback (FR-CFG-06).
+    fn load_config_file(&mut self) {
+        let path = self.import_path.trim();
+        if path.is_empty() {
+            self.backup_status = "Enter a .cfg path to import.".into();
+            return;
+        }
+        match std::fs::read_to_string(path) {
+            Ok(text) => match k4_config::backup::import(&text) {
+                Ok(snap) => {
+                    self.loaded_commands = snap.commands;
+                    self.backup_status = format!(
+                        "Loaded {} settings (serial {}, {}). Press Play to send.",
+                        self.loaded_commands.len(),
+                        snap.serial,
+                        snap.timestamp
+                    );
+                }
+                Err(e) => self.backup_status = e,
+            },
+            Err(e) => self.backup_status = format!("Read failed: {e}"),
+        }
+    }
+
     fn save_config(&self) {
         let Ok(port) = self.port.parse::<u16>() else {
             return;
@@ -1093,6 +1315,18 @@ impl App {
                 self.send(WorkerCmd::SetMicGain(g));
             }
             Message::SaveSettings => self.save_config(),
+            Message::ExportConfig => self.export_config(),
+            Message::ImportPathChanged(v) => self.import_path = v,
+            Message::LoadConfig => self.load_config_file(),
+            Message::PlaybackConfig => {
+                for cmd in self.loaded_commands.clone() {
+                    self.send(WorkerCmd::Cat(cmd));
+                }
+                if !self.loaded_commands.is_empty() {
+                    self.backup_status =
+                        format!("Sent {} settings to the K4.", self.loaded_commands.len());
+                }
+            }
             Message::PowerRestart => self.send(WorkerCmd::Cat(k4_protocol::cat::set_power(8))),
             Message::PowerOffArm => self.power_off_armed = true,
             Message::PowerOffCancel => self.power_off_armed = false,
@@ -2408,6 +2642,16 @@ impl App {
     /// trace: FR-UI-20
     fn seed_from_radio(&mut self) {
         let r = self.ui.radio.clone();
+        // Adopt the radio's display layout (#DPM: 0=A, 1=B, 2=dual) so the app
+        // starts the way the K4 is set up (e.g. both RX + both waterfalls).
+        if let Some(pm) = r.pan_mode {
+            self.view_mode = match pm {
+                1 => ViewMode::SingleB,
+                2 => ViewMode::Dual,
+                _ => ViewMode::SingleA,
+            };
+            self.active_rx_b = self.view_mode == ViewMode::SingleB;
+        }
         if let Some(v) = r.bandwidth_hz {
             self.bw_hz = v;
         }
@@ -3400,6 +3644,8 @@ impl App {
             .push(self.master_section_view())
             .push(Text::new("Audio").size(12).color(dim))
             .push(self.audio_section_view())
+            .push(Text::new("K4 settings backup").size(12).color(dim))
+            .push(self.backup_section_view())
             .push(
                 Container::new(
                     Row::new()
@@ -3623,6 +3869,46 @@ impl App {
 
     /// Settings → audio: RX/TX device selection (FR-AUD-DEV-01) and local
     /// volume / mic-gain sliders (FR-AUD-LVL-01).
+    /// Settings → K4 backup: export the radio's settings to a hashed `.cfg`, and
+    /// load + play one back (FR-CFG-06).
+    fn backup_section_view(&self) -> Element<'_, Message> {
+        let dim = role_color(ui::ColorRole::Inactive);
+        let mut col = Column::new()
+            .spacing(6)
+            .push(
+                Row::new()
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                    .push(small_btn("Export K4 settings", Message::ExportConfig))
+                    .push(
+                        Text::new("→ K4-<serial>-<time>.cfg, SHA-256 verified")
+                            .size(10)
+                            .color(dim),
+                    ),
+            )
+            .push(
+                Row::new()
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                    .push(
+                        TextInput::new(".cfg path to import", &self.import_path)
+                            .on_input(Message::ImportPathChanged)
+                            .size(13)
+                            .width(Length::Fixed(300.0)),
+                    )
+                    .push(small_btn("Load", Message::LoadConfig))
+                    .push(small_btn("Play → K4", Message::PlaybackConfig)),
+            );
+        if !self.backup_status.is_empty() {
+            col = col.push(
+                Text::new(self.backup_status.clone())
+                    .size(10)
+                    .color(role_color(ui::ColorRole::RxValue)),
+            );
+        }
+        col.into()
+    }
+
     fn audio_section_view(&self) -> Element<'_, Message> {
         let dim = role_color(ui::ColorRole::Inactive);
         let opts = |names: &[String]| -> Vec<String> {
@@ -4144,6 +4430,41 @@ fn fmt_dbm(dbm: Option<i32>) -> String {
 fn role_color(role: ui::ColorRole) -> Color {
     let (r, g, b) = ui::role_rgb(active_theme(), role);
     Color::from_rgb8(r, g, b)
+}
+
+/// `MD`/`MD$` digit for a mode.
+fn md_digit(m: k4_protocol::state::Mode) -> u8 {
+    use k4_protocol::state::Mode::*;
+    match m {
+        Lsb => 1,
+        Usb => 2,
+        Cw => 3,
+        Fm => 4,
+        Am => 5,
+        Data => 6,
+        CwRev => 7,
+        DataRev => 9,
+    }
+}
+
+/// UTC timestamp `YYYYMMDDHHMMSS` for config-export filenames (civil-from-days).
+fn timestamp_now() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let (h, mi, s) = (secs / 3600 % 24, secs / 60 % 60, secs % 60);
+    let z = (secs / 86400) as i64 + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!("{y:04}{m:02}{d:02}{h:02}{mi:02}{s:02}")
 }
 
 /// Map a surface shade (ARC-15) to an iced colour for the active theme

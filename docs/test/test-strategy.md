@@ -1,7 +1,7 @@
 ---
 title: "Test Strategy & Traceability"
 status: Draft
-version: "0.65"
+version: "0.66"
 updated: 2026-07-07
 authors:
   - Simon Keimer (DC0SK)
@@ -264,3 +264,4 @@ FR-SES-MULTI, FR-DIAG-02, etc. — get `TC` IDs when promoted to `Approved`.)*
 | 2026-07-07 | 0.63 | DC0SK | Meter headroom + switch feedback: TX meter slot 46→66 px (bars 14 px) so all of RF/ALC/SWR/CMP are clear above the spectrum; momentary SW switch buttons (TX switch grid + Fn switches) flash Active ~0.6 s on tap (switch_flash), giving feedback for TEST/ANT/RX ANT/VOX/etc. 134 tests. |
 | 2026-07-07 | 0.64 | DC0SK | Switch-state feedback: TX switch grid now reflects live radio state — ANT/RX ANT/SUB ANT show the selected antenna number, ATU shows IN/BYP (lit when in line, parse `AT`+seed), and VOX/QSK/XMIT act as lit toggles (VX/SD/transmit); TUNE/TUNE LP are local toggles (no read-back) cleared when TX ends; ATU TUNE/REM ANT/TEST keep the momentary tap-flash. 134 tests. |
 | 2026-07-07 | 0.65 | DC0SK | RX/SUB antenna cycling honors the enabled subset: parse the `ACM`/`ACS` RX-antenna access masks into `rx_ant_avail`/`sub_ant_avail` bitmasks (+ seed ACM;/ACS;); RX ANT (SW70) / SUB ANT (SW157) now step via AR/AR$ through only the enabled AR$ values, falling back to the switch tap when the mask is unknown (FR-ANT-01, state test). The mask a–g→AR$ mapping is a documented best-effort pending live verification. 135 tests. |
+| 2026-07-07 | 0.66 | DC0SK | Startup + config backup: app no longer pre-opens BAND (starts on the spectrum); on connect it adopts the radio's display layout from `#DPM` (single-A/B / dual). New `k4-config::backup` (FR-CFG-06): export the tracked K4 settings to `K4-<serial>-<UTC>.cfg` (replayable CAT commands, SHA-256 header), and Load+Play a file back — Settings gains a "K4 settings backup" section. Parse `SN` serial + `ACM`/`ACS` already seeded. 136 tests. |
