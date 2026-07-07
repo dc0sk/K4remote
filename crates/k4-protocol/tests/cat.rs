@@ -6,13 +6,13 @@ use k4_protocol::cat::{
     set_attenuator, set_auto_notch, set_band, set_band_sub, set_bandwidth_hz, set_compression,
     set_cw_pitch, set_diversity, set_filter_preset, set_keyer, set_keyer_speed, set_line_in,
     set_line_out, set_manual_notch, set_mic_gain, set_mic_input, set_mic_setup, set_mode,
-    set_mode_sub, set_nb, set_nr, set_pan_average, set_pan_mode, set_pan_nb, set_pan_nb_level,
-    set_pan_peak, set_pan_ref, set_pan_scale, set_pan_span_hz, set_passband_edges_hz, set_power,
-    set_preamp, set_qsk_delay, set_rf_gain, set_rit, set_rit_offset, set_rx_antenna,
-    set_rx_antenna_sub, set_rx_eq, set_shift_hz, set_split, set_squelch, set_sub_rx,
-    set_text_decode, set_transverter_band, set_tx_antenna, set_tx_eq, set_tx_power, set_vfo_a_hz,
-    set_vfo_b_hz, set_vox, set_waterfall_height, set_waterfall_palette, set_xit, switch,
-    vfo_copy_swap,
+    set_mode_sub, set_monitor, set_nb, set_nb_level, set_nr, set_pan_average, set_pan_mode,
+    set_pan_nb, set_pan_nb_level, set_pan_peak, set_pan_ref, set_pan_scale, set_pan_span_hz,
+    set_passband_edges_hz, set_power, set_preamp, set_qsk_delay, set_rf_gain, set_rit,
+    set_rit_offset, set_rx_antenna, set_rx_antenna_sub, set_rx_eq, set_shift_hz, set_split,
+    set_spot, set_squelch, set_sub_rx, set_text_decode, set_transverter_band, set_tx_antenna,
+    set_tx_eq, set_tx_power, set_vfo_a_hz, set_vfo_b_hz, set_vox, set_waterfall_height,
+    set_waterfall_palette, set_xit, switch, vfo_copy_swap,
 };
 
 /// trace: FR-VFO-01
@@ -149,9 +149,21 @@ fn fr_vfo_band_and_split() {
 fn fr_rx_dsp_encoders() {
     assert_eq!(set_agc(2), "GT2;"); // fast AGC
     assert_eq!(set_nb(true), "NB1;");
+    assert_eq!(set_nb_level(8, true, 1), "NB0811;"); // level 8, on, narrow
+    assert_eq!(set_nb_level(99, true, 9), "NB1512;"); // clamped (15, wide)
     assert_eq!(set_nr(2, 1), "NR021;");
     assert_eq!(set_preamp(1, true), "PA11;");
     assert_eq!(set_preamp(0, false), "PA00;");
+}
+
+/// trace: FR-TX-MON-01, FR-CW-SPOT-01
+#[test]
+fn fr_tx_mon_and_spot() {
+    assert_eq!(set_monitor(0, 20), "ML0020;"); // CW monitor
+    assert_eq!(set_monitor(2, 100), "ML2100;"); // voice, max
+    assert_eq!(set_monitor(9, 200), "ML2100;"); // clamped
+    assert_eq!(set_spot(3), "SP3;"); // autospot
+    assert_eq!(set_spot(9), "SP3;"); // clamped
 }
 
 /// trace: FR-VFO-05

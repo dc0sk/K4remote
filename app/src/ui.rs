@@ -420,6 +420,18 @@ pub fn toggle_button(label: &'static str, on: Option<bool>) -> ButtonState {
     ButtonState::new(label, value)
 }
 
+/// Preamp chip showing the current level (`PA`): "Off" or the gain step 1–3.
+/// trace: FR-RX-02
+pub fn preamp_button(on: Option<bool>, level: Option<u8>) -> ButtonState {
+    let value = match (on, level) {
+        (Some(true), Some(n)) if n > 0 => format!("Lvl {n}"),
+        (Some(true), _) => "On".to_string(),
+        (Some(false), _) => "Off".to_string(),
+        (None, _) => UNKNOWN.to_string(),
+    };
+    ButtonState::new("PRE", value)
+}
+
 /// The K4's seven fixed primary buttons (FR-UI-13). Tapping one opens its
 /// context sub-row of controls; the row sits just above the primaries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

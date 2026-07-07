@@ -1,7 +1,7 @@
 ---
 title: "Test Strategy & Traceability"
 status: Draft
-version: "0.70"
+version: "0.71"
 updated: 2026-07-07
 authors:
   - Simon Keimer (DC0SK)
@@ -269,3 +269,4 @@ FR-SES-MULTI, FR-DIAG-02, etc. — get `TC` IDs when promoted to `Approved`.)*
 | 2026-07-07 | 0.68 | DC0SK | HI/LO-cut filter (FR-FIL-02): `passband_edges`/`set_passband_edges_hz` derive the edges from BW+IS (no dedicated K4 command); a SHFT⇄HI/LO toggle in the MAIN RX slider row swaps the SHIFT slider for LO+HI sliders, each mapping to a combined BW+IS update on the active VFO (50 Hz min width). 137 tests. |
 | 2026-07-07 | 0.69 | DC0SK | Fix per-receiver spectrum in dual view (FR-PAN-02, E1): the worker kept one shared spectrum/waterfall buffer and ignored `PanFrame.receiver`, so both A+B panes drew the same trace. Now the worker keeps per-receiver buffers `[main, sub]` keyed by the frame's receiver byte, the snapshot carries `spectrum_sub`/`waterfall_sub`, and each pane renders its own RX. 137 tests. |
 | 2026-07-07 | 0.70 | DC0SK | Tuning feel (Session 1, part): mode row gains AM/FM/CW-R/DATA-R (MD4/5/7/9); RIT/XIT offset parsed from `IF` (bytes 16–20) + `RO`, shown in the RIT/XIT box with −/+ fine adjust via `set_rit_offset` (FR-VFO-05); per-VFO step tuning ◄►(UP/DN, UPB/DNB) on each VFO panel; VFO-B direct MHz entry (SetFreqB→FB). Click-to-QSY + mouse-wheel deferred (need canvas events). 137 tests. |
+| 2026-07-07 | 0.71 | DC0SK | TX/RX knob completion (Session 2, part): preamp level rotation (PRE chip cycles 0→1→2→3→off, shows level; FR-RX-02), TX/sidetone monitor-level slider (`ML`, mode-class m; FR-TX-MON-01) + AUTOSPOT button (`SP3`; FR-CW-SPOT-01) below the TX switch grid, and NB level/filter protocol (`set_nb_level` NBnnmf + nb_filter parse). 138 tests. |
