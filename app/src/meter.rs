@@ -119,8 +119,8 @@ impl Meter {
         if self.show_cmp {
             rows.push(("CMP", self.cmp as f32 / 30.0, format!("{} dB", self.cmp)));
         }
-        let row_h = 12.0_f32;
-        let gap = 2.0_f32;
+        let row_h = 14.0_f32;
+        let gap = 3.0_f32;
         let label_w = 30.0;
         let val_w = 44.0;
         let bar_x = label_w;
