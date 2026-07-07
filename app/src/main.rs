@@ -372,6 +372,8 @@ enum Message {
     SetShift(u16),
     FilterPreset(u8),
     FilterNormalize,
+    ToggleSubRx,
+    ToggleDiversity,
     ToggleNb,
     ToggleNr,
     TogglePreamp,
@@ -887,6 +889,14 @@ impl App {
             Message::FilterNormalize => self.send(WorkerCmd::Cat(
                 k4_protocol::cat::filter_normalize().to_string(),
             )),
+            Message::ToggleSubRx => {
+                let on = self.ui.radio.sub_rx != Some(true);
+                self.send(WorkerCmd::Cat(k4_protocol::cat::set_sub_rx(on)));
+            }
+            Message::ToggleDiversity => {
+                let on = self.ui.radio.diversity != Some(true);
+                self.send(WorkerCmd::Cat(k4_protocol::cat::set_diversity(on)));
+            }
             Message::ToggleNb => self.send(WorkerCmd::ToggleNb),
             Message::ToggleNr => self.send(WorkerCmd::ToggleNr),
             Message::TogglePreamp => self.send(WorkerCmd::TogglePreamp),
@@ -1422,7 +1432,25 @@ impl App {
             ),
             _ => self.eq_screen(EqTarget::Rx, "RX equalizer", None),
         };
-        Column::new().spacing(12).push(tabs).push(content).into()
+        let mut col = Column::new().spacing(12);
+        if sub {
+            // Sub-RX enable + diversity (FR-RX-06, FR-DIV-01) — top of the sub screen.
+            col = col.push(
+                Row::new()
+                    .spacing(6)
+                    .push(two_line_btn(
+                        ui::toggle_button("SUB", self.ui.radio.sub_rx),
+                        self.ui.radio.sub_rx,
+                        Some(Message::ToggleSubRx),
+                    ))
+                    .push(two_line_btn(
+                        ui::toggle_button("DIVERSITY", self.ui.radio.diversity),
+                        self.ui.radio.diversity,
+                        Some(Message::ToggleDiversity),
+                    )),
+            );
+        }
+        col.push(tabs).push(content).into()
     }
 
     /// RX → FILTER sub-panel: per-mode filter presets (`FP`, FR-MODE-03),

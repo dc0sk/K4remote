@@ -180,6 +180,21 @@ pub fn set_shift_hz(hz: u16) -> String {
     format!("IS{:04};", hz / 10)
 }
 
+/// Turn the sub receiver on/off (`SB`) — D12.
+///
+/// trace: FR-RX-06
+pub fn set_sub_rx(on: bool) -> String {
+    format!("SB{};", on as u8)
+}
+
+/// Turn diversity mode on/off (`DV`). NOTE: enabling diversity also enables the
+/// sub receiver and mirrors VFO A's band/mode/filter to VFO B — D12.
+///
+/// trace: FR-DIV-01
+pub fn set_diversity(on: bool) -> String {
+    format!("DV{};", on as u8)
+}
+
 /// Set the RX attenuator: `db` ∈ {0,3,6,9,12,15,18,21}, on/off (`RA`).
 ///
 /// Example: `(12, true)` → `"RA121;"`.

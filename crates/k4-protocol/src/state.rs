@@ -76,6 +76,10 @@ pub struct RadioState {
     pub cw_pitch: Option<u16>,
     /// Passband shift / AF center pitch, Hz (`IS`).
     pub shift_hz: Option<u16>,
+    /// Sub receiver on (`SB`).
+    pub sub_rx: Option<bool>,
+    /// Diversity mode on (`DV`).
+    pub diversity: Option<bool>,
     /// Full break-in QSK on (`SD` x=1).
     pub qsk_full: Option<bool>,
     /// VOX/QSK delay, 10-ms units (`SD` zzz).
@@ -254,6 +258,10 @@ impl RadioState {
             if let Ok(v) = arg.parse::<u16>() {
                 self.shift_hz = Some(v * 10);
             }
+        } else if let Some(arg) = cmd.strip_prefix("SB") {
+            self.sub_rx = Some(arg == "1");
+        } else if let Some(arg) = cmd.strip_prefix("DV") {
+            self.diversity = Some(arg == "1");
         } else if let Some(arg) = cmd.strip_prefix("SD") {
             // `x y zzz`: full-QSK flag, mode class, then the 10-ms delay.
             let b = arg.as_bytes();
@@ -453,7 +461,7 @@ pub fn connect_state_seed() -> &'static [&'static str] {
         "IF;", "FA;", "FB;", "MD;", "MD$;", "FT;", "SM;", "SMH;", // core
         "BW;", "AG;", "RG;", "SQ;", // RX levels (bandwidth, AF/RF gain, squelch)
         "PC;", "CP;", "CW;", "SD;", // TX power, compression, CW pitch, QSK delay
-        "IS;", // passband shift / AF center pitch
+        "IS;", "SB;", "DV;", // passband shift, sub-RX, diversity
         // Configuration-screen read-back (FR-UI-19 screens):
         "RE;", "TE;", "KP;", "KS;", "MI;", "MG;", "LO;", "AN;", "AR;", "AR$;", "VXV;", "BN;",
         "#REF;", "#SPN;", "#SCL;", "#DPM;", "#WFC;", "#WFH;",
