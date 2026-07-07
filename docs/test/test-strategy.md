@@ -1,7 +1,7 @@
 ---
 title: "Test Strategy & Traceability"
 status: Draft
-version: "0.59"
+version: "0.60"
 updated: 2026-07-07
 authors:
   - Simon Keimer (DC0SK)
@@ -258,3 +258,4 @@ FR-SES-MULTI, FR-DIAG-02, etc. — get `TC` IDs when promoted to `Approved`.)*
 | 2026-07-07 | 0.57 | DC0SK | RX frame rework: moved filter/notch controls out of the softkey FILTER tab into the RX frame (two invisible columns — FL1/2/3+NORMALIZE over SHIFT, NOTCH+AUTO+APF over PITCH); dropped the redundant WIDTH button; frame now labelled RX A / RX B by the active VFO; RX commands (BW/AG/RG/SQ/FP/IS/NM/NA/AP) retargeted to the active VFO via `target_rx` `$` insertion (FR-CAT-05). Fixed NOTCH/AUTO/APF not disabling (idempotent set → re-query like SUB/DIV). Window 972→1052 px. (Sub-RX state read-back still shows main values — follow-up.) |
 | 2026-07-07 | 0.58 | DC0SK | Sub-RX read-back: parse the `$` RX RESP variants (BW/AG/RG/SQ/IS/NM/NA/AP) into sub-receiver fields + seed them (FR-CAT-05, state test); the RX frame now shows the *active* VFO's control states (notch/APF via accessors, sliders synced on view switch), so RX B reflects the sub receiver and the notch disable-fix works there too. 131 tests. |
 | 2026-07-07 | 0.59 | DC0SK | RX-frame layout + fixes: diagnostics log defaults OFF; dissolved the filter cluster into three rows (row1 chips + NOTCH/AUTO/APF right of DIV; row2 tune + FL1/2/3/NORMALIZE right of SCAN; row3 sliders SHIFT·AF·RF·SQL·PITCH); active-RX-VFO now also detected from the SUB RX softkey (not just single-B view), fixing the RX A/B label; ATT/PRE/NB retargeted to the active VFO via `$` toggle forms (RA/·PA/·NB/), removing the SW-tap worker paths. Window 1052→980 px. (NR/AGC sub-targeting still pending.) |
+| 2026-07-07 | 0.60 | DC0SK | Text decode (FR-TXT-01): `set_text_decode` (`TD`) + parse the `TB` buffered-text RESP into a rolling `decode_text` (embedded `;` preserved — verified by the whole-payload framing; state test); TX→TEXT tab gains a DECODE toggle and a scrolling decoded-text view, polled from `TB$;` at ~2.5 Hz only while decode is ON (no idle traffic). 133 tests. |

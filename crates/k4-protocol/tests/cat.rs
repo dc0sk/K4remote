@@ -9,9 +9,9 @@ use k4_protocol::cat::{
     set_nr, set_pan_average, set_pan_mode, set_pan_nb, set_pan_nb_level, set_pan_peak, set_pan_ref,
     set_pan_scale, set_pan_span_hz, set_power, set_preamp, set_qsk_delay, set_rf_gain, set_rit,
     set_rx_antenna, set_rx_antenna_sub, set_rx_eq, set_shift_hz, set_split, set_squelch,
-    set_sub_rx, set_transverter_band, set_tx_antenna, set_tx_eq, set_tx_power, set_vfo_a_hz,
-    set_vfo_b_hz, set_vox, set_waterfall_height, set_waterfall_palette, set_xit, switch,
-    vfo_copy_swap,
+    set_sub_rx, set_text_decode, set_transverter_band, set_tx_antenna, set_tx_eq, set_tx_power,
+    set_vfo_a_hz, set_vfo_b_hz, set_vox, set_waterfall_height, set_waterfall_palette, set_xit,
+    switch, vfo_copy_swap,
 };
 
 /// trace: FR-VFO-01
@@ -253,6 +253,13 @@ fn fr_sw_01_switch_emulation() {
     assert_eq!(switch(17), "SW17;"); // tap M1
     assert_eq!(switch(162), "SW162;"); // hold M1 (store)
     assert_eq!(switch(153), "SW153;"); // PF1
+}
+
+/// trace: FR-TXT-01
+#[test]
+fn fr_txt_01_text_decode() {
+    assert_eq!(set_text_decode(2, 0, 3), "TD203;"); // CW RX, auto threshold, 3 lines
+    assert_eq!(set_text_decode(0, 0, 0), "TD000;"); // off
 }
 
 /// trace: FR-PWR-01

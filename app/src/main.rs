@@ -176,6 +176,9 @@ struct App {
     // Manual-notch pitch Hz (FR-RX-NOTCH-01); on/off + auto-notch + APF read live
     // from the radio state.
     notch_pitch: u16,
+    // Text decode (FR-TXT-01): on/off + a poll-rate divider for the TB reads.
+    decode_on: bool,
+    decode_tick: u8,
 }
 
 /// Which graphic equalizer a screen edits (FR-EQ-01).
@@ -440,6 +443,7 @@ enum Message {
     SelectXvtr(u8),
     TxText(String),
     SendTxText,
+    ToggleDecode,
     SetFnTab(FnTab),
     DxFilter(String),
     // RX config sub-screens (FR-ANT-01/FR-AUD-CFG-01, Phase D).
@@ -578,6 +582,8 @@ impl App {
             qsk_delay: 30,
             shift_hz: 1500,
             notch_pitch: 1000,
+            decode_on: false,
+            decode_tick: 0,
         };
         (app, Task::none())
     }
@@ -1110,6 +1116,15 @@ impl App {
                     self.tx_text.clear();
                 }
             }
+            Message::ToggleDecode => {
+                self.decode_on = !self.decode_on;
+                // Mode 2 = CW RX decode (a sensible default); 0 = off. Active VFO.
+                let mode = if self.decode_on { 2 } else { 0 };
+                self.send(WorkerCmd::Cat(target_rx(
+                    k4_protocol::cat::set_text_decode(mode, 0, 3),
+                    self.active_sub(),
+                )));
+            }
             Message::SetFnTab(t) => self.fn_tab = t,
             Message::DxFilter(q) => self.dx_filter = q,
             Message::Rx(m) => self.apply_rx(m),
@@ -1141,6 +1156,14 @@ impl App {
                     self.last_split = self.ui.split;
                     if let Some(s) = self.ui.split {
                         self.tx_vfo_b = s;
+                    }
+                }
+                // Poll the decoded-text buffer only while decode is on (~2.5 Hz),
+                // so it adds no CAT traffic otherwise (FR-TXT-01).
+                if self.decode_on && self.ui.phase == ui::ConnPhase::Connected {
+                    self.decode_tick = self.decode_tick.wrapping_add(1);
+                    if self.decode_tick.is_multiple_of(4) {
+                        self.send(WorkerCmd::Cat("TB$;".into()));
                     }
                 }
                 // Follow the newest log line while auto-scroll is on (only when
@@ -1658,12 +1681,45 @@ impl App {
     /// TX → TEXT sub-panel (`KY`): type a CW/DATA message and send it.
     fn tx_text_panel(&self) -> Element<'_, Message> {
         let dim = role_color(ui::ColorRole::Inactive);
+        let rxv = role_color(ui::ColorRole::RxValue);
         Column::new()
             .spacing(10)
+            // Decoded RX text (FR-TXT-01) — polled from the K4's TB buffer.
+            .push(
+                Row::new()
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                    .push(Text::new("Decoded RX text").size(12).color(rxv))
+                    .push(
+                        Button::new(
+                            Text::new(if self.decode_on { "DECODE ON" } else { "DECODE OFF" })
+                                .size(12),
+                        )
+                        .style(btn_style(if self.decode_on {
+                            BtnKind::Active
+                        } else {
+                            BtnKind::Plain
+                        }))
+                        .padding([5, 10])
+                        .on_press(Message::ToggleDecode),
+                    ),
+            )
+            .push(
+                Container::new(
+                    scrollable(Text::new(self.ui.radio.decode_text.clone()).size(13).color(rxv))
+                        .anchor_y(scrollable::Anchor::End)
+                        .width(Length::Fill)
+                        .height(Length::Fill),
+                )
+                .style(panel_style)
+                .padding(8)
+                .width(Length::Fill)
+                .height(Length::Fixed(120.0)),
+            )
             .push(
                 Text::new("Send CW / DATA text (transmits the message)")
                     .size(12)
-                    .color(role_color(ui::ColorRole::RxValue)),
+                    .color(rxv),
             )
             .push(
                 Row::new()
@@ -1679,11 +1735,9 @@ impl App {
                     .push(small_btn("SEND", Message::SendTxText)),
             )
             .push(
-                Text::new(
-                    "Sent via KY; requires TX to be armed. Prosigns: ( = KN, + = AR, = = BT.",
-                )
-                .size(10)
-                .color(dim),
+                Text::new("Decode: CW mode via TB polling (active only while ON). Send via KY (TX armed).")
+                    .size(10)
+                    .color(dim),
             )
             .into()
     }

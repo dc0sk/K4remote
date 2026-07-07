@@ -225,6 +225,7 @@ syntax per the Programmer's Reference D12, cross-checked vs QK4 (`R-EXT-03`).*
 | `FR-SCAN-01` | **start/stop memory scan** (`SW149`) and display scan-in-progress from the `IF` `s` flag. | STK-02 | C | T | The `IF` `s` field (index 29) sets `scanning`; the SCAN control emits `SW149;` and lights while scanning. |
 | `FR-VOX-01` | control **VOX** on/off per transmit mode (PRG `VX`). | STK-06 | C | T | `set_vox(mode,on)` encodes `VX<mode><0/1>;`. |
 | `FR-TX-MSG-01` | **send CW/DATA text messages** for transmission (PRG `KY`, ≤60 chars). | STK-07 | C | T | `send_text(text)` encodes `KY <text>;` and truncates to 60 chars. |
+| `FR-TXT-01` | enable **text decode** for the active receiver (`TD` mode/threshold/lines) and display the decoded receive text polled from the buffer (`TB`, `s` field, `;`-safe). | STK-07 | C | T | `set_text_decode(2,0,3)` emits `TD203;`; a `TB…` RESP appends its text to `decode_text`, preserving embedded `;`. |
 | `FR-PWR-01` | provide **remote power control** — **power off** (PRG `PS0`) and **restart** (`PS8`) — with the power-off action **guarded** against accidental activation (explicit confirm). Powering the radio **on** is not possible via CAT (the interface is unpowered when off, per D12). | STK-11 | C | T/D | `set_power(n)` encodes `PS<n>;` (0/8/88); the UI power-off requires a two-step confirm (demo). |
 
 ---

@@ -244,3 +244,15 @@ fn fr_ui_19_config_screen_readback() {
         assert!(seed.contains(&g), "seed missing {g}");
     }
 }
+
+/// `TB` decoded text is appended to the buffer, `;` inside the text preserved.
+///
+/// trace: FR-TXT-01
+#[test]
+fn fr_txt_01_tb_decode_buffer() {
+    let mut s = RadioState::new();
+    s.apply_cat("TB$005CQ CQ;"); // t=0, rr=05, s="CQ CQ"
+    assert_eq!(s.decode_text, "CQ CQ");
+    s.apply_cat("TB$003 DE;"); // append
+    assert_eq!(s.decode_text, "CQ CQ DE");
+}
