@@ -76,18 +76,12 @@ pub enum WorkerCmd {
     SetMode(u8),
     /// Band up (`true`) / down (`false`).
     Band(bool),
-    /// Toggle the RX attenuator (`RA/`).
-    ToggleAtten,
     /// Toggle split (`FT/`).
     ToggleSplit,
     /// Cycle AGC off → slow → fast.
     CycleAgc,
-    /// Toggle the noise blanker (`SW32`).
-    ToggleNb,
     /// Toggle noise reduction (`SW62`).
     ToggleNr,
-    /// Toggle the preamp (`PA/`).
-    TogglePreamp,
     /// Toggle RIT (`RT/`).
     ToggleRit,
     /// Toggle XIT (`XT/`).
@@ -719,11 +713,6 @@ fn handle_cmd(cmd: WorkerCmd, ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnaps
                 });
             }
         }
-        WorkerCmd::ToggleAtten => {
-            if let Some(s) = ws.session.as_mut() {
-                let _ = s.send("RA/;"); // toggle form
-            }
-        }
         WorkerCmd::ToggleSplit => {
             if let Some(s) = ws.session.as_mut() {
                 let _ = s.send("FT/;"); // toggle form
@@ -735,19 +724,9 @@ fn handle_cmd(cmd: WorkerCmd, ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnaps
                 let _ = s.send(&k4_protocol::cat::set_agc(next));
             }
         }
-        WorkerCmd::ToggleNb => {
-            if let Some(s) = ws.session.as_mut() {
-                let _ = s.send("SW32;"); // tap NB
-            }
-        }
         WorkerCmd::ToggleNr => {
             if let Some(s) = ws.session.as_mut() {
                 let _ = s.send("SW62;"); // tap NR
-            }
-        }
-        WorkerCmd::TogglePreamp => {
-            if let Some(s) = ws.session.as_mut() {
-                let _ = s.send("PA/;");
             }
         }
         WorkerCmd::ToggleRit => {
