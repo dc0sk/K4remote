@@ -74,6 +74,8 @@ pub struct RadioState {
     pub compression: Option<u8>,
     /// CW sidetone pitch, Hz (`CW`).
     pub cw_pitch: Option<u16>,
+    /// Passband shift / AF center pitch, Hz (`IS`).
+    pub shift_hz: Option<u16>,
     /// Full break-in QSK on (`SD` x=1).
     pub qsk_full: Option<bool>,
     /// VOX/QSK delay, 10-ms units (`SD` zzz).
@@ -246,6 +248,11 @@ impl RadioState {
         } else if let Some(arg) = cmd.strip_prefix("CW") {
             if let Ok(v) = arg.parse::<u16>() {
                 self.cw_pitch = Some(v * 10);
+            }
+        } else if let Some(arg) = cmd.strip_prefix("IS") {
+            // Main center pitch only; `IS$…` (sub) starts with `$` and is skipped.
+            if let Ok(v) = arg.parse::<u16>() {
+                self.shift_hz = Some(v * 10);
             }
         } else if let Some(arg) = cmd.strip_prefix("SD") {
             // `x y zzz`: full-QSK flag, mode class, then the 10-ms delay.
@@ -446,6 +453,7 @@ pub fn connect_state_seed() -> &'static [&'static str] {
         "IF;", "FA;", "FB;", "MD;", "MD$;", "FT;", "SM;", "SMH;", // core
         "BW;", "AG;", "RG;", "SQ;", // RX levels (bandwidth, AF/RF gain, squelch)
         "PC;", "CP;", "CW;", "SD;", // TX power, compression, CW pitch, QSK delay
+        "IS;", // passband shift / AF center pitch
         // Configuration-screen read-back (FR-UI-19 screens):
         "RE;", "TE;", "KP;", "KS;", "MI;", "MG;", "LO;", "AN;", "AR;", "AR$;", "VXV;", "BN;",
         "#REF;", "#SPN;", "#SCL;", "#DPM;", "#WFC;", "#WFH;",

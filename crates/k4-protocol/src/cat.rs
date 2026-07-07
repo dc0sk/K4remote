@@ -158,6 +158,28 @@ pub fn set_cw_pitch(hz: u16) -> String {
     format!("CW{:02};", (hz / 10).clamp(25, 95))
 }
 
+/// Select a per-mode filter preset 1–3 (`FP`; `$`=sub) — D12.
+///
+/// trace: FR-MODE-03
+pub fn set_filter_preset(n: u8) -> String {
+    format!("FP{};", n.clamp(1, 3))
+}
+
+/// Normalize the current filter preset (`FP~`) — D12.
+///
+/// trace: FR-MODE-03
+pub fn filter_normalize() -> &'static str {
+    "FP~;"
+}
+
+/// Set the passband shift / AF center pitch in Hz (`IS`; `$`=sub, encoded ×10).
+/// Named "IF shift" for legacy reasons; it is an AF center-pitch control — D12.
+///
+/// trace: FR-FIL-01
+pub fn set_shift_hz(hz: u16) -> String {
+    format!("IS{:04};", hz / 10)
+}
+
 /// Set the RX attenuator: `db` ∈ {0,3,6,9,12,15,18,21}, on/off (`RA`).
 ///
 /// Example: `(12, true)` → `"RA121;"`.
