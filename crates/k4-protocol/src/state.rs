@@ -50,6 +50,8 @@ pub struct RadioState {
     pub mode_b: Option<Mode>,
     /// Split on/off.
     pub split: Option<bool>,
+    /// Scan in progress (`IF` `s` flag).
+    pub scanning: Option<bool>,
     /// Transmit (`true`) vs receive (`false`).
     pub transmitting: Option<bool>,
     /// Main-RX S-meter, bar count 0–42 (`SM`).
@@ -459,6 +461,7 @@ impl RadioState {
         }
         self.transmitting = Some(b[26] == b'1');
         self.mode_a = Mode::from_md_digit(b[27]);
+        self.scanning = Some(b[29] == b'1'); // `s` scan-in-progress flag
         self.split = Some(b[30] == b'1');
     }
 }

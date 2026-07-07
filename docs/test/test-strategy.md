@@ -1,7 +1,7 @@
 ---
 title: "Test Strategy & Traceability"
 status: Draft
-version: "0.55"
+version: "0.56"
 updated: 2026-07-07
 authors:
   - Simon Keimer (DC0SK)
@@ -254,3 +254,4 @@ FR-SES-MULTI, FR-DIAG-02, etc. — get `TC` IDs when promoted to `Approved`.)*
 | 2026-07-07 | 0.53 | DC0SK | Gap-closing #4 (passband/filter): `set_filter_preset`+`filter_normalize` (`FP`, FR-MODE-03) and `set_shift_hz` (`IS` AF center pitch, FR-FIL-01) with IS state parse + seed; new MAIN RX → FILTER tab (FL1/2/3, NORMALIZE, SHIFT slider, BW shortcut) — in the softkey slot, no window growth. 127 tests. |
 | 2026-07-07 | 0.54 | DC0SK | Gap-closing #5 (diversity/sub-RX): `set_sub_rx` (`SB`, FR-RX-06) + `set_diversity` (`DV`, FR-DIV-01) with SB/DV state parse + seed; SUB + DIVERSITY toggles at the top of the SUB RX screen. 128 tests. |
 | 2026-07-07 | 0.55 | DC0SK | Gap-closing #6 (notch/APF): `set_manual_notch`+`set_auto_notch` (`NM`/`NA`, FR-RX-NOTCH-01) + `set_apf` (`AP`, FR-RX-APF-01) with NM/NA/AP state parse + seed; NOTCH/APF section in the MAIN RX → FILTER tab. Also moved SUB + DIV toggles into the MAIN RX chip row (next to AGC); sub screen back to a single column. 129 tests. |
+| 2026-07-07 | 0.56 | DC0SK | Gap-closing #7 (scan): parse the `IF` `s` scan-in-progress flag (index 29) into `scanning` (FR-SCAN-01, state test); SCAN button in the tune row emits `SW149;` and lights while scanning. 130 tests. |
