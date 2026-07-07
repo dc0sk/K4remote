@@ -4,8 +4,8 @@
 //! relies on lives in `k4_stream::render` and is unit-tested.
 
 use iced::mouse;
-use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke};
-use iced::{Color, Point, Rectangle, Renderer, Size, Theme};
+use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke, Text};
+use iced::{Color, Pixels, Point, Rectangle, Renderer, Size, Theme};
 
 use k4_stream::render::{dbm_to_color, dbm_to_y};
 
@@ -38,6 +38,37 @@ impl<Message> canvas::Program<Message> for Spectrum<'_> {
         let wf_h = h - spec_h;
 
         frame.fill_rectangle(Point::ORIGIN, Size::new(w, h), Color::from_rgb8(10, 10, 14));
+
+        // dB grid + scale over the spectrum area (drawn under the trace).
+        let grid = Color::from_rgba8(255, 255, 255, 0.07);
+        let label = Color::from_rgba8(150, 156, 168, 0.85);
+        let bottom_dbm = self.top_dbm - self.range_db;
+        // Horizontal lines + dB labels every 20 dB, aligned to a 20 dB boundary.
+        let step = 20.0_f32;
+        let mut db = (self.top_dbm / step).floor() * step;
+        while db >= bottom_dbm {
+            let y = dbm_to_y(db, self.top_dbm, self.range_db, spec_h);
+            frame.stroke(
+                &Path::line(Point::new(0.0, y), Point::new(w, y)),
+                Stroke::default().with_width(1.0).with_color(grid),
+            );
+            frame.fill_text(Text {
+                content: format!("{db:.0}"),
+                position: Point::new(3.0, y + 1.0),
+                color: label,
+                size: Pixels(9.0),
+                ..Text::default()
+            });
+            db -= step;
+        }
+        // Vertical grid lines (quarter divisions) across the spectrum band.
+        for i in 1..4 {
+            let x = w * i as f32 / 4.0;
+            frame.stroke(
+                &Path::line(Point::new(x, 0.0), Point::new(x, spec_h)),
+                Stroke::default().with_width(1.0).with_color(grid),
+            );
+        }
 
         // Spectrum trace.
         if self.latest.len() > 1 {

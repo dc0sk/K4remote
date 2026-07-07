@@ -24,8 +24,8 @@ use std::cell::Cell;
 
 use iced::widget::canvas::Canvas;
 use iced::widget::{
-    button, container, horizontal_space, pick_list, progress_bar, scrollable, slider, stack,
-    vertical_slider,
+    button, container, horizontal_space, mouse_area, pick_list, progress_bar, scrollable, slider,
+    stack, vertical_slider,
 };
 use iced::widget::{Button, Column, Container, ProgressBar, Row, Text, TextInput};
 use iced::{Alignment, Background, Border, Color, Element, Length, Subscription, Task, Theme};
@@ -143,6 +143,18 @@ struct App {
     selected_input: Option<String>,
     volume: f32,   // RX playback gain 0.0–2.0
     mic_gain: f32, // TX capture gain 0.0–3.0
+    // Two-step guard for the remote power-off (FR-PWR-01).
+    power_off_armed: bool,
+    // Diagnostics log: show/hide + follow-newest (auto-scroll).
+    show_log: bool,
+    log_autoscroll: bool,
+    log_id: scrollable::Id,
+    log_len: usize,
+    // Local RX filter bandwidth, Hz (seeded from the radio; cycled by the BW btn).
+    bw_hz: u32,
+    // Which VFO transmits (B under split); tracks the radio, set optimistically
+    // when a spectrum frame is clicked so the highlight moves immediately.
+    tx_vfo_b: bool,
 }
 
 /// Which graphic equalizer a screen edits (FR-EQ-01).
@@ -329,6 +341,8 @@ enum Message {
     ToggleAtten,
     ToggleSplit,
     CycleAgc,
+    CycleBandwidth,
+    SelectTxVfo(bool),
     ToggleNb,
     ToggleNr,
     TogglePreamp,
@@ -359,6 +373,14 @@ enum Message {
     VolumeChanged(f32),
     MicGainChanged(f32),
     SaveSettings,
+    // Remote power control (FR-PWR-01).
+    PowerRestart,
+    PowerOffArm,
+    PowerOffCancel,
+    PowerOffConfirm,
+    // Diagnostics log display options.
+    ToggleShowLog,
+    ToggleLogAutoscroll,
     // Graphic-EQ screens (FR-EQ-01).
     EqChanged(EqTarget, usize, i8),
     EqFlat(EqTarget),
@@ -499,6 +521,13 @@ impl App {
             selected_input,
             volume,
             mic_gain,
+            power_off_armed: false,
+            show_log: true,
+            log_autoscroll: true,
+            log_id: scrollable::Id::new("diag-log"),
+            log_len: 0,
+            bw_hz: 2800,
+            tx_vfo_b: false,
         };
         (app, Task::none())
     }
@@ -746,6 +775,25 @@ impl App {
             Message::ToggleAtten => self.send(WorkerCmd::ToggleAtten),
             Message::ToggleSplit => self.send(WorkerCmd::ToggleSplit),
             Message::CycleAgc => self.send(WorkerCmd::CycleAgc),
+            Message::CycleBandwidth => {
+                // Step through common RX filter bandwidths (wraps at the top);
+                // update locally for immediate feedback, then push to the radio.
+                const BW: [u32; 8] = [500, 1000, 1500, 1800, 2400, 2700, 2800, 3200];
+                self.bw_hz = BW
+                    .iter()
+                    .copied()
+                    .find(|&b| b > self.bw_hz)
+                    .unwrap_or(BW[0]);
+                self.send(WorkerCmd::Cat(k4_protocol::cat::set_bandwidth_hz(
+                    self.bw_hz,
+                )));
+            }
+            Message::SelectTxVfo(is_b) => {
+                // TX VFO = B under split, A otherwise (FT / split). FR-UI-12.
+                // Move the highlight immediately; the radio's echo keeps it honest.
+                self.tx_vfo_b = is_b;
+                self.send(WorkerCmd::Cat(k4_protocol::cat::set_split(is_b)));
+            }
             Message::ToggleNb => self.send(WorkerCmd::ToggleNb),
             Message::ToggleNr => self.send(WorkerCmd::ToggleNr),
             Message::TogglePreamp => self.send(WorkerCmd::TogglePreamp),
@@ -764,7 +812,10 @@ impl App {
                 }
             }
             Message::SetViewMode(m) => self.view_mode = m,
-            Message::TapPrimary(p) => self.context.tap(p),
+            Message::TapPrimary(p) => {
+                self.power_off_armed = false; // navigating away disarms power-off
+                self.context.tap(p);
+            }
             Message::CycleTheme => {
                 self.theme_mode = self.theme_mode.next();
                 // Re-detect the OS preference when entering System.
@@ -800,6 +851,34 @@ impl App {
                 self.send(WorkerCmd::SetMicGain(g));
             }
             Message::SaveSettings => self.save_config(),
+            Message::PowerRestart => self.send(WorkerCmd::Cat(k4_protocol::cat::set_power(8))),
+            Message::PowerOffArm => self.power_off_armed = true,
+            Message::PowerOffCancel => self.power_off_armed = false,
+            Message::PowerOffConfirm => {
+                self.send(WorkerCmd::Cat(k4_protocol::cat::set_power(0)));
+                self.power_off_armed = false;
+            }
+            Message::ToggleShowLog => self.show_log = !self.show_log,
+            Message::ToggleLogAutoscroll => {
+                self.log_autoscroll = !self.log_autoscroll;
+                if self.log_autoscroll {
+                    // Resume following the newest line.
+                    return scrollable::snap_to(
+                        self.log_id.clone(),
+                        scrollable::RelativeOffset::END,
+                    );
+                }
+                // Freeze: convert the sticky "bottom" (Relative(1.0)) into a
+                // concrete absolute offset near the current end so new lines no
+                // longer drag the view. ~15 px per line at text size 11.
+                return scrollable::scroll_to(
+                    self.log_id.clone(),
+                    scrollable::AbsoluteOffset {
+                        x: 0.0,
+                        y: self.log_len as f32 * 15.0,
+                    },
+                );
+            }
             Message::EqChanged(target, band, value) => {
                 let v = value.clamp(-ui::EQ_DB_RANGE, ui::EQ_DB_RANGE);
                 match target {
@@ -866,6 +945,22 @@ impl App {
                 } else {
                     self.seeded = false;
                     self.peer_cached = false;
+                    self.power_off_armed = false;
+                }
+                // Track the radio's transmit VFO (split) when it reports one.
+                if let Some(s) = self.ui.split {
+                    self.tx_vfo_b = s;
+                }
+                // Follow the newest log line while auto-scroll is on (only when
+                // the log actually grew, so manual scrolling isn't fought).
+                let n = self.ui.diag_lines.len();
+                let grew = n != self.log_len;
+                self.log_len = n;
+                if self.show_log && self.log_autoscroll && grew {
+                    return scrollable::snap_to(
+                        self.log_id.clone(),
+                        scrollable::RelativeOffset::END,
+                    );
                 }
             }
         }
@@ -1333,6 +1428,38 @@ impl App {
         Column::new().spacing(12).push(tabs).push(content).into()
     }
 
+    /// The K4's transmit/antenna dual-function switches (tap left / hold right,
+    /// `SW` emulation) as a compact grid for the TRANSMIT panel (FR-SW-01).
+    fn tx_switch_grid(&self) -> Element<'_, Message> {
+        let dim = role_color(ui::ColorRole::Inactive);
+        let cell = |label: &str, code: u16| -> Element<Message> {
+            Button::new(Text::new(label.to_string()).size(11))
+                .style(btn_style(BtnKind::Plain))
+                .padding([4, 6])
+                .width(Length::Fixed(88.0))
+                .on_press(Message::Switch(code))
+                .into()
+        };
+        let mut grid = Column::new().spacing(4);
+        for pair in ui::tx_function_switches().chunks(2) {
+            let mut row = Row::new().spacing(10);
+            for (tl, tap, hl, hold) in pair {
+                row = row.push(
+                    Row::new()
+                        .spacing(3)
+                        .push(cell(tl, *tap))
+                        .push(cell(hl, *hold)),
+                );
+            }
+            grid = grid.push(row);
+        }
+        Column::new()
+            .spacing(4)
+            .push(Text::new("Switches (tap · hold)").size(10).color(dim))
+            .push(grid)
+            .into()
+    }
+
     /// TX → TEXT sub-panel (`KY`): type a CW/DATA message and send it.
     fn tx_text_panel(&self) -> Element<'_, Message> {
         let dim = role_color(ui::ColorRole::Inactive);
@@ -1587,6 +1714,7 @@ impl App {
     /// Fn -> SWITCHES: emulate useful front-panel switches (`SW`).
     fn fn_switches(&self) -> Element<'_, Message> {
         let dim = role_color(ui::ColorRole::Inactive);
+        let rxv = role_color(ui::ColorRole::RxValue);
         let mut row = Row::new().spacing(6);
         for (label, code) in ui::radio_switches() {
             row = row.push(small_btn_string(
@@ -1594,16 +1722,45 @@ impl App {
                 Message::Switch(*code),
             ));
         }
+        // Remote power (FR-PWR-01): restart + a two-step-guarded power off. The K4
+        // cannot be powered ON via CAT, so there is no "on" control.
+        let danger = |label: &str, msg: Message| {
+            Button::new(Text::new(label.to_string()).size(12))
+                .style(btn_style(BtnKind::Danger))
+                .padding([5, 10])
+                .on_press(msg)
+        };
+        let power_row = if self.power_off_armed {
+            Row::new()
+                .spacing(6)
+                .align_y(Alignment::Center)
+                .push(small_btn("RESTART", Message::PowerRestart))
+                .push(small_btn("CANCEL", Message::PowerOffCancel))
+                .push(danger("CONFIRM POWER OFF", Message::PowerOffConfirm))
+                .push(
+                    Text::new("radio will power down")
+                        .size(10)
+                        .color(role_color(ui::ColorRole::Caution)),
+                )
+        } else {
+            Row::new()
+                .spacing(6)
+                .push(small_btn("RESTART", Message::PowerRestart))
+                .push(danger("POWER OFF", Message::PowerOffArm))
+        };
         Column::new()
             .spacing(10)
-            .push(
-                Text::new("Front-panel switches")
-                    .size(12)
-                    .color(role_color(ui::ColorRole::RxValue)),
-            )
+            .push(Text::new("Front-panel switches").size(12).color(rxv))
             .push(row)
             .push(
                 Text::new("Emulates a switch tap (SPOT/TUNE/ATU/DIV/LOCK/MON).")
+                    .size(10)
+                    .color(dim),
+            )
+            .push(Text::new("Radio power").size(12).color(rxv))
+            .push(power_row)
+            .push(
+                Text::new("Restart = PS8; Power off = PS0. The K4 cannot be turned on via CAT.")
                     .size(10)
                     .color(dim),
             )
@@ -1665,6 +1822,9 @@ impl App {
     /// trace: FR-UI-20
     fn seed_from_radio(&mut self) {
         let r = self.ui.radio.clone();
+        if let Some(v) = r.bandwidth_hz {
+            self.bw_hz = v;
+        }
         if let Some(v) = r.rx_eq {
             self.rx_eq = v;
         }
@@ -2155,9 +2315,9 @@ impl App {
         let chips = Row::new()
             .spacing(6)
             .push(two_line_btn(
-                ui::bandwidth_button(self.ui.bandwidth_hz),
+                ui::bandwidth_button(Some(self.bw_hz)),
                 None,
-                None,
+                Some(Message::CycleBandwidth),
             ))
             .push(two_line_btn(
                 ui::atten_button(self.ui.atten_on, self.ui.atten_db),
@@ -2235,8 +2395,8 @@ impl App {
         // the active layout. The snapshot currently carries a single trace, so
         // both panes show it for now. Every pane keeps the same height whether
         // one or two are shown (dual A+B panes match single-A/B height).
-        let pane_h = 260.0;
         let mut spectrum_panes: Vec<Element<Message>> = Vec::new();
+        let dual = bl.panes.len() > 1;
         for &p in &bl.panes {
             let role = if p.is_b() {
                 ui::ColorRole::VfoB
@@ -2250,7 +2410,7 @@ impl App {
                         .color(dim),
                 )
                 .width(Length::Fill)
-                .height(Length::Fixed(pane_h))
+                .height(Length::Fill)
                 .padding(8)
                 .into()
             } else {
@@ -2261,21 +2421,40 @@ impl App {
                     range_db: 100.0,
                 })
                 .width(Length::Fill)
-                .height(Length::Fixed(pane_h))
+                .height(Length::Fill)
                 .into()
             };
-            spectrum_panes.push(
-                Container::new(
-                    Column::new()
-                        .spacing(6)
-                        .push(badge(p.label(), role))
-                        .push(plot),
-                )
-                .style(panel_style)
+            // Only in dual (A+B) view does the TX-VFO choice matter: the pane
+            // matching the transmit VFO (B under split, else A) gets an accent
+            // frame + TX tag, and clicking a pane makes it the TX VFO via FT
+            // (split). In single-VFO view there's nothing to choose, so no
+            // highlight and no click. FR-UI-12.
+            let selected = dual && p.is_b() == self.tx_vfo_b;
+            let mut header = Row::new()
+                .spacing(8)
+                .align_y(Alignment::Center)
+                .push(badge(p.label(), role));
+            if selected {
+                header = header.push(
+                    Text::new("TX")
+                        .size(11)
+                        .color(role_color(ui::ColorRole::TxActive)),
+                );
+            }
+            let pane = Container::new(Column::new().spacing(6).push(header).push(plot))
+                .style(pane_style(selected))
                 .padding(8)
                 .width(Length::Fill)
-                .into(),
-            );
+                // Match the menu-screen slot exactly so the frame doesn't resize
+                // when swapping the spectrum for a config screen (FR-UI-19).
+                .height(Length::Fixed(SCREEN_H));
+            spectrum_panes.push(if dual {
+                mouse_area(pane)
+                    .on_press(Message::SelectTxVfo(p.is_b()))
+                    .into()
+            } else {
+                pane.into()
+            });
         }
         let spectrum_band: Element<Message> = if bl.stacked {
             let mut col = Column::new().spacing(10);
@@ -2358,7 +2537,8 @@ impl App {
                 .spacing(8)
                 .push(Text::new("TRANSMIT").size(11).color(dim))
                 .push(arm)
-                .push(Row::new().spacing(8).push(key).push(estop)),
+                .push(Row::new().spacing(8).push(key).push(estop))
+                .push(self.tx_switch_grid()),
         )
         .style(panel_style)
         .padding(12)
@@ -2452,7 +2632,15 @@ impl App {
             .push(self.master_section_view())
             .push(Text::new("Audio").size(12).color(dim))
             .push(self.audio_section_view())
-            .push(Container::new(small_btn("Close", Message::ToggleSettings)).padding([10, 0]));
+            .push(
+                Container::new(
+                    Row::new()
+                        .push(horizontal_space())
+                        .push(small_btn("Close", Message::ToggleSettings)),
+                )
+                .width(Length::Fill)
+                .padding([10, 0]),
+            );
         let settings_card: Element<Message> = modal_scrim(
             Container::new(scrollable(settings_inner))
                 .style(panel_style)
@@ -2462,43 +2650,70 @@ impl App {
                 .into(),
         );
 
-        // Diagnostics console (FR-DIAG-01/02).
+        // Diagnostics console (FR-DIAG-01/02). Log oldest→newest so auto-scroll
+        // follows the bottom.
         let mut log_col = Column::new().spacing(1);
-        for line in self.ui.diag_lines.iter().rev().take(12) {
+        for line in &self.ui.diag_lines {
             log_col = log_col.push(Text::new(line.clone()).size(11).color(dim));
         }
-        let diagnostics = Container::new(
-            Column::new()
-                .spacing(8)
-                .push(Text::new("DIAGNOSTICS").size(11).color(dim))
-                .push(
-                    Row::new()
-                        .spacing(8)
-                        .push(
-                            TextInput::new("raw CAT, e.g. IF;", &self.cat_input)
-                                .on_input(Message::CatInputChanged)
-                                .on_submit(Message::SendCat)
-                                .size(13)
-                                .width(Length::Fixed(200.0)),
-                        )
-                        .push(small_btn("SEND", Message::SendCat)),
-                )
-                .push(
-                    Text::new(format!(
-                        "RX audio frames: {}   spectrum: {} bins",
-                        self.ui.audio_frames, self.ui.spectrum_bins
-                    ))
-                    .size(11)
-                    .color(dim),
-                )
-                // Scroll the log within the fixed panel height so it can't push
-                // DIAGNOSTICS taller than TRANSMIT.
-                .push(scrollable(log_col).height(Length::Fill)),
-        )
-        .style(panel_style)
-        .padding(12)
-        .width(Length::Fill)
-        .height(Length::Fixed(BOTTOM_PANEL_H));
+        let opt = |label: &'static str, on: bool, msg: Message| {
+            Button::new(Text::new(label).size(11))
+                .style(btn_style(if on { BtnKind::Active } else { BtnKind::Plain }))
+                .padding([3, 8])
+                .on_press(msg)
+        };
+        let diag_header = Row::new()
+            .spacing(8)
+            .align_y(Alignment::Center)
+            .push(Text::new("DIAGNOSTICS").size(11).color(dim))
+            .push(horizontal_space())
+            .push(opt("LOG", self.show_log, Message::ToggleShowLog))
+            .push(opt(
+                "AUTOSCROLL",
+                self.log_autoscroll,
+                Message::ToggleLogAutoscroll,
+            ));
+        let mut diag_col = Column::new()
+            .spacing(8)
+            .push(diag_header)
+            .push(
+                Row::new()
+                    .spacing(8)
+                    .push(
+                        TextInput::new("raw CAT, e.g. IF;", &self.cat_input)
+                            .on_input(Message::CatInputChanged)
+                            .on_submit(Message::SendCat)
+                            .size(13)
+                            .width(Length::Fixed(200.0)),
+                    )
+                    .push(small_btn("SEND", Message::SendCat)),
+            )
+            .push(
+                Text::new(format!(
+                    "RX audio frames: {}   spectrum: {} bins",
+                    self.ui.audio_frames, self.ui.spectrum_bins
+                ))
+                .size(11)
+                .color(dim),
+            );
+        if self.show_log {
+            // Fixed always-present scrollbar on the right (no jumping). Auto-scroll
+            // is driven from the tick (snap to newest); with it off the view holds
+            // its position so you can read back through the log.
+            let log = scrollable(log_col)
+                .id(self.log_id.clone())
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .direction(scrollable::Direction::Vertical(
+                    scrollable::Scrollbar::new().width(6.0).scroller_width(6.0),
+                ));
+            diag_col = diag_col.push(log);
+        }
+        let diagnostics = Container::new(diag_col)
+            .style(panel_style)
+            .padding(12)
+            .width(Length::Fill)
+            .height(Length::Fixed(BOTTOM_PANEL_H));
 
         let bottom: Element<Message> = if bl.stacked {
             Column::new()
@@ -2868,10 +3083,11 @@ const VFO_BAND_H: f32 = 160.0;
 /// Matches the panadapter footprint so the layout doesn't jump.
 const SCREEN_H: f32 = 300.0;
 
+/// (raised to fit the TRANSMIT switch grid.)
 /// Shared height of the bottom TRANSMIT / DIAGNOSTICS panels so they line up
 /// (the scrollable body can't stretch them to match, so fix it). The diagnostics
 /// log scrolls within this height.
-const BOTTOM_PANEL_H: f32 = 168.0;
+const BOTTOM_PANEL_H: f32 = 220.0;
 
 /// Visual kind of a styled button (FR-UI-10/15): rest-state control, engaged
 /// (blue fill, like the reference client), transmit-critical (red edge),
@@ -2946,6 +3162,29 @@ fn panel_style(_theme: &Theme) -> container::Style {
             radius: 10.0.into(),
         },
         ..container::Style::default()
+    }
+}
+
+/// Spectrum-pane style: like [`panel_style`] but with an accent border + faint
+/// tint when this pane is the transmit VFO (FR-UI-12), so the selected frame
+/// reads as active.
+fn pane_style(selected: bool) -> impl Fn(&Theme) -> container::Style {
+    move |_theme| {
+        let (r, g, b) = ui::ColorRole::TxActive.rgb();
+        let accent = Color::from_rgb8(r, g, b);
+        container::Style {
+            background: Some(Background::Color(shade(ui::Shade::Panel))),
+            border: Border {
+                color: if selected {
+                    accent
+                } else {
+                    shade(ui::Shade::Edge)
+                },
+                width: if selected { 2.0 } else { 1.0 },
+                radius: 10.0.into(),
+            },
+            ..container::Style::default()
+        }
     }
 }
 

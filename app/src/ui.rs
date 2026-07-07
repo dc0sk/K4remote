@@ -302,7 +302,7 @@ pub fn conn_status(phase: ConnPhase) -> (&'static str, ColorRole) {
 /// height fits the fixed-height content (VFO band + screen slot + panels) so the
 /// window opens without a scrollbar.
 /// trace: FR-UI-21
-pub const DEFAULT_WINDOW_SIZE: (f32, f32) = (1280.0, 884.0);
+pub const DEFAULT_WINDOW_SIZE: (f32, f32) = (1280.0, 940.0);
 
 /// Colour role for a VFO's header given which receiver it is, whether it is the
 /// transmit VFO (split-aware), and whether the radio is transmitting. Transmit
@@ -715,6 +715,21 @@ pub fn radio_switches() -> &'static [(&'static str, u16); 7] {
     ]
 }
 
+/// The K4's transmit-area dual-function switches (`SW` emulation, FR-SW-01), as
+/// `(tap-label, tap-code, hold-label, hold-code)` — codes from the D12
+/// switch-emulation table (Intro rev. C5 labels).
+/// trace: FR-SW-01
+pub fn tx_function_switches() -> &'static [(&'static str, u16, &'static str, u16); 6] {
+    &[
+        ("TUNE", 16, "TUNE LP", 131),
+        ("ATU TUNE", 40, "ATU", 158),
+        ("ANT", 60, "REM ANT", 135),
+        ("XMIT", 30, "TEST", 132),
+        ("VOX", 50, "QSK", 134),
+        ("RX ANT", 70, "SUB ANT", 157),
+    ]
+}
+
 /// A curated set of DXCC prefix → country mappings for the DX-list screen
 /// (SCR-DX, FR-UI-19). A starter set of common entities — expandable to the full
 /// DXCC list (a data task, not blocking).
@@ -968,6 +983,12 @@ mod tests {
         assert_eq!(pf_keys().len(), 4);
         assert!(radio_switches().contains(&("SPOT", 42)));
         assert!(radio_switches().contains(&("MON", 128)));
+        // TX dual-function switches: tap + hold codes present.
+        let tx = tx_function_switches();
+        assert_eq!(tx[0], ("TUNE", 16, "TUNE LP", 131));
+        assert_eq!(tx[1], ("ATU TUNE", 40, "ATU", 158)); // hold = ATU in/out
+        assert_eq!(tx[4], ("VOX", 50, "QSK", 134));
+        assert_eq!(tx.len(), 6);
     }
 
     // trace: FR-UI-19 — the DX prefix list is searchable by prefix or country.

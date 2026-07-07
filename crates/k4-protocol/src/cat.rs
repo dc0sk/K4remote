@@ -517,3 +517,12 @@ pub fn menu_set(id: u16, value: &str) -> String {
 pub fn switch(code: u16) -> String {
     format!("SW{code};")
 }
+
+/// Remote **power** control (`PS`): `0` = power off, `8` = restart, `88` =
+/// auto-update + restart. NOTE: the K4 cannot be powered **on** via CAT (the
+/// interface is unpowered when the radio is off) — D12.
+///
+/// trace: FR-PWR-01
+pub fn set_power(n: u8) -> String {
+    format!("PS{n};")
+}
