@@ -155,9 +155,10 @@ struct App {
     // Which VFO transmits (B under split); tracks the radio, set optimistically
     // when a spectrum frame is clicked so the highlight moves immediately.
     tx_vfo_b: bool,
-    // Ticks to keep the optimistic tx_vfo_b before resuming the split read-back,
-    // so the highlight doesn't flicker back before the radio's echo lands.
-    tx_vfo_hold: u8,
+    // Last split value seen from the radio; tx_vfo_b is re-synced only when this
+    // actually changes (a genuine transition), so a static/absent read-back never
+    // snaps the optimistic highlight back.
+    last_split: Option<bool>,
     // Main-RX levels (seeded from the radio, driven by sliders): AF gain 0–60,
     // RF-gain attenuation 0–60 dB, squelch 0–40 (FR-RX-01, FR-RX-SQL-01).
     af_gain: u8,
@@ -559,7 +560,7 @@ impl App {
             log_len: 0,
             bw_hz: 2800,
             tx_vfo_b: false,
-            tx_vfo_hold: 0,
+            last_split: None,
             af_gain: 30,
             rf_gain: 0,
             squelch: 0,
@@ -831,10 +832,9 @@ impl App {
             }
             Message::SelectTxVfo(is_b) => {
                 // TX VFO = B under split, A otherwise (FT / split). FR-UI-12.
-                // Move the highlight immediately and hold it ~1.5 s while the
-                // radio's split echo makes its way back (else it flickers back).
+                // Move the highlight immediately; it only re-syncs when the radio
+                // reports a *changed* split, so a stale read-back can't revert it.
                 self.tx_vfo_b = is_b;
-                self.tx_vfo_hold = 10;
                 self.send(WorkerCmd::Cat(k4_protocol::cat::set_split(is_b)));
             }
             Message::SetAfGain(v) => {
@@ -1050,13 +1050,15 @@ impl App {
                     self.peer_cached = false;
                     self.power_off_armed = false;
                 }
-                // Track the radio's transmit VFO (split) when it reports one, but
-                // not during the post-click hold window (avoids a flicker-back
-                // before the radio's echo lands).
-                if self.tx_vfo_hold > 0 {
-                    self.tx_vfo_hold -= 1;
-                } else if let Some(s) = self.ui.split {
-                    self.tx_vfo_b = s;
+                // Re-sync the TX-VFO highlight only on a genuine split *transition*
+                // (incl. the radio's echo of our own change or an external one). A
+                // static or absent read-back leaves the optimistic value alone, so
+                // it never snaps back.
+                if self.ui.split != self.last_split {
+                    self.last_split = self.ui.split;
+                    if let Some(s) = self.ui.split {
+                        self.tx_vfo_b = s;
+                    }
                 }
                 // Follow the newest log line while auto-scroll is on (only when
                 // the log actually grew, so manual scrolling isn't fought).
