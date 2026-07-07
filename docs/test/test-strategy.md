@@ -1,8 +1,8 @@
 ---
 title: "Test Strategy & Traceability"
 status: Draft
-version: "0.44"
-updated: 2026-07-03
+version: "0.49"
+updated: 2026-07-07
 authors:
   - Simon Keimer (DC0SK)
 owns: [TC]
@@ -115,6 +115,7 @@ Maintained partly by hand (design intent) and verified/augmented by `xtask trace
 | FR-SW-01 | STK-02/11 | ARC-04 | TC-SW-01 (`SW` switch-emulation encode; M1–M4/PF key codes) | L1 | V\* |
 | FR-VOX-01 | STK-06 | ARC-04 | TC-VOX-01 (`VX` VOX on/off encode) | L1 | V\* |
 | FR-TX-MSG-01 | STK-07 | ARC-04 | TC-TXMSG-01 (`KY` text send encode, 60-char truncate) | L1 | V\* |
+| FR-PWR-01 | STK-11 | ARC-04/08 | TC-PWR-01 (`PS` power-off/restart encode); UI two-step confirm (demo) | L1 | V\* |
 | FR-PAN-CTL-01 | STK-10 | ARC-04 | TC-PAN-01 (`#`-display family: `#DPM/#SPN/#REF/#SCL/#AVG/#PKM/#WFC/#WFH/#NB/#NBL` encode) | L1 | V\* |
 | FR-MTR-01 | STK-04 | ARC-05/08 | TC-MTR-01 (SM auto-update) | L2 | V\* |
 | FR-MTR-02 | STK-04 | ARC-05 | TC-MTR-03 (SMH dBm parse) | L1 | V\* |
@@ -242,3 +243,8 @@ FR-SES-MULTI, FR-DIAG-02, etc. — get `TC` IDs when promoted to `Approved`.)*
 | 2026-07-03 | 0.42 | DC0SK | Audio device selection + level sliders: `k4-audio` device enumeration/`with_device`/`set_volume`/`set_mic_gain`; worker cmds; settings dialog Audio section (Speaker/Mic pick-lists + Volume/Mic-gain sliders). Persisted in prefs incl. theme (FR-AUD-DEV-01/LVL-01, FR-CFG-05). Completes FR-UI-23. 120 tests, 79 traced, 0 dangling. |
 | 2026-07-03 | 0.43 | DC0SK | Packaging + CI (NFR-PORT-02/PKG-01): enabled `ci.yml` (fmt/clippy/test/gate/audit across Linux x86_64+arm64, macOS, Windows) + `release.yml` (tag → .deb/.tar.gz/.zip). Added cargo-deb metadata (`.deb` built + inspected locally), Arch `PKGBUILD` (.SRCINFO valid), macOS bundle metadata, `vendored-tls` feature (Win/macOS OpenSSL from source), LICENSE (GPL-3.0), desktop entry, packaging/README. |
 | 2026-07-03 | 0.44 | DC0SK | App icon (`packaging/icons/`): master SVG → PNGs (16–512) + font-independent SVG + `.ico`. Wired into the `.deb` (hicolor theme, verified in the archive), Arch `PKGBUILD`, macOS bundle (`.icns` from PNGs), Windows `.exe` (build.rs + winresource), and the runtime iced window (taskbar). |
+| 2026-07-06 | 0.45 | DC0SK | FR-PWR-01: remote power off (`PS0`) + restart (`PS8`) via `set_power` (TC-PWR-01); Fn → SWITCHES "Radio power" controls with a two-step-guarded POWER OFF. 121 tests, 80 traced, 0 dangling. |
+| 2026-07-06 | 0.46 | DC0SK | UI optimizations: BW control cycles filter bandwidths (`BW`); DIAGNOSTICS gains LOG / AUTOSCROLL toggles + a fixed always-present scrollbar anchored to newest (FR-DIAG); spectrum frame fixed to `SCREEN_H` so it matches the config-screen slot exactly; TX → FUNC tab adds the six K4 transmit/antenna dual-function switches (TUNE/TUNE LP, ATU TUNE/TUNE, ANT/REM ANT, XMIT/TEST, VOX/QSK, RX ANT/SUB ANT via `SW`, `tx_function_switches` — FR-SW-01). 121 tests. |
+| 2026-07-06 | 0.47 | DC0SK | Feedback fixes: BW control cycles a local bandwidth value (immediate feedback, seeded from radio); DIAGNOSTICS auto-scroll driven by explicit snap-to-newest so OFF truly freezes the view; moved the six transmit/antenna dual-function switches out of a TX tab into the TRANSMIT panel (by ARM TX); bottom panels 168->220 px, window 884->940 px to fit. |
+| 2026-07-07 | 0.48 | DC0SK | Feedback: fixed the duplicate TRANSMIT switch — ATU TUNE hold is now ATU in/out (SW158) not a second TUNE; fixed auto-scroll OFF (snap_to left a sticky Relative(1.0) that kept following — now converts to a concrete absolute offset so the view freezes). |
+| 2026-07-07 | 0.49 | DC0SK | Fixes: settings Close button right-aligned; keyring root cause fixed — keyring v3 had NO backend feature (silent mock store), added apple-native/windows-native/sync-secret-service/crypto-rust, verified a real Secret Service round-trip via secret-tool; spectrum panes click-to-select TX VFO (FT/split, FR-UI-12) with accent frame + TX tag; spectrum canvas gained a dB scale + grid. |

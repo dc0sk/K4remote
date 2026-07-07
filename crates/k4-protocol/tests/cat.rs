@@ -6,10 +6,10 @@ use k4_protocol::cat::{
     set_bandwidth_hz, set_keyer, set_keyer_speed, set_line_in, set_line_out, set_mic_gain,
     set_mic_input, set_mic_setup, set_mode, set_mode_sub, set_nb, set_nr, set_pan_average,
     set_pan_mode, set_pan_nb, set_pan_nb_level, set_pan_peak, set_pan_ref, set_pan_scale,
-    set_pan_span_hz, set_preamp, set_rf_gain, set_rit, set_rx_antenna, set_rx_antenna_sub,
-    set_rx_eq, set_split, set_transverter_band, set_tx_antenna, set_tx_eq, set_vfo_a_hz,
-    set_vfo_b_hz, set_vox, set_waterfall_height, set_waterfall_palette, set_xit, switch,
-    vfo_copy_swap,
+    set_pan_span_hz, set_power, set_preamp, set_rf_gain, set_rit, set_rx_antenna,
+    set_rx_antenna_sub, set_rx_eq, set_split, set_transverter_band, set_tx_antenna, set_tx_eq,
+    set_vfo_a_hz, set_vfo_b_hz, set_vox, set_waterfall_height, set_waterfall_palette, set_xit,
+    switch, vfo_copy_swap,
 };
 
 /// trace: FR-VFO-01
@@ -179,4 +179,12 @@ fn fr_sw_01_switch_emulation() {
     assert_eq!(switch(17), "SW17;"); // tap M1
     assert_eq!(switch(162), "SW162;"); // hold M1 (store)
     assert_eq!(switch(153), "SW153;"); // PF1
+}
+
+/// trace: FR-PWR-01
+#[test]
+fn fr_pwr_01_power_control() {
+    assert_eq!(set_power(0), "PS0;"); // off
+    assert_eq!(set_power(8), "PS8;"); // restart
+    assert_eq!(set_power(88), "PS88;"); // auto-update + restart
 }

@@ -1,8 +1,8 @@
 ---
 title: "System Requirements Specification"
 status: Draft
-version: "0.13"
-updated: 2026-07-03
+version: "0.14"
+updated: 2026-07-06
 authors:
   - Simon Keimer (DC0SK)
 owns: [FR, NFR]
@@ -216,6 +216,7 @@ syntax per the Programmer's Reference D12, cross-checked vs QK4 (`R-EXT-03`).*
 | `FR-SW-01` | **emulate front-panel switch** tap/hold by code (PRG `SW`) to reach functions that have no dedicated CAT command — notably quick memories M1–M4 (recall/store) and PF1–PF4 (the memory-channel `MC` command being pending in D12). | STK-02/11 | C | T | `switch(code)` encodes `SW<code>;`; the quick-memory/PF/switch tables carry the correct codes. |
 | `FR-VOX-01` | control **VOX** on/off per transmit mode (PRG `VX`). | STK-06 | C | T | `set_vox(mode,on)` encodes `VX<mode><0/1>;`. |
 | `FR-TX-MSG-01` | **send CW/DATA text messages** for transmission (PRG `KY`, ≤60 chars). | STK-07 | C | T | `send_text(text)` encodes `KY <text>;` and truncates to 60 chars. |
+| `FR-PWR-01` | provide **remote power control** — **power off** (PRG `PS0`) and **restart** (`PS8`) — with the power-off action **guarded** against accidental activation (explicit confirm). Powering the radio **on** is not possible via CAT (the interface is unpowered when off, per D12). | STK-11 | C | T/D | `set_power(n)` encodes `PS<n>;` (0/8/88); the UI power-off requires a two-step confirm (demo). |
 
 ---
 
@@ -269,3 +270,4 @@ syntax per the Programmer's Reference D12, cross-checked vs QK4 (`R-EXT-03`).*
 | 2026-07-03 | 0.11 | DC0SK | Added FR-UI-20 (config screens seed from the radio on connect — read-back). FR-AUTH-02 (TLS-PSK, port 9204) now **implemented** and verified live against a real K4 (`connect_tls`): learned the exact PSK scheme (identity empty, key = raw password bytes, TLS 1.2 `PSK-AES256-CBC-SHA384`) and fixed a handshake-timeout + OpenSSL-security-level bug. Keychain I/O moved off the UI thread (FR-UI-07 hardening). |
 | 2026-07-03 | 0.12 | DC0SK | UI polish: extended FR-UI-18 (About now shows version + donate link + openable license/project/donate links); added FR-UI-21 (landscape default window) and FR-UI-22 (phase-coloured connection indicator). Also: TX box CLR sized to match SPLIT/RIT/XIT (2×2 grid). |
 | 2026-07-03 | 0.13 | DC0SK | Recorded new (proposed) requirements: NFR-PORT-02 (targets: RPi OS arm64 / Linux x86_64 / Windows x86_64 / macOS) + NFR-PKG-01 (Debian .deb, Arch PKGBUILD, Windows/macOS bundles); FR-UI-23 (application settings dialog housing the connection form + audio controls); FR-AUD-DEV-01 (RX/TX audio-device selection dropdowns); FR-AUD-LVL-01 (RX volume + TX mic-level sliders). Not yet implemented. |
+| 2026-07-06 | 0.14 | DC0SK | Added FR-PWR-01 (remote power off `PS0` / restart `PS8`, guarded power-off). No power-on via CAT (D12). Control on the Fn → SWITCHES tab. |
