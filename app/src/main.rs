@@ -180,6 +180,9 @@ struct App {
     // Text decode (FR-TXT-01): on/off + a poll-rate divider for the TB reads.
     decode_on: bool,
     decode_tick: u8,
+    // Periodic-resync divider: pulls radio→slider values and re-queries settings
+    // so changes made at the K4 sync back to the app (FR-CAT-07).
+    resync_tick: u32,
     // Which RX (VFO A/B) the frame controls target. Set by the header A/B and by
     // clicking a spectrum pane (needed in the A+B view where both are shown).
     active_rx_b: bool,
@@ -606,6 +609,7 @@ impl App {
             notch_pitch: 1000,
             decode_on: false,
             decode_tick: 0,
+            resync_tick: 0,
             active_rx_b: false,
             switch_flash: None,
             switch_flash_ticks: 0,
@@ -1460,10 +1464,26 @@ impl App {
                         self.cache_current_peer(); // FR-CFG-04
                         self.peer_cached = true;
                     }
+                    // Keep in step with changes made directly at the K4: pull the
+                    // radio state into the slider values every ~3 s, and re-query
+                    // all settings every ~8 s (in case a change isn't auto-pushed).
+                    self.resync_tick = self.resync_tick.wrapping_add(1);
+                    if self.resync_tick.is_multiple_of(20) {
+                        self.sync_locals();
+                    }
+                    if self.resync_tick.is_multiple_of(53) {
+                        for cmd in k4_protocol::state::connect_state_seed() {
+                            // Skip one-shot enables (`TM1;`) — only re-GET settings.
+                            if cmd.ends_with(";") && !cmd.starts_with("TM1") {
+                                self.send(WorkerCmd::Cat((*cmd).to_string()));
+                            }
+                        }
+                    }
                 } else {
                     self.seeded = false;
                     self.peer_cached = false;
                     self.power_off_armed = false;
+                    self.resync_tick = 0;
                 }
                 // Re-sync the TX-VFO highlight only on a genuine split *transition*
                 // (incl. the radio's echo of our own change or an external one). A
@@ -2357,6 +2377,16 @@ impl App {
             r.notch_pitch
         } {
             self.notch_pitch = v;
+        }
+        // TX sliders are not per-RX-VFO — always follow the radio.
+        if let Some(v) = r.tx_power {
+            self.tx_power = v;
+        }
+        if let Some(v) = r.compression {
+            self.compression = v;
+        }
+        if let Some(v) = r.cw_pitch {
+            self.cw_pitch = v;
         }
     }
 
@@ -3656,12 +3686,20 @@ impl App {
                 .padding([10, 0]),
             );
         let settings_card: Element<Message> = modal_scrim(
-            Container::new(scrollable(settings_inner))
-                .style(panel_style)
-                .padding(18)
-                .width(Length::Fixed(500.0))
-                .max_height(720.0)
-                .into(),
+            Container::new(scrollable(
+                // Inset the content so the scrollbar doesn't overlap it.
+                Container::new(settings_inner).padding(iced::Padding {
+                    top: 0.0,
+                    right: 16.0,
+                    bottom: 0.0,
+                    left: 0.0,
+                }),
+            ))
+            .style(panel_style)
+            .padding(18)
+            .width(Length::Fixed(500.0))
+            .max_height(720.0)
+            .into(),
         );
 
         // Diagnostics console (FR-DIAG-01/02). Log oldest→newest so auto-scroll
