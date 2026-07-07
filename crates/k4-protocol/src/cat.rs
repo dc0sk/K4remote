@@ -142,6 +142,22 @@ pub fn set_compression(level: u8) -> String {
     format!("CP{:03};", level.min(30))
 }
 
+/// Set VOX / QSK delay (`SD`): `full` = full break-in CW QSK; `mode_class` is
+/// `C` (CW/direct data), `V` (voice) or `D` (AF data); `delay` is 0–255 in
+/// 10-ms steps (0.00–2.55 s) — D12.
+///
+/// trace: FR-TX-DLY-01
+pub fn set_qsk_delay(full: bool, mode_class: char, delay: u8) -> String {
+    format!("SD{}{}{:03};", full as u8, mode_class, delay)
+}
+
+/// Set CW sidetone/pitch in Hz, 250–950 (`CW`, encoded ×10) — D12.
+///
+/// trace: FR-KEY-02
+pub fn set_cw_pitch(hz: u16) -> String {
+    format!("CW{:02};", (hz / 10).clamp(25, 95))
+}
+
 /// Set the RX attenuator: `db` ∈ {0,3,6,9,12,15,18,21}, on/off (`RA`).
 ///
 /// Example: `(12, true)` → `"RA121;"`.

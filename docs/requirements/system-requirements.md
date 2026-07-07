@@ -122,6 +122,7 @@ Programmer's Reference rev. D12 (`PRG`) command mnemonics.
 | `FR-TX-01` | initiate and end transmit (PTT) explicitly (`TX;`/`RX;`) only on deliberate operator action. | STK-06/13 | M | T | TX requires an explicit arm+activate; no implicit path sets TX. |
 | `FR-TX-02` | set transmit power (`PC`). | STK-06 | S | T | Power 50 W emits documented `PC…;`. |
 | `FR-TX-CMP-01` | set speech compression 0–30 (`CP`, SSB modes) and reflect the RESP. | STK-06 | C | T | `set_compression(15)` emits `CP015;`, clamps to 30, and reflects the `CP` RESP. |
+| `FR-TX-DLY-01` | set full break-in QSK and the VOX/QSK delay per mode class (`SD`). | STK-06 | C | T | `set_qsk_delay(false,'C',25)` emits `SD0C025;`; full-QSK sets `x=1`. |
 | `FR-TX-CW-01` | send CW from a connected paddle/key by emitting the remote key data stream (`KZ` with `.`/`-`/`U`/`D`/`P` elements; PRG `KZ`). | STK-07 | M | T | A dit then dah produces the documented `KZ` element sequence. |
 | `FR-TX-CW-02` | apply the configurable key-down initial delay (`KZL`, default 80 ms) and honour it in the stream timing. | STK-07 | S | T | `KZL` value is sent and used in stream scheduling. |
 | `FR-TX-CW-03` | send CW message/text keying (`KY`) for stored messages. | STK-07 | C | T | A stored message emits a `KY` command with the text. |
@@ -212,6 +213,7 @@ syntax per the Programmer's Reference D12, cross-checked vs QK4 (`R-EXT-03`).*
 |---|---|---|---|---|---|
 | `FR-EQ-01` | control the **8-band graphic equalizer** for RX (per receiver) and TX — set each 100–3200 Hz band's gain (−16..+16 dB) and flatten (PRG `RE`/`TE`/`REF`). | STK-03/06 | S | T | `RE`/`TE` encode 8 signed 3-char band fields within ±16; `REF;` flattens. |
 | `FR-KEY-01` | configure the **CW keyer**: weight, paddle normal/reverse, iambic mode A/B, and speed (PRG `KP`/`KS`). | STK-07 | S | T | `KP`/`KS` encode within range (weight 90–125, speed 8–100 WPM). |
+| `FR-KEY-02` | set the **CW sidetone/pitch** 250–950 Hz (`CW`, ×10). | STK-07 | C | T | `set_cw_pitch(600)` emits `CW60;`, clamps to 250–950 Hz. |
 | `FR-AUD-CFG-01` | configure **transmit audio input/output**: mic input source, mic gain, mic preamp/bias/buttons, and line in/out levels (PRG `MI`/`MG`/`MS`/`LI`/`LO`). | STK-06 | S | T | Each encoder emits the documented field layout within range. |
 | `FR-ANT-01` | select the **transmit antenna** (ANT1–3) and per-receiver **RX antenna** (PRG `AN`/`AR`). | STK-02 | C | T | `AN`/`AR` encode within range. |
 | `FR-MENU-01` | access the radio's **configuration menu** by item id — open, query definition, and set a menu parameter (PRG `MO`/`MEDF`/`ME`). | STK-11 | C | T | `MO`/`MEDF`/`ME` encode the 4-digit id (and value for set). |

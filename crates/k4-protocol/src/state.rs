@@ -72,6 +72,12 @@ pub struct RadioState {
     pub tx_power: Option<u16>,
     /// Speech compression, 0–30 (`CP`).
     pub compression: Option<u8>,
+    /// CW sidetone pitch, Hz (`CW`).
+    pub cw_pitch: Option<u16>,
+    /// Full break-in QSK on (`SD` x=1).
+    pub qsk_full: Option<bool>,
+    /// VOX/QSK delay, 10-ms units (`SD` zzz).
+    pub qsk_delay: Option<u8>,
     /// RX attenuator value, dB (`RA`).
     pub atten_db: Option<u8>,
     /// RX attenuator on/off (`RA`).
@@ -236,6 +242,19 @@ impl RadioState {
         } else if let Some(arg) = cmd.strip_prefix("CP") {
             if let Ok(v) = arg.parse::<u8>() {
                 self.compression = Some(v);
+            }
+        } else if let Some(arg) = cmd.strip_prefix("CW") {
+            if let Ok(v) = arg.parse::<u16>() {
+                self.cw_pitch = Some(v * 10);
+            }
+        } else if let Some(arg) = cmd.strip_prefix("SD") {
+            // `x y zzz`: full-QSK flag, mode class, then the 10-ms delay.
+            let b = arg.as_bytes();
+            if b.len() >= 5 {
+                self.qsk_full = Some(b[0] == b'1');
+                if let Ok(v) = arg[2..].parse::<u8>() {
+                    self.qsk_delay = Some(v);
+                }
             }
         } else if let Some(arg) = cmd.strip_prefix("RA") {
             // `nn` (dB) followed by a single on/off digit `m`.
@@ -426,7 +445,7 @@ pub fn connect_state_seed() -> &'static [&'static str] {
     &[
         "IF;", "FA;", "FB;", "MD;", "MD$;", "FT;", "SM;", "SMH;", // core
         "BW;", "AG;", "RG;", "SQ;", // RX levels (bandwidth, AF/RF gain, squelch)
-        "PC;", "CP;", // TX power, speech compression
+        "PC;", "CP;", "CW;", "SD;", // TX power, compression, CW pitch, QSK delay
         // Configuration-screen read-back (FR-UI-19 screens):
         "RE;", "TE;", "KP;", "KS;", "MI;", "MG;", "LO;", "AN;", "AR;", "AR$;", "VXV;", "BN;",
         "#REF;", "#SPN;", "#SCL;", "#DPM;", "#WFC;", "#WFH;",

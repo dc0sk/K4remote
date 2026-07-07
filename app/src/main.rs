@@ -166,6 +166,10 @@ struct App {
     // TX levels: power (W, QRO) and speech compression 0–30 (FR-TX-02, FR-TX-CMP-01).
     tx_power: u16,
     compression: u8,
+    // CW sidetone pitch Hz (FR-KEY-02); full-QSK + VOX/QSK delay 10-ms (FR-TX-DLY-01).
+    cw_pitch: u16,
+    qsk_full: bool,
+    qsk_delay: u8,
 }
 
 /// Which graphic equalizer a screen edits (FR-EQ-01).
@@ -359,6 +363,9 @@ enum Message {
     SetSquelch(u8),
     SetTxPower(u16),
     SetCompression(u8),
+    SetCwPitch(u16),
+    ToggleQskFull,
+    SetQskDelay(u8),
     ToggleNb,
     ToggleNr,
     TogglePreamp,
@@ -550,6 +557,9 @@ impl App {
             squelch: 0,
             tx_power: 10,
             compression: 0,
+            cw_pitch: 600,
+            qsk_full: false,
+            qsk_delay: 30,
         };
         (app, Task::none())
     }
@@ -837,6 +847,28 @@ impl App {
             Message::SetCompression(v) => {
                 self.compression = v;
                 self.send(WorkerCmd::Cat(k4_protocol::cat::set_compression(v)));
+            }
+            Message::SetCwPitch(hz) => {
+                self.cw_pitch = hz;
+                self.send(WorkerCmd::Cat(k4_protocol::cat::set_cw_pitch(hz)));
+            }
+            Message::ToggleQskFull => {
+                self.qsk_full = !self.qsk_full;
+                let mc = self.tx_mode_class();
+                self.send(WorkerCmd::Cat(k4_protocol::cat::set_qsk_delay(
+                    self.qsk_full,
+                    mc,
+                    self.qsk_delay,
+                )));
+            }
+            Message::SetQskDelay(v) => {
+                self.qsk_delay = v;
+                let mc = self.tx_mode_class();
+                self.send(WorkerCmd::Cat(k4_protocol::cat::set_qsk_delay(
+                    self.qsk_full,
+                    mc,
+                    v,
+                )));
             }
             Message::ToggleNb => self.send(WorkerCmd::ToggleNb),
             Message::ToggleNr => self.send(WorkerCmd::ToggleNr),
@@ -1579,6 +1611,8 @@ impl App {
     /// TX → KEYER sub-panel (`KS`/`KP`): speed, weight, paddle, iambic mode.
     fn tx_keyer(&self) -> Element<'_, Message> {
         let c = self.tx_cfg;
+        let dim = role_color(ui::ColorRole::Inactive);
+        let rxv = role_color(ui::ColorRole::RxValue);
         Column::new()
             .spacing(10)
             .push(
@@ -1609,7 +1643,54 @@ impl App {
                         Message::Tx(TxMsg::IambicB(!c.iambic_b)),
                     )),
             )
+            .push(
+                // CW sidetone pitch (FR-KEY-02).
+                Row::new()
+                    .spacing(6)
+                    .align_y(Alignment::Center)
+                    .push(Text::new("PITCH").size(11).color(dim))
+                    .push(
+                        slider(250..=950u16, self.cw_pitch, Message::SetCwPitch)
+                            .step(10u16)
+                            .width(Length::Fixed(140.0)),
+                    )
+                    .push(
+                        Text::new(format!("{} Hz", self.cw_pitch))
+                            .size(11)
+                            .color(rxv),
+                    ),
+            )
+            .push(
+                // Full break-in QSK + VOX/QSK delay for the current mode (FR-TX-DLY-01).
+                Row::new()
+                    .spacing(6)
+                    .align_y(Alignment::Center)
+                    .push(small_btn_string(
+                        format!("QSK: {}", if self.qsk_full { "FULL" } else { "DELAY" }),
+                        Message::ToggleQskFull,
+                    ))
+                    .push(Text::new("DLY").size(11).color(dim))
+                    .push(
+                        slider(0..=255u8, self.qsk_delay, Message::SetQskDelay)
+                            .width(Length::Fixed(120.0)),
+                    )
+                    .push(
+                        Text::new(format!("{} ms", u16::from(self.qsk_delay) * 10))
+                            .size(11)
+                            .color(rxv),
+                    ),
+            )
             .into()
+    }
+
+    /// Mode class for the `SD` delay command, derived from the main mode (`C`=CW
+    /// & direct data, `D`=AF data, `V`=voice) — FR-TX-DLY-01.
+    fn tx_mode_class(&self) -> char {
+        match self.ui.mode_a {
+            Some("CW") | Some("CW-R") => 'C',
+            Some("DATA") | Some("DATA-R") | Some("FSK") | Some("FSK-D") => 'D',
+            _ => 'V',
+        }
     }
 
     /// TX → MIC sub-panel (`MI`/`MG`/`MS`): input, gain, front preamp, bias.
@@ -1904,6 +1985,15 @@ impl App {
         }
         if let Some(v) = r.compression {
             self.compression = v;
+        }
+        if let Some(v) = r.cw_pitch {
+            self.cw_pitch = v;
+        }
+        if let Some(v) = r.qsk_full {
+            self.qsk_full = v;
+        }
+        if let Some(v) = r.qsk_delay {
+            self.qsk_delay = v;
         }
         if let Some(v) = r.rx_eq {
             self.rx_eq = v;
