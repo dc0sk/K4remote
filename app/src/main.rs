@@ -74,6 +74,7 @@ struct App {
     password: String,
     // tuning form
     freq_mhz: String,
+    freq_b_mhz: String,
     // use TLS-PSK (port 9204) instead of plaintext (9205)
     use_tls: bool,
     // serial (USB/RS232) transport instead of Ethernet
@@ -374,6 +375,9 @@ enum Message {
     PortChanged(String),
     PasswordChanged(String),
     FreqChanged(String),
+    FreqBChanged(String),
+    SetFreqB,
+    Tune(bool, bool),
     Connect,
     Disconnect,
     ToggleTls,
@@ -416,6 +420,7 @@ enum Message {
     ToggleRit,
     ToggleXit,
     ClearRitXit,
+    AdjustRitOffset(i16),
     ToggleArm,
     ToggleKey,
     EmergencyStop,
@@ -551,6 +556,7 @@ impl App {
             port: last.port.to_string(),
             password,
             freq_mhz: "14.074".into(),
+            freq_b_mhz: "14.074".into(),
             use_tls: last.use_tls,
             serial_mode: false,
             serial_path: "/dev/ttyUSB0".into(),
@@ -1075,6 +1081,22 @@ impl App {
                     self.send(WorkerCmd::SetFreqA(hz));
                 }
             }
+            Message::SetFreqB => {
+                if let Some(hz) = parse_mhz(&self.freq_b_mhz) {
+                    self.send(WorkerCmd::SetFreqB(hz));
+                }
+            }
+            Message::FreqBChanged(v) => self.freq_b_mhz = v,
+            Message::Tune(is_b, up) => {
+                // VFO up/down one step at the radio's current step size.
+                let cmd = match (is_b, up) {
+                    (false, true) => "UP;",
+                    (false, false) => "DN;",
+                    (true, true) => "UPB;",
+                    (true, false) => "DNB;",
+                };
+                self.send(WorkerCmd::Cat(cmd.to_string()));
+            }
             Message::SetMode(digit) => self.send(WorkerCmd::SetMode(digit)),
             Message::Band(up) => self.send(WorkerCmd::Band(up)),
             Message::ToggleAtten => {
@@ -1267,6 +1289,10 @@ impl App {
             Message::ToggleRit => self.send(WorkerCmd::ToggleRit),
             Message::ToggleXit => self.send(WorkerCmd::ToggleXit),
             Message::ClearRitXit => self.send(WorkerCmd::ClearRitXit),
+            Message::AdjustRitOffset(d) => {
+                let next = (self.ui.radio.rit_offset.unwrap_or(0) + d).clamp(-9999, 9999);
+                self.send(WorkerCmd::Cat(k4_protocol::cat::set_rit_offset(next)));
+            }
             Message::ToggleArm => self.send(WorkerCmd::ArmTx(!self.ui.tx_armed)),
             Message::ToggleKey => self.send(WorkerCmd::Key(!self.ui.transmitting)),
             Message::EmergencyStop => self.send(WorkerCmd::EmergencyStop),
@@ -1605,15 +1631,24 @@ impl App {
             ui::ColorRole::RxValue
         };
 
+        // Per-VFO step tuning (UP/DN for A, UPB/DNB for B) at the radio's step.
+        let tune_btn = |lbl: &'static str, up: bool| {
+            Button::new(Text::new(lbl).size(15))
+                .style(btn_style(BtnKind::Plain))
+                .padding([2, 8])
+                .on_press(Message::Tune(is_b, up))
+        };
         let head = Row::new()
             .spacing(10)
             .align_y(Alignment::Center)
             .push(badge(pane.label(), role))
+            .push(tune_btn("◄", false))
             .push(
                 Text::new(ui::format_freq_opt(hz))
                     .size(38)
                     .color(role_color(freq_role)),
             )
+            .push(tune_btn("►", true))
             .push(horizontal_space())
             .push(
                 Text::new(mode.unwrap_or("—"))
@@ -1710,7 +1745,27 @@ impl App {
                         Some(Message::ToggleXit),
                     ))
                     .push(two_line_btn(clr_state, None, Some(Message::ClearRitXit))),
-            );
+            )
+            // RIT/XIT offset readout + fine adjust (FR-VFO-05).
+            .push({
+                let off = self.ui.radio.rit_offset.unwrap_or(0);
+                let step_btn = |lbl: &'static str, d: i16| {
+                    Button::new(Text::new(lbl).size(12))
+                        .style(btn_style(BtnKind::Plain))
+                        .padding([2, 8])
+                        .on_press(Message::AdjustRitOffset(d))
+                };
+                Row::new()
+                    .spacing(6)
+                    .align_y(Alignment::Center)
+                    .push(step_btn("−", -10))
+                    .push(
+                        Text::new(format!("{off:+} Hz"))
+                            .size(12)
+                            .color(role_color(ui::ColorRole::RxValue)),
+                    )
+                    .push(step_btn("+", 10))
+            });
         Container::new(col)
             .style(panel_style)
             .padding(10)
@@ -3318,7 +3373,11 @@ impl App {
             .push(mode_btn("LSB", 1))
             .push(mode_btn("USB", 2))
             .push(mode_btn("CW", 3))
+            .push(mode_btn("CW-R", 7))
             .push(mode_btn("DATA", 6))
+            .push(mode_btn("DATA-R", 9))
+            .push(mode_btn("AM", 5))
+            .push(mode_btn("FM", 4))
             .push(small_btn("BAND −", Message::Band(false)))
             .push(small_btn("BAND +", Message::Band(true)))
             .push(
@@ -3338,15 +3397,24 @@ impl App {
             .push(small_btn_string("FL3".into(), Message::FilterPreset(3)))
             .push(small_btn("NORMALIZE", Message::FilterNormalize))
             .push(horizontal_space())
-            .push(Text::new("VFO A MHz").size(12).color(dim))
+            .push(Text::new("A MHz").size(12).color(dim))
             .push(
                 TextInput::new("14.074", &self.freq_mhz)
                     .on_input(Message::FreqChanged)
                     .on_submit(Message::SetFreq)
                     .size(13)
-                    .width(Length::Fixed(110.0)),
+                    .width(Length::Fixed(96.0)),
             )
-            .push(small_btn("SET", Message::SetFreq));
+            .push(small_btn("SET", Message::SetFreq))
+            .push(Text::new("B MHz").size(12).color(dim))
+            .push(
+                TextInput::new("14.074", &self.freq_b_mhz)
+                    .on_input(Message::FreqBChanged)
+                    .on_submit(Message::SetFreqB)
+                    .size(13)
+                    .width(Length::Fixed(96.0)),
+            )
+            .push(small_btn("SET", Message::SetFreqB));
         // AF/RF gain + squelch sliders for the main receiver (FR-RX-01,
         // FR-RX-SQL-01) — the K4's RF/SQL knob, plus radio-side AF.
         let rxv = role_color(ui::ColorRole::RxValue);

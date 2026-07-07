@@ -72,6 +72,8 @@ pub enum WorkerCmd {
     Disconnect,
     /// Set VFO A frequency in Hz.
     SetFreqA(u64),
+    /// Set VFO B frequency in Hz.
+    SetFreqB(u64),
     /// Set main-RX mode (raw `MD` digit, e.g. 3 = CW).
     SetMode(u8),
     /// Band up (`true`) / down (`false`).
@@ -704,6 +706,11 @@ fn handle_cmd(cmd: WorkerCmd, ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnaps
         WorkerCmd::SetFreqA(hz) => {
             if let Some(s) = ws.session.as_mut() {
                 let _ = s.send(&k4_protocol::cat::set_vfo_a_hz(hz));
+            }
+        }
+        WorkerCmd::SetFreqB(hz) => {
+            if let Some(s) = ws.session.as_mut() {
+                let _ = s.send(&k4_protocol::cat::set_vfo_b_hz(hz));
             }
         }
         WorkerCmd::SetMode(digit) => {

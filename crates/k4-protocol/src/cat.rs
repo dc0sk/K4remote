@@ -327,6 +327,18 @@ pub fn clear_rit_xit() -> &'static str {
     "RC;"
 }
 
+/// Set the RIT/XIT offset in Hz (`RO`; `snnnn`, ±9999).
+///
+/// trace: FR-VFO-05
+pub fn set_rit_offset(hz: i16) -> String {
+    let hz = hz.clamp(-9999, 9999);
+    format!(
+        "RO{}{:04};",
+        if hz < 0 { '-' } else { '+' },
+        hz.unsigned_abs()
+    )
+}
+
 // --- K4 configuration-screen commands (FR-UI-19 screens) --------------------
 // Syntax per K4 Programmer's Reference rev. D12, cross-checked vs QK4
 // (see docs/concept/k4-screens.md §3.2). Confirm the ranges marked "verify"
