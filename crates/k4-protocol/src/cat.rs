@@ -135,6 +135,29 @@ pub fn set_tx_power(watts: u16) -> String {
     format!("PC{:03}H;", watts.min(110))
 }
 
+/// Set transmit power in a chosen range (`PCnnnr`): `H` (QRO, `nnn` = 1–110 W),
+/// `L` (QRP, `nnn` = 0.1 W units, 0–100 = 10.0 W) or `X` (mW, same 0.1 units).
+///
+/// trace: FR-TX-02
+pub fn set_tx_power_range(nnn: u16, range: char) -> String {
+    let max = if range == 'H' { 110 } else { 100 };
+    format!("PC{:03}{};", nnn.min(max), range)
+}
+
+/// Set the VOX gain (`VG`): `m` = `V` (voice) / `D` (AF data), level 0–60.
+///
+/// trace: FR-VOX-02
+pub fn set_vox_gain(m: char, level: u8) -> String {
+    format!("VG{}{:03};", m, level.min(60))
+}
+
+/// Set the anti-VOX (VOX inhibit) level 0–60 (`VI`).
+///
+/// trace: FR-VOX-02
+pub fn set_antivox(level: u8) -> String {
+    format!("VI{:03};", level.min(60))
+}
+
 /// Set speech compression, 0–30 (`CP`; SSB modes only) — D12.
 ///
 /// trace: FR-TX-CMP-01
