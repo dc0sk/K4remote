@@ -140,6 +140,8 @@ pub struct RadioState {
     pub nr_level: Option<u8>,
     /// Preamp on/off (`PA`).
     pub preamp_on: Option<bool>,
+    /// RIT/XIT offset, Hz (from `IF`/`RO`; ±9999).
+    pub rit_offset: Option<i16>,
     /// RIT on/off (`RT`).
     pub rit_on: Option<bool>,
     /// XIT on/off (`XT`).
@@ -417,6 +419,13 @@ impl RadioState {
             if b.len() >= 2 {
                 *sub_or(&mut self.preamp_on, &mut self.sub_preamp_on, sub) = Some(b[1] == b'1');
             }
+        } else if let Some(arg) = cmd.strip_prefix("RO") {
+            // `ROsnnnn` — signed offset in Hz (RO$ = sub form; either updates the
+            // shared RIT/XIT offset display).
+            let (_, a) = split_sub(arg);
+            if let Ok(mag) = a.get(1..5).unwrap_or("").parse::<i16>() {
+                self.rit_offset = Some(if a.starts_with('-') { -mag } else { mag });
+            }
         } else if let Some(arg) = cmd.strip_prefix("RT") {
             if let Some(m) = arg.bytes().next() {
                 self.rit_on = Some(m == b'1');
@@ -544,6 +553,10 @@ impl RadioState {
         if let Ok(hz) = arg[0..11].parse::<u64>() {
             self.vfo_a_hz = Some(hz);
         }
+        // RIT/XIT offset: sign at byte 16, magnitude (Hz) at bytes 17..21.
+        if let Ok(mag) = arg[17..21].parse::<i16>() {
+            self.rit_offset = Some(if b[16] == b'-' { -mag } else { mag });
+        }
         self.transmitting = Some(b[26] == b'1');
         self.mode_a = Mode::from_md_digit(b[27]);
         self.scanning = Some(b[29] == b'1'); // `s` scan-in-progress flag
@@ -630,6 +643,7 @@ pub fn connect_state_seed() -> &'static [&'static str] {
         "TM1;", // enable auto TX metering (RF/ALC/SWR/CMP during transmit)
         "AT;", "ACM;", "ACS;", // ATU mode + RX/sub antenna access masks
         "SN;",  // K4 serial number (for config-export filenames)
+        "RO;",  // RIT/XIT offset (Hz)
         // Configuration-screen read-back (FR-UI-19 screens):
         "RE;", "TE;", "KP;", "KS;", "MI;", "MG;", "LO;", "AN;", "AR;", "AR$;", "VXV;", "BN;",
         "#REF;", "#SPN;", "#SCL;", "#DPM;", "#WFC;", "#WFH;",

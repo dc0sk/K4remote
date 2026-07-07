@@ -8,10 +8,11 @@ use k4_protocol::cat::{
     set_line_out, set_manual_notch, set_mic_gain, set_mic_input, set_mic_setup, set_mode,
     set_mode_sub, set_nb, set_nr, set_pan_average, set_pan_mode, set_pan_nb, set_pan_nb_level,
     set_pan_peak, set_pan_ref, set_pan_scale, set_pan_span_hz, set_passband_edges_hz, set_power,
-    set_preamp, set_qsk_delay, set_rf_gain, set_rit, set_rx_antenna, set_rx_antenna_sub, set_rx_eq,
-    set_shift_hz, set_split, set_squelch, set_sub_rx, set_text_decode, set_transverter_band,
-    set_tx_antenna, set_tx_eq, set_tx_power, set_vfo_a_hz, set_vfo_b_hz, set_vox,
-    set_waterfall_height, set_waterfall_palette, set_xit, switch, vfo_copy_swap,
+    set_preamp, set_qsk_delay, set_rf_gain, set_rit, set_rit_offset, set_rx_antenna,
+    set_rx_antenna_sub, set_rx_eq, set_shift_hz, set_split, set_squelch, set_sub_rx,
+    set_text_decode, set_transverter_band, set_tx_antenna, set_tx_eq, set_tx_power, set_vfo_a_hz,
+    set_vfo_b_hz, set_vox, set_waterfall_height, set_waterfall_palette, set_xit, switch,
+    vfo_copy_swap,
 };
 
 /// trace: FR-VFO-01
@@ -159,6 +160,10 @@ fn fr_vfo_05_rit_xit() {
     assert_eq!(set_rit(true), "RT1;");
     assert_eq!(set_xit(false), "XT0;");
     assert_eq!(clear_rit_xit(), "RC;");
+    assert_eq!(set_rit_offset(0), "RO+0000;");
+    assert_eq!(set_rit_offset(250), "RO+0250;");
+    assert_eq!(set_rit_offset(-1500), "RO-1500;");
+    assert_eq!(set_rit_offset(30000), "RO+9999;"); // clamped
 }
 
 // --- Phase-0 configuration-screen commands (FR-UI-19) ----------------------
