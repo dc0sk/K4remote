@@ -106,6 +106,7 @@ Programmer's Reference rev. D12 (`PRG`) command mnemonics.
 | `FR-RX-05` | select the RX antenna where applicable (`AR`/`AN`). | STK-03 | C | T | Antenna selection reflected in state. |
 | `FR-RX-06` | enable/disable and balance the sub receiver (`SB`, `BL`). | STK-03 | C | T | Sub-RX on and balance reflected in state. |
 | `FR-RX-SQL-01` | set and display the main-receiver squelch threshold 0–40 (`SQ`; `$`=sub). | STK-03 | S | T | `set_squelch(22)` emits `SQ022;`, clamps to 40, and reflects the `SQ` RESP. |
+| `FR-DIV-01` | enable/disable **diversity** reception (`DV`) and the **sub receiver** (`SB`), reflecting both states; note diversity implies sub-RX on. | STK-03 | C | T | `set_diversity(true)` emits `DV1;`, `set_sub_rx(true)` emits `SB1;`; DV/SB RESP update state. |
 
 ## G. Metering — `FR-MTR`
 
