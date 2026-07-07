@@ -927,7 +927,7 @@ impl App {
                 self.send(WorkerCmd::Cat("SB;".into()));
             }
             Message::ToggleManualNotch => {
-                let on = self.ui.radio.notch_on != Some(true);
+                let on = self.rx_notch_on() != Some(true);
                 let sub = self.active_sub();
                 self.send(WorkerCmd::Cat(target_rx(
                     k4_protocol::cat::set_manual_notch(on, self.notch_pitch),
@@ -937,7 +937,7 @@ impl App {
             }
             Message::SetNotchPitch(p) => {
                 self.notch_pitch = p;
-                let on = self.ui.radio.notch_on == Some(true);
+                let on = self.rx_notch_on() == Some(true);
                 let sub = self.active_sub();
                 self.send(WorkerCmd::Cat(target_rx(
                     k4_protocol::cat::set_manual_notch(on, p),
@@ -945,7 +945,7 @@ impl App {
                 )));
             }
             Message::ToggleAutoNotch => {
-                let on = self.ui.radio.auto_notch != Some(true);
+                let on = self.rx_auto_notch() != Some(true);
                 let sub = self.active_sub();
                 self.send(WorkerCmd::Cat(target_rx(
                     k4_protocol::cat::set_auto_notch(on),
@@ -954,8 +954,8 @@ impl App {
                 self.send(WorkerCmd::Cat(target_rx("NA;".into(), sub)));
             }
             Message::ToggleApf => {
-                let on = self.ui.radio.apf_on != Some(true);
-                let w = self.ui.radio.apf_width.unwrap_or(1);
+                let on = self.rx_apf_on() != Some(true);
+                let w = self.rx_apf_width().unwrap_or(1);
                 let sub = self.active_sub();
                 self.send(WorkerCmd::Cat(target_rx(
                     k4_protocol::cat::set_apf(on, w),
@@ -964,8 +964,8 @@ impl App {
                 self.send(WorkerCmd::Cat(target_rx("AP;".into(), sub)));
             }
             Message::CycleApfWidth => {
-                let w = (self.ui.radio.apf_width.unwrap_or(0) + 1) % 3;
-                let on = self.ui.radio.apf_on == Some(true);
+                let w = (self.rx_apf_width().unwrap_or(0) + 1) % 3;
+                let on = self.rx_apf_on() == Some(true);
                 self.send(WorkerCmd::Cat(target_rx(
                     k4_protocol::cat::set_apf(on, w),
                     self.active_sub(),
@@ -988,7 +988,10 @@ impl App {
                     self.cat_input.clear();
                 }
             }
-            Message::SetViewMode(m) => self.view_mode = m,
+            Message::SetViewMode(m) => {
+                self.view_mode = m;
+                self.sync_locals(); // load the newly-active RX VFO's slider values
+            }
             Message::TapPrimary(p) => {
                 self.power_off_armed = false; // navigating away disarms power-off
                 self.context.tap(p);
@@ -1336,6 +1339,7 @@ impl App {
         let cmd = match d {
             DispMsg::Mode(m) => {
                 self.view_mode = m;
+                self.sync_locals(); // active RX VFO may have changed
                 cat::set_pan_mode(pan_mode_code(m))
             }
             DispMsg::Ref(v) => {
@@ -1555,24 +1559,24 @@ impl App {
                     .spacing(6)
                     .align_y(Alignment::Center)
                     .push(two_line_btn(
-                        ui::toggle_button("NOTCH", self.ui.radio.notch_on),
-                        self.ui.radio.notch_on,
+                        ui::toggle_button("NOTCH", self.rx_notch_on()),
+                        self.rx_notch_on(),
                         Some(Message::ToggleManualNotch),
                     ))
                     .push(two_line_btn(
-                        ui::toggle_button("AUTO NCH", self.ui.radio.auto_notch),
-                        self.ui.radio.auto_notch,
+                        ui::toggle_button("AUTO NCH", self.rx_auto_notch()),
+                        self.rx_auto_notch(),
                         Some(Message::ToggleAutoNotch),
                     ))
                     .push(two_line_btn(
-                        ui::toggle_button("APF", self.ui.radio.apf_on),
-                        self.ui.radio.apf_on,
+                        ui::toggle_button("APF", self.rx_apf_on()),
+                        self.rx_apf_on(),
                         Some(Message::ToggleApf),
                     ))
                     .push(small_btn_string(
                         format!(
                             "BW {}",
-                            match self.ui.radio.apf_width {
+                            match self.rx_apf_width() {
                                 Some(0) => "30",
                                 Some(1) => "50",
                                 Some(2) => "150",
@@ -1902,6 +1906,69 @@ impl App {
             "B"
         } else {
             "A"
+        }
+    }
+
+    // Notch/APF state for the *active* RX VFO (main or sub `$` read-back).
+    fn rx_notch_on(&self) -> Option<bool> {
+        if self.active_sub() {
+            self.ui.radio.sub_notch_on
+        } else {
+            self.ui.radio.notch_on
+        }
+    }
+    fn rx_auto_notch(&self) -> Option<bool> {
+        if self.active_sub() {
+            self.ui.radio.sub_auto_notch
+        } else {
+            self.ui.radio.auto_notch
+        }
+    }
+    fn rx_apf_on(&self) -> Option<bool> {
+        if self.active_sub() {
+            self.ui.radio.sub_apf_on
+        } else {
+            self.ui.radio.apf_on
+        }
+    }
+    fn rx_apf_width(&self) -> Option<u8> {
+        if self.active_sub() {
+            self.ui.radio.sub_apf_width
+        } else {
+            self.ui.radio.apf_width
+        }
+    }
+
+    /// Load the local slider values (BW/AF/RF/SQL/shift/notch-pitch) from the
+    /// active RX VFO's radio state, so they reflect A or B after a view switch.
+    fn sync_locals(&mut self) {
+        let r = self.ui.radio.clone();
+        let sub = self.active_sub();
+        if let Some(v) = if sub {
+            r.sub_bandwidth_hz
+        } else {
+            r.bandwidth_hz
+        } {
+            self.bw_hz = v;
+        }
+        if let Some(v) = if sub { r.sub_af_gain } else { r.af_gain } {
+            self.af_gain = v;
+        }
+        if let Some(v) = if sub { r.sub_rf_gain_db } else { r.rf_gain_db } {
+            self.rf_gain = v;
+        }
+        if let Some(v) = if sub { r.sub_squelch } else { r.squelch } {
+            self.squelch = v;
+        }
+        if let Some(v) = if sub { r.sub_shift_hz } else { r.shift_hz } {
+            self.shift_hz = v;
+        }
+        if let Some(v) = if sub {
+            r.sub_notch_pitch
+        } else {
+            r.notch_pitch
+        } {
+            self.notch_pitch = v;
         }
     }
 
