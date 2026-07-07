@@ -302,7 +302,7 @@ pub fn conn_status(phase: ConnPhase) -> (&'static str, ColorRole) {
 /// height fits the fixed-height content (VFO band + screen slot + panels) so the
 /// window opens without a scrollbar.
 /// trace: FR-UI-21
-pub const DEFAULT_WINDOW_SIZE: (f32, f32) = (1280.0, 972.0);
+pub const DEFAULT_WINDOW_SIZE: (f32, f32) = (1280.0, 1052.0);
 
 /// Colour role for a VFO's header given which receiver it is, whether it is the
 /// transmit VFO (split-aware), and whether the radio is transmitting. Transmit

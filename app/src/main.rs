@@ -331,7 +331,6 @@ enum RxTab {
     Eq,
     Ant,
     LineOut,
-    Filter,
 }
 
 /// A single RX config adjustment (FR-ANT-01/FR-AUD-CFG-01).
@@ -835,8 +834,9 @@ impl App {
                     .copied()
                     .find(|&b| b > self.bw_hz)
                     .unwrap_or(BW[0]);
-                self.send(WorkerCmd::Cat(k4_protocol::cat::set_bandwidth_hz(
-                    self.bw_hz,
+                self.send(WorkerCmd::Cat(target_rx(
+                    k4_protocol::cat::set_bandwidth_hz(self.bw_hz),
+                    self.active_sub(),
                 )));
             }
             Message::SelectTxVfo(is_b) => {
@@ -848,15 +848,24 @@ impl App {
             }
             Message::SetAfGain(v) => {
                 self.af_gain = v;
-                self.send(WorkerCmd::Cat(k4_protocol::cat::set_af_gain(v)));
+                self.send(WorkerCmd::Cat(target_rx(
+                    k4_protocol::cat::set_af_gain(v),
+                    self.active_sub(),
+                )));
             }
             Message::SetRfGain(v) => {
                 self.rf_gain = v;
-                self.send(WorkerCmd::Cat(k4_protocol::cat::set_rf_gain(v)));
+                self.send(WorkerCmd::Cat(target_rx(
+                    k4_protocol::cat::set_rf_gain(v),
+                    self.active_sub(),
+                )));
             }
             Message::SetSquelch(v) => {
                 self.squelch = v;
-                self.send(WorkerCmd::Cat(k4_protocol::cat::set_squelch(v)));
+                self.send(WorkerCmd::Cat(target_rx(
+                    k4_protocol::cat::set_squelch(v),
+                    self.active_sub(),
+                )));
             }
             Message::SetTxPower(v) => {
                 self.tx_power = v;
@@ -890,14 +899,19 @@ impl App {
             }
             Message::SetShift(hz) => {
                 self.shift_hz = hz;
-                self.send(WorkerCmd::Cat(k4_protocol::cat::set_shift_hz(hz)));
+                self.send(WorkerCmd::Cat(target_rx(
+                    k4_protocol::cat::set_shift_hz(hz),
+                    self.active_sub(),
+                )));
             }
-            Message::FilterPreset(n) => {
-                self.send(WorkerCmd::Cat(k4_protocol::cat::set_filter_preset(n)))
-            }
-            Message::FilterNormalize => self.send(WorkerCmd::Cat(
+            Message::FilterPreset(n) => self.send(WorkerCmd::Cat(target_rx(
+                k4_protocol::cat::set_filter_preset(n),
+                self.active_sub(),
+            ))),
+            Message::FilterNormalize => self.send(WorkerCmd::Cat(target_rx(
                 k4_protocol::cat::filter_normalize().to_string(),
-            )),
+                self.active_sub(),
+            ))),
             Message::ToggleSubRx => {
                 let on = self.ui.radio.sub_rx != Some(true);
                 self.send(WorkerCmd::Cat(k4_protocol::cat::set_sub_rx(on)));
@@ -914,29 +928,48 @@ impl App {
             }
             Message::ToggleManualNotch => {
                 let on = self.ui.radio.notch_on != Some(true);
-                self.send(WorkerCmd::Cat(k4_protocol::cat::set_manual_notch(
-                    on,
-                    self.notch_pitch,
+                let sub = self.active_sub();
+                self.send(WorkerCmd::Cat(target_rx(
+                    k4_protocol::cat::set_manual_notch(on, self.notch_pitch),
+                    sub,
                 )));
+                self.send(WorkerCmd::Cat(target_rx("NM;".into(), sub)));
             }
             Message::SetNotchPitch(p) => {
                 self.notch_pitch = p;
                 let on = self.ui.radio.notch_on == Some(true);
-                self.send(WorkerCmd::Cat(k4_protocol::cat::set_manual_notch(on, p)));
+                let sub = self.active_sub();
+                self.send(WorkerCmd::Cat(target_rx(
+                    k4_protocol::cat::set_manual_notch(on, p),
+                    sub,
+                )));
             }
             Message::ToggleAutoNotch => {
                 let on = self.ui.radio.auto_notch != Some(true);
-                self.send(WorkerCmd::Cat(k4_protocol::cat::set_auto_notch(on)));
+                let sub = self.active_sub();
+                self.send(WorkerCmd::Cat(target_rx(
+                    k4_protocol::cat::set_auto_notch(on),
+                    sub,
+                )));
+                self.send(WorkerCmd::Cat(target_rx("NA;".into(), sub)));
             }
             Message::ToggleApf => {
                 let on = self.ui.radio.apf_on != Some(true);
                 let w = self.ui.radio.apf_width.unwrap_or(1);
-                self.send(WorkerCmd::Cat(k4_protocol::cat::set_apf(on, w)));
+                let sub = self.active_sub();
+                self.send(WorkerCmd::Cat(target_rx(
+                    k4_protocol::cat::set_apf(on, w),
+                    sub,
+                )));
+                self.send(WorkerCmd::Cat(target_rx("AP;".into(), sub)));
             }
             Message::CycleApfWidth => {
                 let w = (self.ui.radio.apf_width.unwrap_or(0) + 1) % 3;
                 let on = self.ui.radio.apf_on == Some(true);
-                self.send(WorkerCmd::Cat(k4_protocol::cat::set_apf(on, w)));
+                self.send(WorkerCmd::Cat(target_rx(
+                    k4_protocol::cat::set_apf(on, w),
+                    self.active_sub(),
+                )));
             }
             Message::ToggleNb => self.send(WorkerCmd::ToggleNb),
             Message::ToggleNr => self.send(WorkerCmd::ToggleNr),
@@ -1459,13 +1492,10 @@ impl App {
             .push(tab_btn(RxTab::Eq, "EQ"))
             .push(tab_btn(RxTab::Ant, "ANT"));
         if !sub {
-            tabs = tabs
-                .push(tab_btn(RxTab::Filter, "FILTER"))
-                .push(tab_btn(RxTab::LineOut, "LINE OUT"));
+            tabs = tabs.push(tab_btn(RxTab::LineOut, "LINE OUT"));
         }
         let content: Element<Message> = match self.rx_tab {
             RxTab::Ant => self.rx_ant_panel(sub),
-            RxTab::Filter if !sub => self.rx_filter_panel(),
             RxTab::LineOut if !sub => self.line_out_panel(),
             // EQ (and LINE OUT falls back to EQ on the sub receiver).
             _ if sub => self.eq_screen(
@@ -1481,16 +1511,19 @@ impl App {
     }
 
     /// RX → FILTER sub-panel: per-mode filter presets (`FP`, FR-MODE-03),
-    /// passband shift / AF center pitch (`IS`, FR-FIL-01), and a BW shortcut.
-    fn rx_filter_panel(&self) -> Element<'_, Message> {
+    /// Filter + notch cluster for the RX frame (FR-MODE-03/FR-FIL-01/
+    /// FR-RX-NOTCH-01/FR-RX-APF-01). Two invisible columns so each slider lines
+    /// up under its buttons: left = FL1/2/3 + NORMALIZE over the SHIFT slider,
+    /// right = NOTCH + AUTO NCH over the PITCH slider, with APF beneath. All apply
+    /// to the active RX VFO (see `target_rx`).
+    fn rx_filter_cluster(&self) -> Element<'_, Message> {
         let dim = role_color(ui::ColorRole::Inactive);
         let rxv = role_color(ui::ColorRole::RxValue);
         let preset = |label: &'static str, n: u8| {
             small_btn_string(label.to_string(), Message::FilterPreset(n))
         };
-        Column::new()
-            .spacing(12)
-            .push(Text::new("Filter presets (saved per mode)").size(12).color(rxv))
+        let left = Column::new()
+            .spacing(6)
             .push(
                 Row::new()
                     .spacing(6)
@@ -1507,18 +1540,16 @@ impl App {
                     .push(
                         slider(200..=3000u16, self.shift_hz, Message::SetShift)
                             .step(10u16)
-                            .width(Length::Fixed(180.0)),
+                            .width(Length::Fixed(150.0)),
                     )
-                    .push(Text::new(format!("{} Hz", self.shift_hz)).size(11).color(rxv)),
-            )
-            .push(
-                Row::new().spacing(6).align_y(Alignment::Center).push(small_btn_string(
-                    format!("WIDTH: {:.2} kHz  (cycle)", self.bw_hz as f32 / 1000.0),
-                    Message::CycleBandwidth,
-                )),
-            )
-            // Notch + APF (FR-RX-NOTCH-01, FR-RX-APF-01).
-            .push(Text::new("Notch / APF").size(12).color(rxv))
+                    .push(
+                        Text::new(format!("{} Hz", self.shift_hz))
+                            .size(11)
+                            .color(rxv),
+                    ),
+            );
+        let right = Column::new()
+            .spacing(6)
             .push(
                 Row::new()
                     .spacing(6)
@@ -1528,23 +1559,11 @@ impl App {
                         self.ui.radio.notch_on,
                         Some(Message::ToggleManualNotch),
                     ))
-                    .push(Text::new("PITCH").size(11).color(dim))
-                    .push(
-                        slider(150..=5000u16, self.notch_pitch, Message::SetNotchPitch)
-                            .step(10u16)
-                            .width(Length::Fixed(140.0)),
-                    )
-                    .push(Text::new(format!("{} Hz", self.notch_pitch)).size(11).color(rxv))
                     .push(two_line_btn(
                         ui::toggle_button("AUTO NCH", self.ui.radio.auto_notch),
                         self.ui.radio.auto_notch,
                         Some(Message::ToggleAutoNotch),
-                    )),
-            )
-            .push(
-                Row::new()
-                    .spacing(6)
-                    .align_y(Alignment::Center)
+                    ))
                     .push(two_line_btn(
                         ui::toggle_button("APF", self.ui.radio.apf_on),
                         self.ui.radio.apf_on,
@@ -1552,11 +1571,11 @@ impl App {
                     ))
                     .push(small_btn_string(
                         format!(
-                            "APF BW: {}  (cycle)",
+                            "BW {}",
                             match self.ui.radio.apf_width {
-                                Some(0) => "30 Hz",
-                                Some(1) => "50 Hz",
-                                Some(2) => "150 Hz",
+                                Some(0) => "30",
+                                Some(1) => "50",
+                                Some(2) => "150",
                                 _ => "—",
                             }
                         ),
@@ -1564,11 +1583,22 @@ impl App {
                     )),
             )
             .push(
-                Text::new("Shift = IS AF center pitch. Notch: CW/SSB/DATA/AM; auto-notch SSB; APF CW only.")
-                    .size(10)
-                    .color(dim),
-            )
-            .into()
+                Row::new()
+                    .spacing(6)
+                    .align_y(Alignment::Center)
+                    .push(Text::new("PITCH").size(11).color(dim))
+                    .push(
+                        slider(150..=5000u16, self.notch_pitch, Message::SetNotchPitch)
+                            .step(10u16)
+                            .width(Length::Fixed(130.0)),
+                    )
+                    .push(
+                        Text::new(format!("{} Hz", self.notch_pitch))
+                            .size(11)
+                            .color(rxv),
+                    ),
+            );
+        Row::new().spacing(24).push(left).push(right).into()
     }
 
     /// RX → ANT sub-panel (`AR`/`AR$`): cycle the RX antenna for this receiver.
@@ -1856,6 +1886,22 @@ impl App {
             Some("CW") | Some("CW-R") => 'C',
             Some("DATA") | Some("DATA-R") | Some("FSK") | Some("FSK-D") => 'D',
             _ => 'V',
+        }
+    }
+
+    /// Whether the active RX VFO is the sub receiver (VFO B) — the RX controls
+    /// target it with the `$` modifier when so. Sub is active in the single-B
+    /// view; otherwise VFO A (main) is the receiver being controlled.
+    fn active_sub(&self) -> bool {
+        self.view_mode == ViewMode::SingleB
+    }
+
+    /// Short label for the active RX VFO: `A` (main) or `B` (sub).
+    fn active_rx_label(&self) -> &'static str {
+        if self.active_sub() {
+            "B"
+        } else {
+            "A"
         }
     }
 
@@ -2768,10 +2814,16 @@ impl App {
                     Row::new()
                         .spacing(10)
                         .align_y(Alignment::Center)
-                        .push(Text::new("MAIN RX").size(11).color(dim))
+                        // Frame reflects (and controls) the active RX VFO: RX A / RX B.
+                        .push(
+                            Text::new(format!("RX {}", self.active_rx_label()))
+                                .size(11)
+                                .color(dim),
+                        )
                         .push(chips),
                 )
                 .push(tune_row)
+                .push(self.rx_filter_cluster())
                 .push(gain_row),
         )
         .style(panel_style)
@@ -3792,6 +3844,17 @@ fn shade(s: ui::Shade) -> Color {
 /// Keychain account key for a connection (`host:port`).
 fn account_key(host: &str, port: u16) -> String {
     format!("{host}:{port}")
+}
+
+/// Retarget a 2-letter RX command at the sub receiver by inserting the `$`
+/// modifier after the mnemonic (e.g. `BW0270;` → `BW$0270;`) when `sub` is set.
+/// Commands already carrying `$`, or shorter than 2 chars, pass through.
+fn target_rx(cmd: String, sub: bool) -> String {
+    if sub && cmd.len() >= 2 && &cmd[..1] != "#" && !cmd[2..].starts_with('$') {
+        format!("{}${}", &cmd[..2], &cmd[2..])
+    } else {
+        cmd
+    }
 }
 
 /// Parse a MHz string (e.g. "14.074") into Hz.
