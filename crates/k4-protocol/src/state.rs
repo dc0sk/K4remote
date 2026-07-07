@@ -80,6 +80,16 @@ pub struct RadioState {
     pub sub_rx: Option<bool>,
     /// Diversity mode on (`DV`).
     pub diversity: Option<bool>,
+    /// Manual notch on (`NM`).
+    pub notch_on: Option<bool>,
+    /// Manual notch pitch, Hz (`NM`).
+    pub notch_pitch: Option<u16>,
+    /// Auto notch on (`NA`).
+    pub auto_notch: Option<bool>,
+    /// APF on (`AP`).
+    pub apf_on: Option<bool>,
+    /// APF bandwidth code 0/1/2 (`AP`).
+    pub apf_width: Option<u8>,
     /// Full break-in QSK on (`SD` x=1).
     pub qsk_full: Option<bool>,
     /// VOX/QSK delay, 10-ms units (`SD` zzz).
@@ -262,6 +272,27 @@ impl RadioState {
             self.sub_rx = Some(arg == "1");
         } else if let Some(arg) = cmd.strip_prefix("DV") {
             self.diversity = Some(arg == "1");
+        } else if let Some(arg) = cmd.strip_prefix("NM") {
+            // `nnnnm` (pitch + on) or the alternate `m` (on/off only).
+            let b = arg.as_bytes();
+            if b.len() >= 5 {
+                if let Ok(p) = arg[..4].parse::<u16>() {
+                    self.notch_pitch = Some(p);
+                }
+                self.notch_on = Some(b[4] == b'1');
+            } else if b.len() == 1 {
+                self.notch_on = Some(b[0] == b'1');
+            }
+        } else if let Some(arg) = cmd.strip_prefix("NA") {
+            self.auto_notch = Some(arg == "1");
+        } else if let Some(arg) = cmd.strip_prefix("AP") {
+            let b = arg.as_bytes();
+            if !b.is_empty() {
+                self.apf_on = Some(b[0] == b'1');
+                if b.len() >= 2 {
+                    self.apf_width = Some((b[1] - b'0').min(2));
+                }
+            }
         } else if let Some(arg) = cmd.strip_prefix("SD") {
             // `x y zzz`: full-QSK flag, mode class, then the 10-ms delay.
             let b = arg.as_bytes();
@@ -462,6 +493,7 @@ pub fn connect_state_seed() -> &'static [&'static str] {
         "BW;", "AG;", "RG;", "SQ;", // RX levels (bandwidth, AF/RF gain, squelch)
         "PC;", "CP;", "CW;", "SD;", // TX power, compression, CW pitch, QSK delay
         "IS;", "SB;", "DV;", // passband shift, sub-RX, diversity
+        "NM;", "NA;", "AP;", // manual notch, auto notch, APF
         // Configuration-screen read-back (FR-UI-19 screens):
         "RE;", "TE;", "KP;", "KS;", "MI;", "MG;", "LO;", "AN;", "AR;", "AR$;", "VXV;", "BN;",
         "#REF;", "#SPN;", "#SCL;", "#DPM;", "#WFC;", "#WFH;",
