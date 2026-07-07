@@ -170,6 +170,8 @@ struct App {
     cw_pitch: u16,
     qsk_full: bool,
     qsk_delay: u8,
+    // Passband shift / AF center pitch, Hz (FR-FIL-01).
+    shift_hz: u16,
 }
 
 /// Which graphic equalizer a screen edits (FR-EQ-01).
@@ -325,6 +327,7 @@ enum RxTab {
     Eq,
     Ant,
     LineOut,
+    Filter,
 }
 
 /// A single RX config adjustment (FR-ANT-01/FR-AUD-CFG-01).
@@ -366,6 +369,9 @@ enum Message {
     SetCwPitch(u16),
     ToggleQskFull,
     SetQskDelay(u8),
+    SetShift(u16),
+    FilterPreset(u8),
+    FilterNormalize,
     ToggleNb,
     ToggleNr,
     TogglePreamp,
@@ -560,6 +566,7 @@ impl App {
             cw_pitch: 600,
             qsk_full: false,
             qsk_delay: 30,
+            shift_hz: 1500,
         };
         (app, Task::none())
     }
@@ -870,6 +877,16 @@ impl App {
                     v,
                 )));
             }
+            Message::SetShift(hz) => {
+                self.shift_hz = hz;
+                self.send(WorkerCmd::Cat(k4_protocol::cat::set_shift_hz(hz)));
+            }
+            Message::FilterPreset(n) => {
+                self.send(WorkerCmd::Cat(k4_protocol::cat::set_filter_preset(n)))
+            }
+            Message::FilterNormalize => self.send(WorkerCmd::Cat(
+                k4_protocol::cat::filter_normalize().to_string(),
+            )),
             Message::ToggleNb => self.send(WorkerCmd::ToggleNb),
             Message::ToggleNr => self.send(WorkerCmd::ToggleNr),
             Message::TogglePreamp => self.send(WorkerCmd::TogglePreamp),
@@ -1389,10 +1406,13 @@ impl App {
             .push(tab_btn(RxTab::Eq, "EQ"))
             .push(tab_btn(RxTab::Ant, "ANT"));
         if !sub {
-            tabs = tabs.push(tab_btn(RxTab::LineOut, "LINE OUT"));
+            tabs = tabs
+                .push(tab_btn(RxTab::Filter, "FILTER"))
+                .push(tab_btn(RxTab::LineOut, "LINE OUT"));
         }
         let content: Element<Message> = match self.rx_tab {
             RxTab::Ant => self.rx_ant_panel(sub),
+            RxTab::Filter if !sub => self.rx_filter_panel(),
             RxTab::LineOut if !sub => self.line_out_panel(),
             // EQ (and LINE OUT falls back to EQ on the sub receiver).
             _ if sub => self.eq_screen(
@@ -1403,6 +1423,51 @@ impl App {
             _ => self.eq_screen(EqTarget::Rx, "RX equalizer", None),
         };
         Column::new().spacing(12).push(tabs).push(content).into()
+    }
+
+    /// RX → FILTER sub-panel: per-mode filter presets (`FP`, FR-MODE-03),
+    /// passband shift / AF center pitch (`IS`, FR-FIL-01), and a BW shortcut.
+    fn rx_filter_panel(&self) -> Element<'_, Message> {
+        let dim = role_color(ui::ColorRole::Inactive);
+        let rxv = role_color(ui::ColorRole::RxValue);
+        let preset = |label: &'static str, n: u8| {
+            small_btn_string(label.to_string(), Message::FilterPreset(n))
+        };
+        Column::new()
+            .spacing(12)
+            .push(Text::new("Filter presets (saved per mode)").size(12).color(rxv))
+            .push(
+                Row::new()
+                    .spacing(6)
+                    .push(preset("FL1", 1))
+                    .push(preset("FL2", 2))
+                    .push(preset("FL3", 3))
+                    .push(small_btn("NORMALIZE", Message::FilterNormalize)),
+            )
+            .push(
+                Row::new()
+                    .spacing(6)
+                    .align_y(Alignment::Center)
+                    .push(Text::new("SHIFT").size(11).color(dim))
+                    .push(
+                        slider(200..=3000u16, self.shift_hz, Message::SetShift)
+                            .step(10u16)
+                            .width(Length::Fixed(180.0)),
+                    )
+                    .push(Text::new(format!("{} Hz", self.shift_hz)).size(11).color(rxv)),
+            )
+            .push(
+                Row::new().spacing(6).align_y(Alignment::Center).push(small_btn_string(
+                    format!("WIDTH: {:.2} kHz  (cycle)", self.bw_hz as f32 / 1000.0),
+                    Message::CycleBandwidth,
+                )),
+            )
+            .push(
+                Text::new("Shift = IS AF center pitch; presets FP1–3 are per-mode. Sub-RX filter pending.")
+                    .size(10)
+                    .color(dim),
+            )
+            .into()
     }
 
     /// RX → ANT sub-panel (`AR`/`AR$`): cycle the RX antenna for this receiver.
@@ -1994,6 +2059,9 @@ impl App {
         }
         if let Some(v) = r.qsk_delay {
             self.qsk_delay = v;
+        }
+        if let Some(v) = r.shift_hz {
+            self.shift_hz = v;
         }
         if let Some(v) = r.rx_eq {
             self.rx_eq = v;

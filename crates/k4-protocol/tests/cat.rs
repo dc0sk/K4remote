@@ -1,15 +1,16 @@
 //! CAT encoding tests. trace: FR-VFO-01, FR-VFO-04, FR-VFO-06, FR-MODE-01,
 //! FR-MODE-02, FR-RX-01, FR-RX-02
 use k4_protocol::cat::{
-    band_down, band_stack_next, band_up, clear_rit_xit, menu_open, menu_query_def, menu_set,
-    rx_eq_flat, send_text, set_af_gain, set_agc, set_attenuator, set_band, set_band_sub,
-    set_bandwidth_hz, set_compression, set_cw_pitch, set_keyer, set_keyer_speed, set_line_in,
-    set_line_out, set_mic_gain, set_mic_input, set_mic_setup, set_mode, set_mode_sub, set_nb,
-    set_nr, set_pan_average, set_pan_mode, set_pan_nb, set_pan_nb_level, set_pan_peak, set_pan_ref,
-    set_pan_scale, set_pan_span_hz, set_power, set_preamp, set_qsk_delay, set_rf_gain, set_rit,
-    set_rx_antenna, set_rx_antenna_sub, set_rx_eq, set_split, set_squelch, set_transverter_band,
-    set_tx_antenna, set_tx_eq, set_tx_power, set_vfo_a_hz, set_vfo_b_hz, set_vox,
-    set_waterfall_height, set_waterfall_palette, set_xit, switch, vfo_copy_swap,
+    band_down, band_stack_next, band_up, clear_rit_xit, filter_normalize, menu_open,
+    menu_query_def, menu_set, rx_eq_flat, send_text, set_af_gain, set_agc, set_attenuator,
+    set_band, set_band_sub, set_bandwidth_hz, set_compression, set_cw_pitch, set_filter_preset,
+    set_keyer, set_keyer_speed, set_line_in, set_line_out, set_mic_gain, set_mic_input,
+    set_mic_setup, set_mode, set_mode_sub, set_nb, set_nr, set_pan_average, set_pan_mode,
+    set_pan_nb, set_pan_nb_level, set_pan_peak, set_pan_ref, set_pan_scale, set_pan_span_hz,
+    set_power, set_preamp, set_qsk_delay, set_rf_gain, set_rit, set_rx_antenna, set_rx_antenna_sub,
+    set_rx_eq, set_shift_hz, set_split, set_squelch, set_transverter_band, set_tx_antenna,
+    set_tx_eq, set_tx_power, set_vfo_a_hz, set_vfo_b_hz, set_vox, set_waterfall_height,
+    set_waterfall_palette, set_xit, switch, vfo_copy_swap,
 };
 
 /// trace: FR-VFO-01
@@ -82,6 +83,16 @@ fn fr_key_02_cw_pitch() {
     assert_eq!(set_cw_pitch(600), "CW60;");
     assert_eq!(set_cw_pitch(100), "CW25;"); // clamped low (250 Hz)
     assert_eq!(set_cw_pitch(9999), "CW95;"); // clamped high (950 Hz)
+}
+
+/// trace: FR-MODE-03, FR-FIL-01
+#[test]
+fn fr_filter_presets_and_shift() {
+    assert_eq!(set_filter_preset(2), "FP2;");
+    assert_eq!(set_filter_preset(9), "FP3;"); // clamped to 1–3
+    assert_eq!(filter_normalize(), "FP~;");
+    assert_eq!(set_shift_hz(1500), "IS0150;"); // ×10 encoding
+    assert_eq!(set_shift_hz(600), "IS0060;");
 }
 
 /// trace: FR-VFO-04, FR-VFO-06

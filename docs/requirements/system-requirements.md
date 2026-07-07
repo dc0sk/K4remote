@@ -92,6 +92,7 @@ Programmer's Reference rev. D12 (`PRG`) command mnemonics.
 | `FR-MODE-01` | select operating mode for main/sub RX via `MD`/`MD$` and reflect RESP (PRG `MD`). | STK-03 | M | T | Selecting CW emits the documented `MD` value; RESP updates mode. |
 | `FR-MODE-02` | set and display receive bandwidth/filter via `BW`/`BW$` (PRG `BW`). | STK-03 | M | T | Bandwidth set round-trips through state. |
 | `FR-MODE-03` | select filter presets where applicable (PRG `FP`). | STK-03 | C | T | `FP2;` reflected in state. |
+| `FR-FIL-01` | adjust the passband **shift** / AF center pitch (`IS`; `$`=sub) and offer filter **normalize** (`FP~`). | STK-03 | C | T | `set_shift_hz(1500)` emits `IS0150;`; `filter_normalize()` emits `FP~;`. |
 | `FR-MODE-04` | set the data sub-mode for DATA modes (PRG `DT`/`IF` data field). | STK-03 | C | T | Data sub-mode selection reflected in state. |
 
 ## F. Receiver Controls — `FR-RX`
