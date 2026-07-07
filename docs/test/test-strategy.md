@@ -1,7 +1,7 @@
 ---
 title: "Test Strategy & Traceability"
 status: Draft
-version: "0.57"
+version: "0.58"
 updated: 2026-07-07
 authors:
   - Simon Keimer (DC0SK)
@@ -256,3 +256,4 @@ FR-SES-MULTI, FR-DIAG-02, etc. — get `TC` IDs when promoted to `Approved`.)*
 | 2026-07-07 | 0.55 | DC0SK | Gap-closing #6 (notch/APF): `set_manual_notch`+`set_auto_notch` (`NM`/`NA`, FR-RX-NOTCH-01) + `set_apf` (`AP`, FR-RX-APF-01) with NM/NA/AP state parse + seed; NOTCH/APF section in the MAIN RX → FILTER tab. Also moved SUB + DIV toggles into the MAIN RX chip row (next to AGC); sub screen back to a single column. 129 tests. |
 | 2026-07-07 | 0.56 | DC0SK | Gap-closing #7 (scan): parse the `IF` `s` scan-in-progress flag (index 29) into `scanning` (FR-SCAN-01, state test); SCAN button in the tune row emits `SW149;` and lights while scanning. 130 tests. |
 | 2026-07-07 | 0.57 | DC0SK | RX frame rework: moved filter/notch controls out of the softkey FILTER tab into the RX frame (two invisible columns — FL1/2/3+NORMALIZE over SHIFT, NOTCH+AUTO+APF over PITCH); dropped the redundant WIDTH button; frame now labelled RX A / RX B by the active VFO; RX commands (BW/AG/RG/SQ/FP/IS/NM/NA/AP) retargeted to the active VFO via `target_rx` `$` insertion (FR-CAT-05). Fixed NOTCH/AUTO/APF not disabling (idempotent set → re-query like SUB/DIV). Window 972→1052 px. (Sub-RX state read-back still shows main values — follow-up.) |
+| 2026-07-07 | 0.58 | DC0SK | Sub-RX read-back: parse the `$` RX RESP variants (BW/AG/RG/SQ/IS/NM/NA/AP) into sub-receiver fields + seed them (FR-CAT-05, state test); the RX frame now shows the *active* VFO's control states (notch/APF via accessors, sliders synced on view switch), so RX B reflects the sub receiver and the notch disable-fix works there too. 131 tests. |

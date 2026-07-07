@@ -73,6 +73,22 @@ fn fr_cat_07_if_response_seeds_state() {
     assert_eq!(s.split, Some(false));
 }
 
+/// `$` RESP variants route to the sub-receiver fields, leaving main untouched.
+///
+/// trace: FR-CAT-05
+#[test]
+fn fr_cat_05_sub_variants_route_to_sub_fields() {
+    let mut s = RadioState::new();
+    s.apply_cat("AG030;"); // main AF gain
+    s.apply_cat("AG$045;"); // sub AF gain
+    assert_eq!(s.af_gain, Some(30));
+    assert_eq!(s.sub_af_gain, Some(45));
+    s.apply_cat("NM$10001;"); // sub manual notch on, pitch 1000
+    assert_eq!(s.sub_notch_on, Some(true));
+    assert_eq!(s.sub_notch_pitch, Some(1000));
+    assert_eq!(s.notch_on, None); // main notch untouched
+}
+
 /// The `IF` `s` flag (index 29) drives the scan-in-progress indicator.
 ///
 /// trace: FR-SCAN-01

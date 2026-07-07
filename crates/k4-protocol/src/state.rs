@@ -92,6 +92,17 @@ pub struct RadioState {
     pub apf_on: Option<bool>,
     /// APF bandwidth code 0/1/2 (`AP`).
     pub apf_width: Option<u8>,
+    /// Sub-receiver (`$`) read-back of the RX controls above, for RX-B display.
+    pub sub_bandwidth_hz: Option<u32>,
+    pub sub_af_gain: Option<u8>,
+    pub sub_rf_gain_db: Option<u8>,
+    pub sub_squelch: Option<u8>,
+    pub sub_shift_hz: Option<u16>,
+    pub sub_notch_on: Option<bool>,
+    pub sub_notch_pitch: Option<u16>,
+    pub sub_auto_notch: Option<bool>,
+    pub sub_apf_on: Option<bool>,
+    pub sub_apf_width: Option<u8>,
     /// Full break-in QSK on (`SD` x=1).
     pub qsk_full: Option<bool>,
     /// VOX/QSK delay, 10-ms units (`SD` zzz).
@@ -227,21 +238,24 @@ impl RadioState {
                 self.s_meter_bars = Some(v);
             }
         } else if let Some(arg) = cmd.strip_prefix("BW") {
-            if let Ok(v) = arg.parse::<u32>() {
-                self.bandwidth_hz = Some(v * 10);
+            let (sub, a) = split_sub(arg);
+            if let Ok(v) = a.parse::<u32>() {
+                *sub_or(&mut self.bandwidth_hz, &mut self.sub_bandwidth_hz, sub) = Some(v * 10);
             }
         } else if let Some(arg) = cmd.strip_prefix("AG") {
-            if let Ok(v) = arg.parse::<u8>() {
-                self.af_gain = Some(v);
+            let (sub, a) = split_sub(arg);
+            if let Ok(v) = a.parse::<u8>() {
+                *sub_or(&mut self.af_gain, &mut self.sub_af_gain, sub) = Some(v);
             }
         } else if let Some(arg) = cmd.strip_prefix("RG") {
-            if let Ok(v) = arg.trim_start_matches('-').parse::<u8>() {
-                self.rf_gain_db = Some(v);
+            let (sub, a) = split_sub(arg);
+            if let Ok(v) = a.trim_start_matches('-').parse::<u8>() {
+                *sub_or(&mut self.rf_gain_db, &mut self.sub_rf_gain_db, sub) = Some(v);
             }
         } else if let Some(arg) = cmd.strip_prefix("SQ") {
-            // Main squelch only; `SQ$…` (sub) starts with `$` and is skipped.
-            if let Ok(v) = arg.parse::<u8>() {
-                self.squelch = Some(v);
+            let (sub, a) = split_sub(arg);
+            if let Ok(v) = a.parse::<u8>() {
+                *sub_or(&mut self.squelch, &mut self.sub_squelch, sub) = Some(v);
             }
         } else if let Some(arg) = cmd.strip_prefix("PC") {
             // `nnn` + optional range letter L/H/X (L assumed if omitted). Store
@@ -266,33 +280,37 @@ impl RadioState {
                 self.cw_pitch = Some(v * 10);
             }
         } else if let Some(arg) = cmd.strip_prefix("IS") {
-            // Main center pitch only; `IS$…` (sub) starts with `$` and is skipped.
-            if let Ok(v) = arg.parse::<u16>() {
-                self.shift_hz = Some(v * 10);
+            let (sub, a) = split_sub(arg);
+            if let Ok(v) = a.parse::<u16>() {
+                *sub_or(&mut self.shift_hz, &mut self.sub_shift_hz, sub) = Some(v * 10);
             }
         } else if let Some(arg) = cmd.strip_prefix("SB") {
             self.sub_rx = Some(arg == "1");
         } else if let Some(arg) = cmd.strip_prefix("DV") {
             self.diversity = Some(arg == "1");
         } else if let Some(arg) = cmd.strip_prefix("NM") {
-            // `nnnnm` (pitch + on) or the alternate `m` (on/off only).
-            let b = arg.as_bytes();
+            // `nnnnm` (pitch + on) or the alternate `m` (on/off only); `$`=sub.
+            let (sub, a) = split_sub(arg);
+            let b = a.as_bytes();
             if b.len() >= 5 {
-                if let Ok(p) = arg[..4].parse::<u16>() {
-                    self.notch_pitch = Some(p);
+                if let Ok(p) = a[..4].parse::<u16>() {
+                    *sub_or(&mut self.notch_pitch, &mut self.sub_notch_pitch, sub) = Some(p);
                 }
-                self.notch_on = Some(b[4] == b'1');
+                *sub_or(&mut self.notch_on, &mut self.sub_notch_on, sub) = Some(b[4] == b'1');
             } else if b.len() == 1 {
-                self.notch_on = Some(b[0] == b'1');
+                *sub_or(&mut self.notch_on, &mut self.sub_notch_on, sub) = Some(b[0] == b'1');
             }
         } else if let Some(arg) = cmd.strip_prefix("NA") {
-            self.auto_notch = Some(arg == "1");
+            let (sub, a) = split_sub(arg);
+            *sub_or(&mut self.auto_notch, &mut self.sub_auto_notch, sub) = Some(a == "1");
         } else if let Some(arg) = cmd.strip_prefix("AP") {
-            let b = arg.as_bytes();
+            let (sub, a) = split_sub(arg);
+            let b = a.as_bytes();
             if !b.is_empty() {
-                self.apf_on = Some(b[0] == b'1');
+                *sub_or(&mut self.apf_on, &mut self.sub_apf_on, sub) = Some(b[0] == b'1');
                 if b.len() >= 2 {
-                    self.apf_width = Some((b[1] - b'0').min(2));
+                    *sub_or(&mut self.apf_width, &mut self.sub_apf_width, sub) =
+                        Some((b[1] - b'0').min(2));
                 }
             }
         } else if let Some(arg) = cmd.strip_prefix("SD") {
@@ -466,6 +484,24 @@ impl RadioState {
     }
 }
 
+/// Split a RESP argument on a leading `$` (sub-receiver) modifier: returns
+/// `(is_sub, remainder)`.
+fn split_sub(arg: &str) -> (bool, &str) {
+    match arg.strip_prefix('$') {
+        Some(rest) => (true, rest),
+        None => (false, arg),
+    }
+}
+
+/// Pick the sub-receiver slot when `is_sub`, else the main slot.
+fn sub_or<'a, T>(main: &'a mut T, sub: &'a mut T, is_sub: bool) -> &'a mut T {
+    if is_sub {
+        sub
+    } else {
+        main
+    }
+}
+
 /// Map a high-resolution S-meter reading (dBm) to an S-unit label, using the HF
 /// convention S9 = −73 dBm and 6 dB per S-unit (S0 ≈ −127 dBm). Above S9 the
 /// excess is shown in dB (e.g. `"S9+20dB"`).
@@ -497,6 +533,8 @@ pub fn connect_state_seed() -> &'static [&'static str] {
         "PC;", "CP;", "CW;", "SD;", // TX power, compression, CW pitch, QSK delay
         "IS;", "SB;", "DV;", // passband shift, sub-RX, diversity
         "NM;", "NA;", "AP;", // manual notch, auto notch, APF
+        // Sub-receiver read-back of the same RX controls (RX-B display):
+        "BW$;", "AG$;", "RG$;", "SQ$;", "IS$;", "NM$;", "NA$;", "AP$;",
         // Configuration-screen read-back (FR-UI-19 screens):
         "RE;", "TE;", "KP;", "KS;", "MI;", "MG;", "LO;", "AN;", "AR;", "AR$;", "VXV;", "BN;",
         "#REF;", "#SPN;", "#SCL;", "#DPM;", "#WFC;", "#WFH;",
