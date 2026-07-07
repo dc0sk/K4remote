@@ -901,10 +901,16 @@ impl App {
             Message::ToggleSubRx => {
                 let on = self.ui.radio.sub_rx != Some(true);
                 self.send(WorkerCmd::Cat(k4_protocol::cat::set_sub_rx(on)));
+                // Read back the actual state so an idempotent set (sub already in
+                // that state) can't leave the button stuck on a stale value.
+                self.send(WorkerCmd::Cat("SB;".into()));
             }
             Message::ToggleDiversity => {
                 let on = self.ui.radio.diversity != Some(true);
                 self.send(WorkerCmd::Cat(k4_protocol::cat::set_diversity(on)));
+                // Diversity also changes the sub receiver, so re-read both.
+                self.send(WorkerCmd::Cat("DV;".into()));
+                self.send(WorkerCmd::Cat("SB;".into()));
             }
             Message::ToggleManualNotch => {
                 let on = self.ui.radio.notch_on != Some(true);
