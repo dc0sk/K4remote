@@ -1,7 +1,7 @@
 ---
 title: "Test Strategy & Traceability"
 status: Draft
-version: "0.63"
+version: "0.64"
 updated: 2026-07-07
 authors:
   - Simon Keimer (DC0SK)
@@ -262,3 +262,4 @@ FR-SES-MULTI, FR-DIAG-02, etc. — get `TC` IDs when promoted to `Approved`.)*
 | 2026-07-07 | 0.61 | DC0SK | Active-RX selection + chip sub-state: explicit `active_rx_b` drives the RX A/B label + control targeting, set by the header A/B AND by clicking a spectrum pane (needed in the A+B view); parse `$` variants of RA/GT/NB/NR/PA into sub fields + seed; ATT/PRE/NB/NR/AGC chips now read the active VFO; NR and AGC retargeted to the active VFO (NR via NR$ level+mode, AGC via GT$) with re-query (removed the SW-tap/worker paths). 133 tests. |
 | 2026-07-07 | 0.62 | DC0SK | In-panadapter meters: new `meter.rs` Canvas draws a labelled RX S-meter (S1/3/5/7/9, +20/+40/+60 dB, minor +10/+30/+50) and, on the TX-VFO pane while transmitting, the RF/ALC/SWR/CMP bars (CMP voice-only). Parse `TM` auto-metering into tx_alc/cmp/fwd_w/swr_x10 + enable via TM1 on connect (FR-MTR-03, state test). 134 tests. |
 | 2026-07-07 | 0.63 | DC0SK | Meter headroom + switch feedback: TX meter slot 46→66 px (bars 14 px) so all of RF/ALC/SWR/CMP are clear above the spectrum; momentary SW switch buttons (TX switch grid + Fn switches) flash Active ~0.6 s on tap (switch_flash), giving feedback for TEST/ANT/RX ANT/VOX/etc. 134 tests. |
+| 2026-07-07 | 0.64 | DC0SK | Switch-state feedback: TX switch grid now reflects live radio state — ANT/RX ANT/SUB ANT show the selected antenna number, ATU shows IN/BYP (lit when in line, parse `AT`+seed), and VOX/QSK/XMIT act as lit toggles (VX/SD/transmit); TUNE/TUNE LP are local toggles (no read-back) cleared when TX ends; ATU TUNE/REM ANT/TEST keep the momentary tap-flash. 134 tests. |

@@ -174,6 +174,8 @@ pub struct RadioState {
     /// Waterfall palette 0–4 (`#WFC`) and height 0–100 (`#WFH`).
     pub wf_palette: Option<u8>,
     pub wf_height: Option<u8>,
+    /// ATU mode (`AT`): 1 = bypass (out of line), 2 = auto (in line).
+    pub atu_mode: Option<u8>,
     /// TX antenna 1–3 (`AN`), main/sub RX antenna 0–7 (`AR`/`AR$`).
     pub tx_antenna: Option<u8>,
     pub rx_antenna: Option<u8>,
@@ -482,6 +484,10 @@ impl RadioState {
             if let Ok(v) = arg.parse::<u8>() {
                 self.tx_antenna = Some(v);
             }
+        } else if let Some(arg) = cmd.strip_prefix("AT") {
+            if let Ok(v) = arg.parse::<u8>() {
+                self.atu_mode = Some(v);
+            }
         } else if let Some(arg) = cmd.strip_prefix("AR$") {
             if let Ok(v) = arg.parse::<u8>() {
                 self.rx_antenna_sub = Some(v);
@@ -583,6 +589,7 @@ pub fn connect_state_seed() -> &'static [&'static str] {
         "BW$;", "AG$;", "RG$;", "SQ$;", "IS$;", "NM$;", "NA$;", "AP$;", //
         "RA$;", "GT$;", "NB$;", "NR$;", "PA$;",
         "TM1;", // enable auto TX metering (RF/ALC/SWR/CMP during transmit)
+        "AT;",  // ATU mode (in/bypass), for switch-state feedback
         // Configuration-screen read-back (FR-UI-19 screens):
         "RE;", "TE;", "KP;", "KS;", "MI;", "MG;", "LO;", "AN;", "AR;", "AR$;", "VXV;", "BN;",
         "#REF;", "#SPN;", "#SCL;", "#DPM;", "#WFC;", "#WFH;",

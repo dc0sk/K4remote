@@ -187,6 +187,10 @@ struct App {
     // and a countdown of ticks to keep it highlighted.
     switch_flash: Option<u16>,
     switch_flash_ticks: u8,
+    // TUNE / TUNE LP have no read-back, so track their on/off locally (toggled
+    // on tap, cleared when transmit ends).
+    tune_on: bool,
+    tune_lp_on: bool,
 }
 
 /// Which graphic equalizer a screen edits (FR-EQ-01).
@@ -595,6 +599,8 @@ impl App {
             active_rx_b: false,
             switch_flash: None,
             switch_flash_ticks: 0,
+            tune_on: false,
+            tune_lp_on: false,
         };
         (app, Task::none())
     }
@@ -1150,6 +1156,11 @@ impl App {
             Message::Switch(code) => {
                 self.switch_flash = Some(code);
                 self.switch_flash_ticks = 4; // ~0.6 s tap highlight
+                match code {
+                    16 => self.tune_on = !self.tune_on, // TUNE (toggle, no read-back)
+                    131 => self.tune_lp_on = !self.tune_lp_on, // TUNE LP
+                    _ => {}
+                }
                 self.send(WorkerCmd::Cat(k4_protocol::cat::switch(code)));
             }
             Message::MenuFilter(q) => self.menu_filter = q,
@@ -1212,6 +1223,11 @@ impl App {
                     if self.switch_flash_ticks == 0 {
                         self.switch_flash = None;
                     }
+                }
+                // TUNE ends when transmit stops.
+                if !self.ui.transmitting {
+                    self.tune_on = false;
+                    self.tune_lp_on = false;
                 }
                 // Poll the decoded-text buffer only while decode is on (~2.5 Hz),
                 // so it adds no CAT traffic otherwise (FR-TXT-01).
@@ -1706,21 +1722,55 @@ impl App {
         Column::new().spacing(12).push(tabs).push(content).into()
     }
 
+    /// State + display label for a transmit/antenna switch by its `SW` code:
+    /// antenna/ATU selections show their current value; VOX/QSK/XMIT/TUNE act as
+    /// toggles (lit when engaged); the rest flash briefly on tap.
+    fn sw_state(&self, label: &str, code: u16) -> (bool, String) {
+        let ant = |n: Option<u8>| n.map(|v| v.to_string()).unwrap_or_else(|| "?".into());
+        match code {
+            16 => (self.tune_on, label.into()),     // TUNE
+            131 => (self.tune_lp_on, label.into()), // TUNE LP
+            50 => (self.ui.radio.vox_voice == Some(true), label.into()), // VOX
+            134 => (self.ui.radio.qsk_full == Some(true), label.into()), // QSK
+            // XMIT is lit while transmitting, unless a TUNE is what put us on air.
+            30 => (
+                self.ui.transmitting && !self.tune_on && !self.tune_lp_on,
+                label.into(),
+            ),
+            158 => {
+                // ATU: 2 = auto (in line), 1 = bypass (out).
+                let in_line = self.ui.radio.atu_mode == Some(2);
+                (
+                    in_line,
+                    format!("ATU {}", if in_line { "IN" } else { "BYP" }),
+                )
+            }
+            60 => (false, format!("ANT {}", ant(self.ui.radio.tx_antenna))),
+            70 => (false, format!("RX A {}", ant(self.ui.radio.rx_antenna))),
+            157 => (
+                false,
+                format!("SUB A {}", ant(self.ui.radio.rx_antenna_sub)),
+            ),
+            _ => (self.switch_flash == Some(code), label.into()), // momentary flash
+        }
+    }
+
     /// The K4's transmit/antenna dual-function switches (tap left / hold right,
     /// `SW` emulation) as a compact grid for the TRANSMIT panel (FR-SW-01).
+    /// Selection/toggle switches reflect the live radio state (FR-UI-22-style).
     fn tx_switch_grid(&self) -> Element<'_, Message> {
         let dim = role_color(ui::ColorRole::Inactive);
-        let flash = self.switch_flash;
         let cell = |label: &str, code: u16| -> Element<Message> {
-            let kind = if flash == Some(code) {
+            let (active, text) = self.sw_state(label, code);
+            let kind = if active {
                 BtnKind::Active
             } else {
                 BtnKind::Plain
             };
-            Button::new(Text::new(label.to_string()).size(11))
+            Button::new(Text::new(text).size(11))
                 .style(btn_style(kind))
                 .padding([4, 6])
-                .width(Length::Fixed(88.0))
+                .width(Length::Fixed(92.0))
                 .on_press(Message::Switch(code))
                 .into()
         };
