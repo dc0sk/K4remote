@@ -107,6 +107,10 @@ pub struct RadioState {
     pub qsk_full: Option<bool>,
     /// VOX/QSK delay, 10-ms units (`SD` zzz).
     pub qsk_delay: Option<u8>,
+    /// Text-decode mode (`TD`); 0 = off.
+    pub decode_mode: Option<u8>,
+    /// Accumulated decoded receive text (`TB` `s` field), newest at the end.
+    pub decode_text: String,
     /// RX attenuator value, dB (`RA`).
     pub atten_db: Option<u8>,
     /// RX attenuator on/off (`RA`).
@@ -312,6 +316,22 @@ impl RadioState {
                     *sub_or(&mut self.apf_width, &mut self.sub_apf_width, sub) =
                         Some((b[1] - b'0').min(2));
                 }
+            }
+        } else if let Some(arg) = cmd.strip_prefix("TB") {
+            // `TB[$]trrs`: t=TX queue, rr=RX char count, s=decoded text (may
+            // itself contain `;`). Append s to the rolling decode buffer.
+            let (_sub, a) = split_sub(arg);
+            if a.len() > 3 {
+                self.decode_text.push_str(&a[3..]);
+                let len = self.decode_text.len();
+                if len > 4000 {
+                    self.decode_text = self.decode_text.split_off(len - 2000);
+                }
+            }
+        } else if let Some(arg) = cmd.strip_prefix("TD") {
+            let (_sub, a) = split_sub(arg);
+            if let Some(c) = a.bytes().next() {
+                self.decode_mode = Some(c.wrapping_sub(b'0'));
             }
         } else if let Some(arg) = cmd.strip_prefix("SD") {
             // `x y zzz`: full-QSK flag, mode class, then the 10-ms delay.

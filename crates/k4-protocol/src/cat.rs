@@ -616,6 +616,15 @@ pub fn switch(code: u16) -> String {
     format!("SW{code};")
 }
 
+/// Set the **text decode/encode** mode (`TD`; `$`=sub): `mode` selects the
+/// decoder (CW: 2/3/4 = RX at increasing WPM, 0 = off), `threshold` 0–9
+/// (0 = auto), `lines` = received lines to display — D12.
+///
+/// trace: FR-TXT-01
+pub fn set_text_decode(mode: u8, threshold: u8, lines: u8) -> String {
+    format!("TD{}{}{};", mode.min(9), threshold.min(9), lines.min(9))
+}
+
 /// Remote **power** control (`PS`): `0` = power off, `8` = restart, `88` =
 /// auto-update + restart. NOTE: the K4 cannot be powered **on** via CAT (the
 /// interface is unpowered when the radio is off) — D12.
