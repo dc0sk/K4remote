@@ -155,6 +155,11 @@ struct App {
     // Which VFO transmits (B under split); tracks the radio, set optimistically
     // when a spectrum frame is clicked so the highlight moves immediately.
     tx_vfo_b: bool,
+    // Main-RX levels (seeded from the radio, driven by sliders): AF gain 0–60,
+    // RF-gain attenuation 0–60 dB, squelch 0–40 (FR-RX-01, FR-RX-SQL-01).
+    af_gain: u8,
+    rf_gain: u8,
+    squelch: u8,
 }
 
 /// Which graphic equalizer a screen edits (FR-EQ-01).
@@ -343,6 +348,9 @@ enum Message {
     CycleAgc,
     CycleBandwidth,
     SelectTxVfo(bool),
+    SetAfGain(u8),
+    SetRfGain(u8),
+    SetSquelch(u8),
     ToggleNb,
     ToggleNr,
     TogglePreamp,
@@ -528,6 +536,9 @@ impl App {
             log_len: 0,
             bw_hz: 2800,
             tx_vfo_b: false,
+            af_gain: 30,
+            rf_gain: 0,
+            squelch: 0,
         };
         (app, Task::none())
     }
@@ -793,6 +804,18 @@ impl App {
                 // Move the highlight immediately; the radio's echo keeps it honest.
                 self.tx_vfo_b = is_b;
                 self.send(WorkerCmd::Cat(k4_protocol::cat::set_split(is_b)));
+            }
+            Message::SetAfGain(v) => {
+                self.af_gain = v;
+                self.send(WorkerCmd::Cat(k4_protocol::cat::set_af_gain(v)));
+            }
+            Message::SetRfGain(v) => {
+                self.rf_gain = v;
+                self.send(WorkerCmd::Cat(k4_protocol::cat::set_rf_gain(v)));
+            }
+            Message::SetSquelch(v) => {
+                self.squelch = v;
+                self.send(WorkerCmd::Cat(k4_protocol::cat::set_squelch(v)));
             }
             Message::ToggleNb => self.send(WorkerCmd::ToggleNb),
             Message::ToggleNr => self.send(WorkerCmd::ToggleNr),
@@ -1825,6 +1848,15 @@ impl App {
         if let Some(v) = r.bandwidth_hz {
             self.bw_hz = v;
         }
+        if let Some(v) = r.af_gain {
+            self.af_gain = v;
+        }
+        if let Some(v) = r.rf_gain_db {
+            self.rf_gain = v;
+        }
+        if let Some(v) = r.squelch {
+            self.squelch = v;
+        }
         if let Some(v) = r.rx_eq {
             self.rx_eq = v;
         }
@@ -2375,6 +2407,29 @@ impl App {
                     .width(Length::Fixed(110.0)),
             )
             .push(small_btn("SET", Message::SetFreq));
+        // AF/RF gain + squelch sliders for the main receiver (FR-RX-01,
+        // FR-RX-SQL-01) — the K4's RF/SQL knob, plus radio-side AF.
+        let rxv = role_color(ui::ColorRole::RxValue);
+        let gain = |label: &'static str,
+                    val: u8,
+                    max: u8,
+                    msg: fn(u8) -> Message,
+                    unit: &'static str|
+         -> Element<Message> {
+            Row::new()
+                .spacing(6)
+                .align_y(Alignment::Center)
+                .push(Text::new(label).size(11).color(dim))
+                .push(slider(0..=max, val, msg).width(Length::Fixed(110.0)))
+                .push(Text::new(format!("{val}{unit}")).size(11).color(rxv))
+                .into()
+        };
+        let gain_row = Row::new()
+            .spacing(18)
+            .align_y(Alignment::Center)
+            .push(gain("AF", self.af_gain, 60, Message::SetAfGain, ""))
+            .push(gain("RF", self.rf_gain, 60, Message::SetRfGain, " dB"))
+            .push(gain("SQL", self.squelch, 40, Message::SetSquelch, ""));
         let controls = Container::new(
             Column::new()
                 .spacing(8)
@@ -2385,7 +2440,8 @@ impl App {
                         .push(Text::new("MAIN RX").size(11).color(dim))
                         .push(chips),
                 )
-                .push(tune_row),
+                .push(tune_row)
+                .push(gain_row),
         )
         .style(panel_style)
         .padding(12)

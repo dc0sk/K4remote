@@ -104,6 +104,7 @@ Programmer's Reference rev. D12 (`PRG`) command mnemonics.
 | `FR-RX-04` | control the noise blanker (`NB`) and noise reduction (`NR`) on/off (and level where defined). | STK-03 | S | T | NB on/off and level round-trip. |
 | `FR-RX-05` | select the RX antenna where applicable (`AR`/`AN`). | STK-03 | C | T | Antenna selection reflected in state. |
 | `FR-RX-06` | enable/disable and balance the sub receiver (`SB`, `BL`). | STK-03 | C | T | Sub-RX on and balance reflected in state. |
+| `FR-RX-SQL-01` | set and display the main-receiver squelch threshold 0–40 (`SQ`; `$`=sub). | STK-03 | S | T | `set_squelch(22)` emits `SQ022;`, clamps to 40, and reflects the `SQ` RESP. |
 
 ## G. Metering — `FR-MTR`
 
