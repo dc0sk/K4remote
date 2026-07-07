@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+pub mod backup;
 pub mod crypto;
 pub mod peer;
 pub mod secret;
