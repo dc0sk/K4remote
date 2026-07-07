@@ -183,6 +183,10 @@ struct App {
     // Which RX (VFO A/B) the frame controls target. Set by the header A/B and by
     // clicking a spectrum pane (needed in the A+B view where both are shown).
     active_rx_b: bool,
+    // Brief tap feedback for momentary switch buttons: the last SW code tapped
+    // and a countdown of ticks to keep it highlighted.
+    switch_flash: Option<u16>,
+    switch_flash_ticks: u8,
 }
 
 /// Which graphic equalizer a screen edits (FR-EQ-01).
@@ -589,6 +593,8 @@ impl App {
             decode_on: false,
             decode_tick: 0,
             active_rx_b: false,
+            switch_flash: None,
+            switch_flash_ticks: 0,
         };
         (app, Task::none())
     }
@@ -1141,7 +1147,11 @@ impl App {
             Message::Tx(t) => self.apply_tx(t),
             Message::VfoOp(op) => self.send(WorkerCmd::Cat(k4_protocol::cat::vfo_copy_swap(op))),
             Message::MenuOpen(id) => self.send(WorkerCmd::Cat(k4_protocol::cat::menu_open(id))),
-            Message::Switch(code) => self.send(WorkerCmd::Cat(k4_protocol::cat::switch(code))),
+            Message::Switch(code) => {
+                self.switch_flash = Some(code);
+                self.switch_flash_ticks = 4; // ~0.6 s tap highlight
+                self.send(WorkerCmd::Cat(k4_protocol::cat::switch(code)));
+            }
             Message::MenuFilter(q) => self.menu_filter = q,
             Message::SelectXvtr(n) => {
                 self.send(WorkerCmd::Cat(k4_protocol::cat::set_transverter_band(n)))
@@ -1194,6 +1204,13 @@ impl App {
                     self.last_split = self.ui.split;
                     if let Some(s) = self.ui.split {
                         self.tx_vfo_b = s;
+                    }
+                }
+                // Expire the momentary switch-tap highlight.
+                if self.switch_flash_ticks > 0 {
+                    self.switch_flash_ticks -= 1;
+                    if self.switch_flash_ticks == 0 {
+                        self.switch_flash = None;
                     }
                 }
                 // Poll the decoded-text buffer only while decode is on (~2.5 Hz),
@@ -1693,9 +1710,15 @@ impl App {
     /// `SW` emulation) as a compact grid for the TRANSMIT panel (FR-SW-01).
     fn tx_switch_grid(&self) -> Element<'_, Message> {
         let dim = role_color(ui::ColorRole::Inactive);
+        let flash = self.switch_flash;
         let cell = |label: &str, code: u16| -> Element<Message> {
+            let kind = if flash == Some(code) {
+                BtnKind::Active
+            } else {
+                BtnKind::Plain
+            };
             Button::new(Text::new(label.to_string()).size(11))
-                .style(btn_style(BtnKind::Plain))
+                .style(btn_style(kind))
                 .padding([4, 6])
                 .width(Length::Fixed(88.0))
                 .on_press(Message::Switch(code))
@@ -2199,10 +2222,17 @@ impl App {
         let rxv = role_color(ui::ColorRole::RxValue);
         let mut row = Row::new().spacing(6);
         for (label, code) in ui::radio_switches() {
-            row = row.push(small_btn_string(
-                (*label).to_string(),
-                Message::Switch(*code),
-            ));
+            let kind = if self.switch_flash == Some(*code) {
+                BtnKind::Active
+            } else {
+                BtnKind::Plain
+            };
+            row = row.push(
+                Button::new(Text::new(*label).size(12))
+                    .style(btn_style(kind))
+                    .padding([5, 10])
+                    .on_press(Message::Switch(*code)),
+            );
         }
         // Remote power (FR-PWR-01): restart + a two-step-guarded power off. The K4
         // cannot be powered ON via CAT, so there is no "on" control.
@@ -3073,7 +3103,7 @@ impl App {
             } else {
                 self.ui.s_meter_dbm
             };
-            let meter_h = if is_tx_pane { 46.0 } else { 22.0 };
+            let meter_h = if is_tx_pane { 66.0 } else { 22.0 };
             let meter = Canvas::new(meter::Meter {
                 tx: is_tx_pane,
                 s_dbm,
