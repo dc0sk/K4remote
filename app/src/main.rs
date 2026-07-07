@@ -1432,25 +1432,31 @@ impl App {
             ),
             _ => self.eq_screen(EqTarget::Rx, "RX equalizer", None),
         };
-        let mut col = Column::new().spacing(12);
+        let body = Column::new().spacing(12).push(tabs).push(content);
         if sub {
-            // Sub-RX enable + diversity (FR-RX-06, FR-DIV-01) — top of the sub screen.
-            col = col.push(
-                Row::new()
-                    .spacing(6)
-                    .push(two_line_btn(
-                        ui::toggle_button("SUB", self.ui.radio.sub_rx),
-                        self.ui.radio.sub_rx,
-                        Some(Message::ToggleSubRx),
-                    ))
-                    .push(two_line_btn(
-                        ui::toggle_button("DIVERSITY", self.ui.radio.diversity),
-                        self.ui.radio.diversity,
-                        Some(Message::ToggleDiversity),
-                    )),
-            );
+            // Two invisible columns: the equalizer/tabs on the left (so it sits
+            // exactly like MAIN RX), the SUB + DIVERSITY toggles stacked on the
+            // right (FR-RX-06, FR-DIV-01).
+            let side = Column::new()
+                .spacing(6)
+                .push(two_line_btn(
+                    ui::toggle_button("SUB", self.ui.radio.sub_rx),
+                    self.ui.radio.sub_rx,
+                    Some(Message::ToggleSubRx),
+                ))
+                .push(two_line_btn(
+                    ui::toggle_button("DIVERSITY", self.ui.radio.diversity),
+                    self.ui.radio.diversity,
+                    Some(Message::ToggleDiversity),
+                ));
+            Row::new()
+                .spacing(16)
+                .push(body.width(Length::Fill))
+                .push(side)
+                .into()
+        } else {
+            body.into()
         }
-        col.push(tabs).push(content).into()
     }
 
     /// RX → FILTER sub-panel: per-mode filter presets (`FP`, FR-MODE-03),
