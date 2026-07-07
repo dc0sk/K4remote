@@ -1,7 +1,7 @@
 ---
 title: "Test Strategy & Traceability"
 status: Draft
-version: "0.51"
+version: "0.52"
 updated: 2026-07-07
 authors:
   - Simon Keimer (DC0SK)
@@ -250,3 +250,4 @@ FR-SES-MULTI, FR-DIAG-02, etc. — get `TC` IDs when promoted to `Approved`.)*
 | 2026-07-07 | 0.49 | DC0SK | Fixes: settings Close button right-aligned; keyring root cause fixed — keyring v3 had NO backend feature (silent mock store), added apple-native/windows-native/sync-secret-service/crypto-rust, verified a real Secret Service round-trip via secret-tool; spectrum panes click-to-select TX VFO (FT/split, FR-UI-12) with accent frame + TX tag; spectrum canvas gained a dB scale + grid. |
 | 2026-07-07 | 0.50 | DC0SK | Gap-closing #1 (RX gain/squelch, fable analysis): new `set_squelch` (`SQ`, FR-RX-SQL-01) + SQ state parse; wired the orphaned AF/RF gain (`AG`/`RG`, FR-RX-01) and squelch to sliders in the MAIN RX panel; seeded BW/AG/RG/SQ on connect. Window 940→972 px. 122 tests. |
 | 2026-07-07 | 0.51 | DC0SK | Gap-closing #2 (TX power/compression): `set_tx_power` (`PC`, FR-TX-02) + `set_compression` (`CP`, FR-TX-CMP-01) with PC/CP state parse + seed; PWR slider inline in the TRANSMIT panel, CMP slider in TX→MIC. Fixed TX-VFO highlight flicker (hold optimistic value ~1.5 s before resuming split read-back). 124 tests. |
+| 2026-07-07 | 0.52 | DC0SK | Gap-closing #3 (TX knob completion): `set_qsk_delay` (`SD`, FR-TX-DLY-01) + `set_cw_pitch` (`CW`, FR-KEY-02) with SD/CW state parse + seed; PITCH slider and QSK full/delay controls in TX→KEYER (mode class derived from the current mode). 126 tests. |
