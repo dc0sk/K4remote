@@ -290,6 +290,14 @@ pub fn set_nb(on: bool) -> String {
     format!("NB{};", on as u8)
 }
 
+/// Set the noise-blanker level (`NB` full form `nnmf`): `level` 0–15, on/off,
+/// `filter` 0=none/1=narrow/2=wide.
+///
+/// trace: FR-RX-04
+pub fn set_nb_level(level: u8, on: bool, filter: u8) -> String {
+    format!("NB{:02}{}{};", level.min(15), on as u8, filter.min(2))
+}
+
 /// Set LMS noise reduction (`NR`): `level` 0–10, `mode` 0/1/2 (off/on/off-last).
 ///
 /// Example: `(2, 1)` → `"NR021;"`.
@@ -304,6 +312,21 @@ pub fn set_nr(level: u8, mode: u8) -> String {
 /// trace: FR-RX-04
 pub fn set_preamp(level: u8, on: bool) -> String {
     format!("PA{}{};", level.min(3), on as u8)
+}
+
+/// Set the TX/sidetone monitor level (`ML`): `m` = 0 CW / 1 AF-data / 2 voice,
+/// `level` 0–100.
+///
+/// trace: FR-TX-MON-01
+pub fn set_monitor(m: u8, level: u8) -> String {
+    format!("ML{}{:03};", m.min(2), level.min(100))
+}
+
+/// Spot / autospot (`SP`): 0 = off, 1 = spot, 2 = spot+mute, 3 = autospot.
+///
+/// trace: FR-CW-SPOT-01
+pub fn set_spot(n: u8) -> String {
+    format!("SP{};", n.min(3))
 }
 
 /// Set RIT on/off (`RT`).

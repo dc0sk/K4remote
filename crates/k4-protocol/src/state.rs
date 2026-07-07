@@ -138,8 +138,13 @@ pub struct RadioState {
     pub nr_on: Option<bool>,
     /// LMS noise reduction level 0–10 (`NR`).
     pub nr_level: Option<u8>,
-    /// Preamp on/off (`PA`).
+    /// Preamp on/off (`PA`) and level 0–3.
     pub preamp_on: Option<bool>,
+    pub preamp_level: Option<u8>,
+    /// Noise-blanker filter mode (`NB` `f`): 0=none/1=narrow/2=wide.
+    pub nb_filter: Option<u8>,
+    /// TX/sidetone monitor level 0–100 (`ML`, most recent mode class).
+    pub monitor_level: Option<u8>,
     /// RIT/XIT offset, Hz (from `IF`/`RO`; ±9999).
     pub rit_offset: Option<i16>,
     /// RIT on/off (`RT`).
@@ -400,6 +405,9 @@ impl RadioState {
                 if let Ok(level) = std::str::from_utf8(&b[0..2]).unwrap_or("x").parse::<u8>() {
                     *sub_or(&mut self.nb_level, &mut self.sub_nb_level, sub) = Some(level);
                     *sub_or(&mut self.nb_on, &mut self.sub_nb_on, sub) = Some(b[2] == b'1');
+                    if b.len() >= 4 {
+                        self.nb_filter = Some((b[3] - b'0').min(2));
+                    }
                 }
             }
         } else if let Some(arg) = cmd.strip_prefix("NR") {
@@ -418,6 +426,16 @@ impl RadioState {
             let b = a.as_bytes();
             if b.len() >= 2 {
                 *sub_or(&mut self.preamp_on, &mut self.sub_preamp_on, sub) = Some(b[1] == b'1');
+                if !sub {
+                    self.preamp_level = Some((b[0] - b'0').min(3));
+                }
+            }
+        } else if let Some(arg) = cmd.strip_prefix("ML") {
+            // `MLmnnn` — monitor level; keep the level (nnn) for the mode class.
+            if arg.len() >= 4 {
+                if let Ok(v) = arg[1..4].parse::<u8>() {
+                    self.monitor_level = Some(v);
+                }
             }
         } else if let Some(arg) = cmd.strip_prefix("RO") {
             // `ROsnnnn` — signed offset in Hz (RO$ = sub form; either updates the
@@ -644,6 +662,7 @@ pub fn connect_state_seed() -> &'static [&'static str] {
         "AT;", "ACM;", "ACS;", // ATU mode + RX/sub antenna access masks
         "SN;",  // K4 serial number (for config-export filenames)
         "RO;",  // RIT/XIT offset (Hz)
+        "ML0;", "ML1;", "ML2;", // monitor levels (CW / AF-data / voice)
         // Configuration-screen read-back (FR-UI-19 screens):
         "RE;", "TE;", "KP;", "KS;", "MI;", "MG;", "LO;", "AN;", "AR;", "AR$;", "VXV;", "BN;",
         "#REF;", "#SPN;", "#SCL;", "#DPM;", "#WFC;", "#WFH;",

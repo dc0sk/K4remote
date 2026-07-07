@@ -421,6 +421,8 @@ enum Message {
     ToggleXit,
     ClearRitXit,
     AdjustRitOffset(i16),
+    SetMonitor(u8),
+    Autospot,
     ToggleArm,
     ToggleKey,
     EmergencyStop,
@@ -1284,7 +1286,18 @@ impl App {
                 self.send(WorkerCmd::Cat(target_rx("NR;".into(), sub)));
             }
             Message::TogglePreamp => {
-                self.send(WorkerCmd::Cat(target_rx("PA/;".into(), self.active_sub())))
+                // Rotate through the preamp levels 0(off)→1→2→3→off (FR-RX-02).
+                let on = self.rx_preamp_on().unwrap_or(false);
+                let cur = if on {
+                    self.ui.radio.preamp_level.unwrap_or(0)
+                } else {
+                    0
+                };
+                let next = (cur + 1) % 4;
+                self.send(WorkerCmd::Cat(target_rx(
+                    k4_protocol::cat::set_preamp(next, next != 0),
+                    self.active_sub(),
+                )));
             }
             Message::ToggleRit => self.send(WorkerCmd::ToggleRit),
             Message::ToggleXit => self.send(WorkerCmd::ToggleXit),
@@ -1293,6 +1306,15 @@ impl App {
                 let next = (self.ui.radio.rit_offset.unwrap_or(0) + d).clamp(-9999, 9999);
                 self.send(WorkerCmd::Cat(k4_protocol::cat::set_rit_offset(next)));
             }
+            Message::SetMonitor(level) => {
+                let m = match self.tx_mode_class() {
+                    'C' => 0,
+                    'D' => 1,
+                    _ => 2,
+                };
+                self.send(WorkerCmd::Cat(k4_protocol::cat::set_monitor(m, level)));
+            }
+            Message::Autospot => self.send(WorkerCmd::Cat(k4_protocol::cat::set_spot(3))),
             Message::ToggleArm => self.send(WorkerCmd::ArmTx(!self.ui.tx_armed)),
             Message::ToggleKey => self.send(WorkerCmd::Key(!self.ui.transmitting)),
             Message::EmergencyStop => self.send(WorkerCmd::EmergencyStop),
@@ -2129,10 +2151,34 @@ impl App {
             }
             grid = grid.push(row);
         }
+        // Monitor level (ML, sidetone/speech) + autospot (SP3), below the grid.
+        let mon = self.ui.radio.monitor_level.unwrap_or(0);
+        let mon_row = Row::new()
+            .spacing(8)
+            .align_y(Alignment::Center)
+            .push(Text::new("MON").size(10).color(dim))
+            .push(
+                slider(0..=100u8, mon, Message::SetMonitor)
+                    .step(1u8)
+                    .width(Length::Fixed(120.0)),
+            )
+            .push(
+                Text::new(format!("{mon}"))
+                    .size(10)
+                    .color(role_color(ui::ColorRole::RxValue)),
+            )
+            .push(horizontal_space())
+            .push(
+                Button::new(Text::new("AUTOSPOT").size(11))
+                    .style(btn_style(BtnKind::Plain))
+                    .padding([4, 8])
+                    .on_press(Message::Autospot),
+            );
         Column::new()
-            .spacing(4)
+            .spacing(6)
             .push(Text::new("Switches (tap · hold)").size(10).color(dim))
             .push(grid)
+            .push(mon_row)
             .into()
     }
 
@@ -3298,7 +3344,7 @@ impl App {
                 Some(Message::ToggleAtten),
             ))
             .push(two_line_btn(
-                ui::toggle_button("PRE", self.rx_preamp_on()),
+                ui::preamp_button(self.rx_preamp_on(), self.ui.radio.preamp_level),
                 self.rx_preamp_on(),
                 Some(Message::TogglePreamp),
             ))
