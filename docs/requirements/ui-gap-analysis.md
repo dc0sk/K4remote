@@ -1,158 +1,127 @@
 ---
-title: "UI & Requirements Gap Analysis"
+title: "Feature Completeness Review & Action Plan"
 status: Draft
-version: "0.1"
+version: "0.2"
 updated: 2026-07-07
 authors:
   - Fable (agent, commissioned by DC0SK)
 ---
 
-# UI & Requirements Gap Analysis
+# Feature Completeness Review & Action Plan
 
-A rescan of *Intro to the Elecraft K4* rev C5 and the *K4 Programmer's Reference*
-rev D12 against the current SRS ([system-requirements.md](system-requirements.md))
-and the implemented UI (`app/src/`), to find K4 functionality that is documented
-but not yet in our requirements or UI. This is an input to a requirements-update
-session — items here are **candidates**, not yet accepted requirements.
+Supersedes the original v0.1 gap analysis (most of whose "top gaps" are now
+closed — v0.50–0.67 in [test-strategy.md](../test/test-strategy.md)). Reconstructed
+from the code, the test-strategy change log, the SRS, and D12 / Intro C5.
+Analysis input for future sessions — items are **candidates**, not accepted
+requirements.
 
-## Top gaps to close first
+## Already done — do NOT redo
 
-1. **Squelch is completely absent** (`SQ`/`SQ$`) and **AF/RF gain have encoders
-   but no UI controls** — the whole RF/SQL multifunction knob (M.RF / M.SQL /
-   S.RF / S.SQL / BAL) has no remote equivalent. Core operating controls.
-2. **TX power (`PC`) is spec'd (`FR-TX-02`) but unimplemented**; the companion
-   **QSK/VOX delay (`SD`)** isn't even spec'd. This is the PWR/DLY knob pair.
-3. **Speech compression (`CP`), TX monitor level (`ML`), CW pitch (`CW`)** — the
-   rest of the XMTR knob (MIC/CMP, WPM/PITCH, hold-MON) — are missing. Only MIC
-   (`MG`) and WPM (`KS`) exist.
-4. **Passband tuning is BW-only**: no shift (`IS$`), no hi/lo-cut view, no
-   NORMalize, no filter presets (`FP`, spec'd `FR-MODE-03`).
-5. **Diversity (`DV`) and sub-RX on/off (`SB`) have no CAT path** — DIV is a
-   blind `SW152;` tap, SUB isn't reachable.
-6. **Notch (`NM$`/`NA$`) and APF (`AP$`)** — a whole switch column (NTCH,
-   FIL/APF) — are missing.
-7. **~20 front-panel tap/hold functions are unreachable** (SPOT-hold autospot,
-   NB/NR level adjust, RATE/KHZ, SUB/DIV, B SET, REV, STORE/RCL/BANK, MODE-alt,
-   knob holds NORM/BAL).
+Connection/session (TCP + TLS-PSK + serial, PING/PONG, reconnect, ~50-GET
+connect seed, **periodic resync** ~3 s locals / ~8 s full burst, peer cache);
+VFO/band/mode (FA/FB, direct MHz entry for A, band up/down/direct/stack/XVTR,
+split + click-a-pane TX-VFO select, AB copy/swap, RIT/XIT on/off/clear, mode
+LSB/USB/CW/DATA); **RX main+sub** (`$`-retargeted): AF/RF/SQL sliders, ATT/PRE/NB/
+NR/AGC toggles with read-back, filter presets FL1–3 + normalize, **shift**, BW
+cycle, **manual/auto notch + APF**, **sub-RX + diversity**, sub-RX read-back, RX/TX
+EQ; **TX**: PTT/arm/e-stop, CW paddle stream, **power**/compression/CW-pitch/QSK
+delay, keyer, mic, line in/out, VOX on/off, text send (KY), switch grid with live
+state; **metering**: S-meter + in-panadapter **S-meter + TX RF/ALC/SWR/CMP bars**
+(`TM`); **text decode** (`TD`/`TB`); **scan** (`SW149` + `IF s`); antennas +
+**subset cycling** (`ACM`/`ACS`); display (spectrum/waterfall, DISPLAY screen,
+layout adopted from `#DPM`); MENU list, quick memories, remote power, **config
+export/import w/ SHA-256**, diagnostics, audio, packaging/CI.
 
-## A. RX controls
+## Open items (prioritized)
 
-| Feature (Intro ref) | CAT (D12) | Status | Gap / proposed requirement |
+### A. VFO / tuning — the biggest remaining hole
+| # | Item | CAT | Prio |
 |---|---|---|---|
-| Main/sub squelch — M.SQL, S.SQL | `SQ$nnn;` 000–040, toggle `SQ$/`, `SQ$+/-`; non-FM needs MENU 106 | **Missing** | `FR-RX-SQL-01`: set/display main+sub squelch (`SQ`/`SQ$`), incl. all-mode squelch enable (ME 0106). |
-| Main/sub RF gain — M.RF, S.RF | `RG$-nn;` 0…−60, `RG$/` | **Partial** — `FR-RX-01` spec'd, `set_rf_gain` exists, no UI | Impl gap on `FR-RX-01`: main+sub RF-gain sliders. |
-| AF gain — AF / SUB AF | `AG$nnn;` 000–060 | **Partial** — `set_af_gain` exists, no radio-side UI (volume slider is client-side) | Impl gap on `FR-RX-01`: radio AF sliders main+sub. |
-| Balance — BAL (knob hold) | `BLm+nn;`, `BL~` | **Missing impl** — `FR-RX-06` mentions `BL` | Backlog with sub-RX work. |
-| Sub RX on/off — SUB tap | `SBn;`, `SB/`; `SW83` | **Missing impl** — `FR-RX-06` | Raise priority; prereq for diversity/dual-pan/S.RF/S.SQL. |
-| Manual + auto notch — NTCH tap/hold | `NM$nnnnm;`, `NA$n;`; SW31/140/146 | **Missing** | `FR-RX-NOTCH-01`: manual notch (on/off + pitch) + auto-notch per RX. |
-| APF — FIL hold (CW) | `AP$mb;` b=30/50/150 Hz; SW144 | **Missing** | `FR-RX-APF-01`: toggle APF + bandwidth (`AP`) in CW. |
-| NB/NR levels — NB/NR hold | `NB$nnmf;`, `NR$nnm;`, `NRS$nnm;`; SW142/143 | **Partial** — UI sends blind taps, level path absent, SSNR missing | Impl gap on `FR-RX-04`; add `NRS`. |
-| Preamp levels | `PA$nm;` n=0–3 | **Partial** — toggle only, no level rotation/dB | Extend `FR-RX-02` to rotate `PA`. |
-| AGC off + AF limiter | `GT$0` + `AL nn` | **Partial** — `AL` absent | Note `AL` in `FR-RX-03`. |
-| Audio effects / RX mix | `FX`, `MX` | Missing (low) | Optional `FR-RX-FX-01`. |
+| A1 | VFO up/down **steps + mouse-wheel** tuning; VFO-B direct entry (today: type-MHz sets A only) | `UP/DN(B)`, `VT$` rate, or client `FA`/`FB` math | **Must** |
+| A2 | **Click-to-tune / scroll on the spectrum** (QSY) — pane click only picks TX VFO | `FA`/`FB` from cursor x→Hz | **Must** |
+| A3 | **RIT/XIT offset** adjust + display (only on/off/clear exist; `IF` `+yyyy` field unparsed) | `RO$snnnn;`, `RU$/RD$`, `IF` offset | **Must** |
+| A4 | VFO **lock** read-back (LOCK A/B are blind `SW63/151`) | `LK$` | Should |
+| A5 | REV momentary, B SET, VFO link/band-indep/offset | `SW160/161`, `BS`, `LN`/`BI`/`VO$` | Could |
 
-## B. TX controls
-
-| Feature | CAT | Status | Gap |
+### B. Mode
+| # | Item | CAT | Prio |
 |---|---|---|---|
-| PWR — power (XMTR knob) | `PCnnnr;` r=L/H/X; `PO`, `PP` | **Missing impl** — `FR-TX-02` spec'd | Implement `FR-TX-02` incl. QRP/QRO/mW ranges. |
-| DLY — VOX/QSK delay | `SDxyzzz;`, `SD/` | **Missing** — only blind `SW134;` | `FR-TX-DLY-01`: full-QSK / per-mode delay (`SD`). |
-| MIC gain | `MGxxx;` 0–80 | **Covered** (`FR-AUD-CFG-01`) | — |
-| CMP — speech compression | `CPnnn;` 000–030 (SSB) | **Missing** | `FR-TX-CMP-01`: set compression + show CMP bar on TX. |
-| WPM | `KSnnn;` | **Covered** (`FR-KEY-01`) | — |
-| PITCH — CW sidetone | `CWnn;` 25–95 ×10 Hz | **Missing** | `FR-KEY-02`: CW sidetone/pitch (`CW`). |
-| MON — monitor level (hold) | `MLmnnn;` | **Missing** — blind `SW128;` | `FR-TX-MON-01`: per-mode monitor level (`ML`). |
-| VOX gain / anti-VOX | `VGmnnn;`, `VInnn;` | **Missing** — only `VX` on/off | Extend `FR-VOX-01` or add `FR-VOX-02`. |
-| TX TEST | `TSn;`; `SW132` | **Partial** — hold emulated, no `TS` readback | Use `TS` with RESP. |
-| ESSB | `ESnbb;` | **Missing** | `FR-TX-ESSB-01`. |
-| TX DATA bandwidth | `DWnn;` | **Missing** (minor) | Fold with ESSB. |
-| DVR voice/AF messages | `DA…`, `PB n`; SW19/138/139/137 | **Missing** | `FR-DVR-01` (C): record/save/play/stop DVR. |
-| TX metering (RF/SWR/ALC/CMP) | `TMaaabbbcccddd;`, enable `TM1;` | **Partial** — `FR-MTR-03` spec'd, `TM` not parsed, no bars | Impl gap: parse `TM`, render bars. |
+| B1 | **AM/FM (+ CW-R/DATA-R) not selectable** — mode row is LSB/USB/CW/DATA only (state parses all 8) | `MD4/5/7/9`, `MA$` | **Must** |
+| B2 | FM extras: repeater offset, CTCSS | `RP`, `PL$` | Should |
+| B3 | DATA sub-mode select (feeds text decode) | `DT$` (FR-MODE-04) | Should |
 
-## C. Filter / DSP passband
-
-Intro p17: FILTER knob = width (BW) + shift (SHFT), *or* hi-cut (HI) + lo-cut (LO); hold = NORMalize.
-
-| Feature | CAT | Status | Gap |
+### C. Filter / DSP
+| # | Item | CAT | Prio |
 |---|---|---|---|
-| Bandwidth | `BW$nnnn;` ×10 Hz | **Partial** — `FR-MODE-02`; UI is 8-step preset cycle, no continuous/sub-RX | Continuous BW per RX. |
-| Shift (SHFT) | `IS$nnnn;` | **Missing** | `FR-FIL-01`: passband shift/center per RX (`IS`). |
-| HI/LO-cut | derived from `BW`+`IS` | **Missing** | `FR-FIL-02`: HI/LO editing mapping to `BW`/`IS`. |
-| NORM (hold) | `FP~;` / `SW129;` | **Missing** | Include in `FR-FIL-01/02`. |
-| Filter presets FL1/2/3 | `FP$n;`, `FP~` | **Missing impl** — `FR-MODE-03`; FIL `SW33` absent | Implement `FR-MODE-03` (consider raising to S). |
-| Passband graphic | render `BW`/`IS` | **Missing** | Extend `FR-UI-02` with a per-VFO passband indicator. |
+| C1 | **HI/LO-cut editing** — derived from BW+IS (see plan below) | `BW`+`IS` (no dedicated cmd) | Should |
+| C2 | **Passband graphic** on the spectrum edge | render-only | Should |
+| C3 | **NB/NR level sliders + SSNR** (toggles exist; levels implicit) | `NB$nnmf`, `NR$nnm`, `NRS$nnm` | Should |
+| C4 | Preamp **level** rotation 0–3 (UI is on/off; `PA` level digit discarded) | `PA$nm` | Should |
+| C5 | Attenuator 3 dB step; AF limiter (AGC-off) | `RA$+/-`, `AL` | Could |
+| C6 | Sub balance, RX mix/effects | `BL`, `MX`, `FX` | Could |
 
-## D. Diversity
-
-Intro p12: tap SUB = sub RX on; **hold SUB = DIVERSITY**. CAT `DVn;`, `DV\` toggle (also toggles sub RX; VFO A band/mode/filter copied to B; RIT on A affects both). Currently only a blind `DIV` tap (`SW152;`), no readback, no sub-RX precondition, no `=OPP TX` antenna.
-
-- Proposed `FR-DIV-01`: enable/disable diversity (`DV`, `DV\` semantics), reflect state, indicate sub-RX mirrors VFO A while active. Surface `=OPP TX` in the RX-ant panel (extend `FR-ANT-01`).
-
-## E. Scan
-
-Intro p12: **hold SCAN** to scan between A/B of the last-recalled memory. CAT: SW-switch only (`SW149;`); scan-in-progress is the `IF` response `s` field.
-
-- Proposed `FR-SCAN-01`: start/stop scan via `SW149;`, display scan-in-progress from the `IF` `s` flag, stop on any tune/PTT.
-
-## F. Front-panel switches — full tap/hold matrix
-
-**Bold** = not currently reachable from our UI.
-
-| Switch (tap / hold) | SW (tap / hold) | Dedicated CAT | Coverage |
+### D. TX
+| # | Item | CAT | Prio |
 |---|---|---|---|
-| FREQ ENT / **SCAN** | SW53 / SW149 | — | Partial: entry native; SCAN missing (§E) |
-| **RATE / KHZ** | SW73 / SW150 | `VT$` | Missing radio-side rate → `FR-VFO-08` (`VT`). |
-| **SUB / DIV** | SW83 / SW152 | `SB` / `DV` | SUB missing; DIV tap-only (§A/§D) |
-| LOCK A / LOCK B | SW63 / SW151 | `LK$n;` | Partial: taps wired but blind; `LK` gives readback. |
-| **MODE / ALT** | SW43 / SW148 | `MD$`, `MA$` | Partial: **AM/FM missing** from mode row, no alt-mode, no sub-RX mode. |
-| **B SET** | SW44 | `BS` | Missing sub-RX context (our `$` variants already exist in the CAT layer). |
-| A/B, A→B, B→A | SW41/72/147 | `AB0–5;` | Covered (Fn→VFO ops); not near the VFOs as on radio. |
-| SPLIT | SW145 | `FTn;` | Covered (also now click-a-frame TX-VFO select). |
-| **REV (press/release)** | SW160/161 | — | Missing momentary. `FR-VFO-REV-01`. |
-| RIT / XIT / CLR | SW54/74/64 | `RT`/`XT`/`RC` | Covered; **offset adjust missing** (`RO$`/`RU`/`RD`) — impl gap on `FR-VFO-05`. |
-| PRE / **ATTN-hold** | SW61 / SW141 | `PA$`, `RA$` (+3 dB steps) | Partial: toggles only, no step-adjust. |
-| NB / **LEVEL-hold** | SW32 / SW142 | `NB$` | Partial (§A). |
-| NR / **ADJ-hold** | SW62 / SW143 | `NR$`/`NRS$` | Partial (§A). |
-| **NTCH / MANUAL/AUTO** | SW31 / SW140,146 | `NM$`, `NA$` | Missing (§A). |
-| **FIL / APF** | SW33 / SW144 | `FP$`, `AP$` | Missing (§A/§C). |
-| SPOT / **AUTO-SPOT hold** | SW42 / — | `SPn;` 0–3 | Partial: tap-only. Add autospot (`SP0–3`). |
-| **STORE / RCL / BANK** + M1–M4 | SW20/34/137 + SW17/51/18/52 | `MC` pending | Partial: M1–M4/PF1–PF4 covered; STORE/RCL/BANK missing. |
-| TUNE·TUNE LP / ATU TUNE·ATU / ANT·REM ANT / XMIT·TEST / VOX·QSK / RX ANT·SUB ANT | (implemented) | `AT`,`AN`,`TS`,`VX`,`SD` | Covered as blind taps; stateful `AT`/`TS`/`SD` are the gaps above. |
-| XMTR/FILTER/RF-SQL knob taps; MON/NORM/BAL holds | SW80–82; SW128–130 | `ML`,`FP~`,`BL` | MON present; NORM/BAL missing — superseded by direct controls. |
-| POWER | — | `PS0/8` | Covered (`FR-PWR-01`). |
+| D1 | **Monitor level** (MON, unreachable) | `MLmnnn` | **Must** |
+| D2 | **VOX gain / anti-VOX** (only `VX` on/off) | `VG`, `VI` | Should |
+| D3 | **Autospot** (SPOT is blind `SW42`) | `SPn` 0–3 | Should |
+| D4 | TX power **low/mW ranges** (`set_tx_power` emits `PC…H` only) | `PCnnnr` L/H/X | Should |
+| D5 | ESSB + TX DATA bandwidth | `ES`, `DW` | Could |
+| D6 | **DVR voice-message** play/record (8 slots) | `PBn`, `DA…` | Should |
+| D7 | TX TEST read-back; TX inhibit indicator | `TS`, `IN` | Could |
 
-Umbrella: `FR-SW-02` — expose every front-panel tap/hold either through its
-stateful CAT command (preferred) or `SW` emulation, so nothing is unreachable.
-
-## G. Display / panadapter / status
-
-| Feature | CAT | Status | Gap |
+### E. Display / panadapter
+| # | Item | CAT | Prio |
 |---|---|---|---|
-| Fixed-tune / freeze | `#FXT`, `#FRZ` | Partial — `set_pan_fixed` exists, no `DispMsg::Fixed` | Wire `#FXT` into DISPLAY. |
-| WF colour range, display mode | `#WBS`, `#DSM` | **Missing** — `FR-PAN-CTL-02` spec'd | Implement or descope. |
-| Pan NB | `#NB`/`#NBL` | Partial — encoders exist, not in DISPLAY | Wire in. |
-| Per-pan targeting (A/&/B) | `#` per-pan | **Missing** — `apply_disp` never targets A vs B | Extend `FR-PAN-CTL-01`. |
-| Status area (date/time, ID, TX V/I/W/SWR, dBV) | `ID`, `DB$`, `TM` | **Missing** | `FR-UI-STATUS-01` (C). |
-| Mini-pan | `#MPRUN` / 0x03 frames | `FR-UI-14` (C) unimpl | — |
-| **Text decode/encode** (CW/PSK/FSK RX text + kbd TX) | `TD$mtl;`, `TB$;`, `KY` | **Missing** — headline K4 feature, only outbound `KY` (`FR-TX-MSG-01`) | `FR-TXT-01`: per-RX decode (`TD$`), poll/show (`TB$`), send (`KY`). |
+| E1 | **Per-receiver spectrum in dual view** — worker ignores `PanFrame.receiver`; both panes draw the same trace (bug) | packet receiver byte | **Must** |
+| E2 | **Per-pan `#` targeting** (A/B) — display cmds apply globally | `#REF$`, `#NB$`, `#WFC$`, `#VFA/B` | Should |
+| E3 | **Mini-pan** (0x03 frames dropped) | `#MP$`, 0x03 stream (FR-UI-14) | Should |
+| E4 | `#FXT` fixed-tune + pan-NB wiring into DISPLAY | `#FXT`, `#NB`, `#NBL` | Should |
+| E5 | Waterfall colour range / display mode | `#WBS`, `#DSM` (FR-PAN-CTL-02) | Could |
+| E6 | **Status readout** (UTC, supply V/I, dBV, client count, ID) | `UT`, `DB$`, `CC`, `ID`, `SI` | Could |
 
-## H. Other
+### F. Memory / scan
+- F1 **Full memory channels** — only quick-mems M1–M4; `MC`/`MB` still "[Pending]" in D12, so STORE/RCL/BANK stay `SW`-emulation without read-back (revisit when `MC` lands). *Could.*
 
-- **VFO link/band-independence/offset** (`LN`/`BI`/`VO$`): `FR-VFO-09` batch (C).
-- **FM support**: `RP` (repeater), `PL$` (CTCSS); FM not selectable in mode row → `FR-FM-01` (C).
-- **Antenna config/names**: `ACT` (TX-ant subset = "ANT CFG"), `ACN` (names) → show real antenna names like "2:YAGI"; extend `FR-ANT-01`.
-- **ATU mode** `AT` (auto/bypass): the ATU hold `SW158` is blind.
-- **Transmit-icon row** (SPLIT/VOX/ANT/ATU/QSK between the VFOs): depends on the missing state readbacks.
-- **`IF` parsing completeness**: `IF` carries RIT/XIT offset+flags, TX state, scan flag, split, data sub-mode — add a test asserting all fields feed `RadioState` (scan field currently unused).
+### G. Config / antennas / other
+| # | Item | CAT | Prio |
+|---|---|---|---|
+| G1 | **Antenna names** ("2:YAGI") + TX-antenna subset; verify `ACM`/`ACS` mapping live | `ACN`, `ACT` | Should |
+| G2 | **Full-menu backup** — export replays ~30 tracked settings, not the 89 MENU items | `MEDF`/`ME` sweep (FR-CFG-07) | Should |
+| G3 | Menu value display/edit (MENU only opens items on the radio) | `MEDF`/`ME` | Could |
+| G4 | Station ID + remote client count | `ID`, `CC` | Could |
+| G5 | Audio encode/latency knobs (`EM3`/`SL2` hard-coded) | `EM`, `SL` | Should |
+| G6 | `CAT ?;` error mapping/surfacing | `<cmd>?;` (FR-CAT-03) | Could |
 
-## Summary counts
+## HI/LO-cut plan (item C1, detail)
 
-- **Missing entirely (SRS + UI)**: squelch, QSK/VOX delay, compression, monitor
-  level, CW pitch, passband shift & hi/lo-cut, notch, APF, diversity, scan,
-  sub-RX B SET/REV/RATE-KHZ, ESSB, DVR, text decode, status display, per-pan
-  targeting — ~17 features.
-- **Spec'd but unimplemented**: `FR-TX-02` (PC), `FR-MODE-03` (FP), `FR-RX-06`
-  (SB/BL), `FR-MTR-03` (TM parse), `FR-PAN-CTL-02` (#WBS/#DSM), the offset half
-  of `FR-VFO-05`.
-- **Implemented but UI-orphaned**: `set_af_gain`, `set_rf_gain`, `set_pan_fixed`,
-  `set_pan_nb`, `set_pan_nb_level`, `set_mode_sub` (in `crates/k4-protocol/src/cat.rs`).
+**No dedicated CAT command** — the K4 FILTER knob's HI/LO view is an alternate
+presentation of BW + IS: `LO = IS − BW/2`, `HI = IS + BW/2` (inverse
+`BW = HI − LO`, `IS = (HI + LO)/2`).
+
+- **Protocol:** `passband_edges(bw, center) → (lo, hi)` and
+  `set_passband_edges_hz(lo, hi) → ("BW…;", "IS…;")` reusing `set_bandwidth_hz`
+  /`set_shift_hz`; add `RadioState::passband_edges(sub)`. No new wire commands,
+  no seed changes (BW/IS + `$` already seeded).
+- **UI:** a `BW/SHFT ⇄ HI/LO` toggle that swaps the SHIFT slider for **LO** + **HI**
+  sliders; dragging either recomputes BW+IS and sends both to the active VFO.
+- **Requirement:** `FR-FIL-02`; cat + state tests (round-trip, midpoint
+  rounding, 50 Hz min-width clamp).
+- **Verify live:** per-mode BW/IS clamps, command ordering, CW-mode semantics
+  (passband centers on sidetone — HI/LO may be read-only in CW).
+
+## Suggested execution order
+
+1. **Operating feel (Must):** A1 step/wheel tuning + `VT$`, A2 click-to-QSY,
+   A3 RIT/XIT offset, B1 AM/FM/CW-R/DATA-R mode row.
+2. **Knob completion:** D1 `ML`, D2 `VG`/`VI`, D3 `SP` autospot, D4 PC ranges,
+   C3 NB/NR levels + `NRS`, C4 preamp level.
+3. **Display:** E1 per-receiver spectra (bug), E4 `#FXT`/pan-NB, E2 per-pan
+   targeting, E3 mini-pan.
+4. **Polish/config:** C1/C2 HI-LO cut + passband graphic, G1 antenna names/ACT +
+   live `ACM`/`ACS` verification, G2 full-menu backup, D6 DVR, B2/B3 FM/DATA
+   sub-modes, G5 EM/SL settings.
+
+Accuracy caveats to clear during a hardware-in-the-loop pass: the `ACM`/`ACS`
+antenna-mask a–g→`AR$` mapping and the `PC` low-range parse.
