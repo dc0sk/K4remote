@@ -561,7 +561,7 @@ impl App {
             volume,
             mic_gain,
             power_off_armed: false,
-            show_log: true,
+            show_log: false,
             log_autoscroll: true,
             log_id: scrollable::Id::new("diag-log"),
             log_len: 0,
@@ -822,7 +822,9 @@ impl App {
             }
             Message::SetMode(digit) => self.send(WorkerCmd::SetMode(digit)),
             Message::Band(up) => self.send(WorkerCmd::Band(up)),
-            Message::ToggleAtten => self.send(WorkerCmd::ToggleAtten),
+            Message::ToggleAtten => {
+                self.send(WorkerCmd::Cat(target_rx("RA/;".into(), self.active_sub())))
+            }
             Message::ToggleSplit => self.send(WorkerCmd::ToggleSplit),
             Message::CycleAgc => self.send(WorkerCmd::CycleAgc),
             Message::CycleBandwidth => {
@@ -971,9 +973,13 @@ impl App {
                     self.active_sub(),
                 )));
             }
-            Message::ToggleNb => self.send(WorkerCmd::ToggleNb),
+            Message::ToggleNb => {
+                self.send(WorkerCmd::Cat(target_rx("NB/;".into(), self.active_sub())))
+            }
             Message::ToggleNr => self.send(WorkerCmd::ToggleNr),
-            Message::TogglePreamp => self.send(WorkerCmd::TogglePreamp),
+            Message::TogglePreamp => {
+                self.send(WorkerCmd::Cat(target_rx("PA/;".into(), self.active_sub())))
+            }
             Message::ToggleRit => self.send(WorkerCmd::ToggleRit),
             Message::ToggleXit => self.send(WorkerCmd::ToggleXit),
             Message::ClearRitXit => self.send(WorkerCmd::ClearRitXit),
@@ -1514,97 +1520,6 @@ impl App {
         Column::new().spacing(12).push(tabs).push(content).into()
     }
 
-    /// RX → FILTER sub-panel: per-mode filter presets (`FP`, FR-MODE-03),
-    /// Filter + notch cluster for the RX frame (FR-MODE-03/FR-FIL-01/
-    /// FR-RX-NOTCH-01/FR-RX-APF-01). Two invisible columns so each slider lines
-    /// up under its buttons: left = FL1/2/3 + NORMALIZE over the SHIFT slider,
-    /// right = NOTCH + AUTO NCH over the PITCH slider, with APF beneath. All apply
-    /// to the active RX VFO (see `target_rx`).
-    fn rx_filter_cluster(&self) -> Element<'_, Message> {
-        let dim = role_color(ui::ColorRole::Inactive);
-        let rxv = role_color(ui::ColorRole::RxValue);
-        let preset = |label: &'static str, n: u8| {
-            small_btn_string(label.to_string(), Message::FilterPreset(n))
-        };
-        let left = Column::new()
-            .spacing(6)
-            .push(
-                Row::new()
-                    .spacing(6)
-                    .push(preset("FL1", 1))
-                    .push(preset("FL2", 2))
-                    .push(preset("FL3", 3))
-                    .push(small_btn("NORMALIZE", Message::FilterNormalize)),
-            )
-            .push(
-                Row::new()
-                    .spacing(6)
-                    .align_y(Alignment::Center)
-                    .push(Text::new("SHIFT").size(11).color(dim))
-                    .push(
-                        slider(200..=3000u16, self.shift_hz, Message::SetShift)
-                            .step(10u16)
-                            .width(Length::Fixed(150.0)),
-                    )
-                    .push(
-                        Text::new(format!("{} Hz", self.shift_hz))
-                            .size(11)
-                            .color(rxv),
-                    ),
-            );
-        let right = Column::new()
-            .spacing(6)
-            .push(
-                Row::new()
-                    .spacing(6)
-                    .align_y(Alignment::Center)
-                    .push(two_line_btn(
-                        ui::toggle_button("NOTCH", self.rx_notch_on()),
-                        self.rx_notch_on(),
-                        Some(Message::ToggleManualNotch),
-                    ))
-                    .push(two_line_btn(
-                        ui::toggle_button("AUTO NCH", self.rx_auto_notch()),
-                        self.rx_auto_notch(),
-                        Some(Message::ToggleAutoNotch),
-                    ))
-                    .push(two_line_btn(
-                        ui::toggle_button("APF", self.rx_apf_on()),
-                        self.rx_apf_on(),
-                        Some(Message::ToggleApf),
-                    ))
-                    .push(small_btn_string(
-                        format!(
-                            "BW {}",
-                            match self.rx_apf_width() {
-                                Some(0) => "30",
-                                Some(1) => "50",
-                                Some(2) => "150",
-                                _ => "—",
-                            }
-                        ),
-                        Message::CycleApfWidth,
-                    )),
-            )
-            .push(
-                Row::new()
-                    .spacing(6)
-                    .align_y(Alignment::Center)
-                    .push(Text::new("PITCH").size(11).color(dim))
-                    .push(
-                        slider(150..=5000u16, self.notch_pitch, Message::SetNotchPitch)
-                            .step(10u16)
-                            .width(Length::Fixed(130.0)),
-                    )
-                    .push(
-                        Text::new(format!("{} Hz", self.notch_pitch))
-                            .size(11)
-                            .color(rxv),
-                    ),
-            );
-        Row::new().spacing(24).push(left).push(right).into()
-    }
-
     /// RX → ANT sub-panel (`AR`/`AR$`): cycle the RX antenna for this receiver.
     fn rx_ant_panel(&self, sub: bool) -> Element<'_, Message> {
         let dim = role_color(ui::ColorRole::Inactive);
@@ -1897,7 +1812,7 @@ impl App {
     /// target it with the `$` modifier when so. Sub is active in the single-B
     /// view; otherwise VFO A (main) is the receiver being controlled.
     fn active_sub(&self) -> bool {
-        self.view_mode == ViewMode::SingleB
+        self.view_mode == ViewMode::SingleB || self.context.active() == Some(ui::Primary::SubRx)
     }
 
     /// Short label for the active RX VFO: `A` (main) or `B` (sub).
@@ -2808,6 +2723,34 @@ impl App {
                 ui::toggle_button("DIV", self.ui.radio.diversity),
                 self.ui.radio.diversity,
                 Some(Message::ToggleDiversity),
+            ))
+            // Notch / APF for the active RX VFO, right of DIV.
+            .push(two_line_btn(
+                ui::toggle_button("NOTCH", self.rx_notch_on()),
+                self.rx_notch_on(),
+                Some(Message::ToggleManualNotch),
+            ))
+            .push(two_line_btn(
+                ui::toggle_button("AUTO NCH", self.rx_auto_notch()),
+                self.rx_auto_notch(),
+                Some(Message::ToggleAutoNotch),
+            ))
+            .push(two_line_btn(
+                ui::toggle_button("APF", self.rx_apf_on()),
+                self.rx_apf_on(),
+                Some(Message::ToggleApf),
+            ))
+            .push(small_btn_string(
+                format!(
+                    "APF {}",
+                    match self.rx_apf_width() {
+                        Some(0) => "30",
+                        Some(1) => "50",
+                        Some(2) => "150",
+                        _ => "—",
+                    }
+                ),
+                Message::CycleApfWidth,
             ));
         let mode_btn = |label: &'static str, digit: u8| -> Element<'_, Message> {
             let active = self.ui.mode_a == Some(label);
@@ -2841,6 +2784,11 @@ impl App {
                     .padding([6, 10])
                     .on_press(Message::Switch(149)),
             )
+            // Filter presets for the active RX VFO, right of SCAN.
+            .push(small_btn_string("FL1".into(), Message::FilterPreset(1)))
+            .push(small_btn_string("FL2".into(), Message::FilterPreset(2)))
+            .push(small_btn_string("FL3".into(), Message::FilterPreset(3)))
+            .push(small_btn("NORMALIZE", Message::FilterNormalize))
             .push(horizontal_space())
             .push(Text::new("VFO A MHz").size(12).color(dim))
             .push(
@@ -2868,12 +2816,40 @@ impl App {
                 .push(Text::new(format!("{val}{unit}")).size(11).color(rxv))
                 .into()
         };
+        // Third row: SHIFT, then AF / RF / SQL, then PITCH — all for the active VFO.
+        let hz_slider =
+            |label: &'static str, val: u16, lo: u16, hi: u16, msg: fn(u16) -> Message| {
+                Row::new()
+                    .spacing(6)
+                    .align_y(Alignment::Center)
+                    .push(Text::new(label).size(11).color(dim))
+                    .push(
+                        slider(lo..=hi, val, msg)
+                            .step(10u16)
+                            .width(Length::Fixed(110.0)),
+                    )
+                    .push(Text::new(format!("{val} Hz")).size(11).color(rxv))
+            };
         let gain_row = Row::new()
             .spacing(18)
             .align_y(Alignment::Center)
+            .push(hz_slider(
+                "SHIFT",
+                self.shift_hz,
+                200,
+                3000,
+                Message::SetShift,
+            ))
             .push(gain("AF", self.af_gain, 60, Message::SetAfGain, ""))
             .push(gain("RF", self.rf_gain, 60, Message::SetRfGain, " dB"))
-            .push(gain("SQL", self.squelch, 40, Message::SetSquelch, ""));
+            .push(gain("SQL", self.squelch, 40, Message::SetSquelch, ""))
+            .push(hz_slider(
+                "PITCH",
+                self.notch_pitch,
+                150,
+                5000,
+                Message::SetNotchPitch,
+            ));
         let controls = Container::new(
             Column::new()
                 .spacing(8)
@@ -2890,7 +2866,6 @@ impl App {
                         .push(chips),
                 )
                 .push(tune_row)
-                .push(self.rx_filter_cluster())
                 .push(gain_row),
         )
         .style(panel_style)
