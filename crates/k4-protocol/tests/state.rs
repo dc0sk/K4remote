@@ -73,6 +73,18 @@ fn fr_cat_07_if_response_seeds_state() {
     assert_eq!(s.split, Some(false));
 }
 
+/// The `IF` `s` flag (index 29) drives the scan-in-progress indicator.
+///
+/// trace: FR-SCAN-01
+#[test]
+fn fr_scan_01_if_scan_flag() {
+    let mut s = RadioState::new();
+    s.apply_cat("IF00014074000     +000000 0003010001;"); // s = 1
+    assert_eq!(s.scanning, Some(true));
+    s.apply_cat("IF00014074000     +000000 0003000001;"); // s = 0
+    assert_eq!(s.scanning, Some(false));
+}
+
 /// The connect-time seed burst leads with `IF;` and includes the S-meter.
 ///
 /// trace: FR-CAT-07

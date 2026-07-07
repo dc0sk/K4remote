@@ -2717,6 +2717,17 @@ impl App {
             .push(mode_btn("DATA", 6))
             .push(small_btn("BAND −", Message::Band(false)))
             .push(small_btn("BAND +", Message::Band(true)))
+            .push(
+                // SCAN (SW149) — lit while a scan is in progress (IF `s` flag). FR-SCAN-01.
+                Button::new(Text::new("SCAN").size(12))
+                    .style(btn_style(if self.ui.radio.scanning == Some(true) {
+                        BtnKind::Active
+                    } else {
+                        BtnKind::Plain
+                    }))
+                    .padding([6, 10])
+                    .on_press(Message::Switch(149)),
+            )
             .push(horizontal_space())
             .push(Text::new("VFO A MHz").size(12).color(dim))
             .push(
