@@ -103,6 +103,14 @@ pub struct RadioState {
     pub sub_auto_notch: Option<bool>,
     pub sub_apf_on: Option<bool>,
     pub sub_apf_width: Option<u8>,
+    pub sub_atten_db: Option<u8>,
+    pub sub_atten_on: Option<bool>,
+    pub sub_agc_mode: Option<u8>,
+    pub sub_nb_level: Option<u8>,
+    pub sub_nb_on: Option<bool>,
+    pub sub_nr_level: Option<u8>,
+    pub sub_nr_on: Option<bool>,
+    pub sub_preamp_on: Option<bool>,
     /// Full break-in QSK on (`SD` x=1).
     pub qsk_full: Option<bool>,
     /// VOX/QSK delay, 10-ms units (`SD` zzz).
@@ -343,40 +351,45 @@ impl RadioState {
                 }
             }
         } else if let Some(arg) = cmd.strip_prefix("RA") {
-            // `nn` (dB) followed by a single on/off digit `m`.
-            if let Some((m, head)) = arg.as_bytes().split_last() {
+            // `nn` (dB) followed by a single on/off digit `m`; `$`=sub.
+            let (sub, a) = split_sub(arg);
+            if let Some((m, head)) = a.as_bytes().split_last() {
                 if let Ok(db) = std::str::from_utf8(head).unwrap_or("x").parse::<u8>() {
-                    self.atten_db = Some(db);
-                    self.atten_on = Some(*m == b'1');
+                    *sub_or(&mut self.atten_db, &mut self.sub_atten_db, sub) = Some(db);
+                    *sub_or(&mut self.atten_on, &mut self.sub_atten_on, sub) = Some(*m == b'1');
                 }
             }
         } else if let Some(arg) = cmd.strip_prefix("GT") {
-            if let Ok(v) = arg.parse::<u8>() {
-                self.agc_mode = Some(v);
+            let (sub, a) = split_sub(arg);
+            if let Ok(v) = a.parse::<u8>() {
+                *sub_or(&mut self.agc_mode, &mut self.sub_agc_mode, sub) = Some(v);
             }
         } else if let Some(arg) = cmd.strip_prefix("NB") {
-            // Full RESP form `NBnnmf`: level, on, filter.
-            let b = arg.as_bytes();
+            // Full RESP form `NB[$]nnmf`: level, on, filter.
+            let (sub, a) = split_sub(arg);
+            let b = a.as_bytes();
             if b.len() >= 3 {
                 if let Ok(level) = std::str::from_utf8(&b[0..2]).unwrap_or("x").parse::<u8>() {
-                    self.nb_level = Some(level);
-                    self.nb_on = Some(b[2] == b'1');
+                    *sub_or(&mut self.nb_level, &mut self.sub_nb_level, sub) = Some(level);
+                    *sub_or(&mut self.nb_on, &mut self.sub_nb_on, sub) = Some(b[2] == b'1');
                 }
             }
         } else if let Some(arg) = cmd.strip_prefix("NR") {
-            // RESP form `NRnnm`: level, mode (1 = on).
-            let b = arg.as_bytes();
+            // RESP form `NR[$]nnm`: level, mode (1 = on).
+            let (sub, a) = split_sub(arg);
+            let b = a.as_bytes();
             if b.len() >= 3 {
                 if let Ok(level) = std::str::from_utf8(&b[0..2]).unwrap_or("x").parse::<u8>() {
-                    self.nr_level = Some(level);
-                    self.nr_on = Some(b[2] == b'1');
+                    *sub_or(&mut self.nr_level, &mut self.sub_nr_level, sub) = Some(level);
+                    *sub_or(&mut self.nr_on, &mut self.sub_nr_on, sub) = Some(b[2] == b'1');
                 }
             }
         } else if let Some(arg) = cmd.strip_prefix("PA") {
-            // RESP form `PAnm`: level, on.
-            let b = arg.as_bytes();
+            // RESP form `PA[$]nm`: level, on.
+            let (sub, a) = split_sub(arg);
+            let b = a.as_bytes();
             if b.len() >= 2 {
-                self.preamp_on = Some(b[1] == b'1');
+                *sub_or(&mut self.preamp_on, &mut self.sub_preamp_on, sub) = Some(b[1] == b'1');
             }
         } else if let Some(arg) = cmd.strip_prefix("RT") {
             if let Some(m) = arg.bytes().next() {
@@ -554,7 +567,8 @@ pub fn connect_state_seed() -> &'static [&'static str] {
         "IS;", "SB;", "DV;", // passband shift, sub-RX, diversity
         "NM;", "NA;", "AP;", // manual notch, auto notch, APF
         // Sub-receiver read-back of the same RX controls (RX-B display):
-        "BW$;", "AG$;", "RG$;", "SQ$;", "IS$;", "NM$;", "NA$;", "AP$;",
+        "BW$;", "AG$;", "RG$;", "SQ$;", "IS$;", "NM$;", "NA$;", "AP$;", //
+        "RA$;", "GT$;", "NB$;", "NR$;", "PA$;",
         // Configuration-screen read-back (FR-UI-19 screens):
         "RE;", "TE;", "KP;", "KS;", "MI;", "MG;", "LO;", "AN;", "AR;", "AR$;", "VXV;", "BN;",
         "#REF;", "#SPN;", "#SCL;", "#DPM;", "#WFC;", "#WFH;",

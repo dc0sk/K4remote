@@ -78,10 +78,6 @@ pub enum WorkerCmd {
     Band(bool),
     /// Toggle split (`FT/`).
     ToggleSplit,
-    /// Cycle AGC off → slow → fast.
-    CycleAgc,
-    /// Toggle noise reduction (`SW62`).
-    ToggleNr,
     /// Toggle RIT (`RT/`).
     ToggleRit,
     /// Toggle XIT (`XT/`).
@@ -716,17 +712,6 @@ fn handle_cmd(cmd: WorkerCmd, ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnaps
         WorkerCmd::ToggleSplit => {
             if let Some(s) = ws.session.as_mut() {
                 let _ = s.send("FT/;"); // toggle form
-            }
-        }
-        WorkerCmd::CycleAgc => {
-            if let Some(s) = ws.session.as_mut() {
-                let next = (s.state().agc_mode.unwrap_or(0) + 1) % 3;
-                let _ = s.send(&k4_protocol::cat::set_agc(next));
-            }
-        }
-        WorkerCmd::ToggleNr => {
-            if let Some(s) = ws.session.as_mut() {
-                let _ = s.send("SW62;"); // tap NR
             }
         }
         WorkerCmd::ToggleRit => {

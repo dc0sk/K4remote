@@ -179,6 +179,9 @@ struct App {
     // Text decode (FR-TXT-01): on/off + a poll-rate divider for the TB reads.
     decode_on: bool,
     decode_tick: u8,
+    // Which RX (VFO A/B) the frame controls target. Set by the header A/B and by
+    // clicking a spectrum pane (needed in the A+B view where both are shown).
+    active_rx_b: bool,
 }
 
 /// Which graphic equalizer a screen edits (FR-EQ-01).
@@ -584,6 +587,7 @@ impl App {
             notch_pitch: 1000,
             decode_on: false,
             decode_tick: 0,
+            active_rx_b: false,
         };
         (app, Task::none())
     }
@@ -832,7 +836,15 @@ impl App {
                 self.send(WorkerCmd::Cat(target_rx("RA/;".into(), self.active_sub())))
             }
             Message::ToggleSplit => self.send(WorkerCmd::ToggleSplit),
-            Message::CycleAgc => self.send(WorkerCmd::CycleAgc),
+            Message::CycleAgc => {
+                let sub = self.active_sub();
+                let next = (self.rx_agc_mode().unwrap_or(0) + 1) % 3;
+                self.send(WorkerCmd::Cat(target_rx(
+                    k4_protocol::cat::set_agc(next),
+                    sub,
+                )));
+                self.send(WorkerCmd::Cat(target_rx("GT;".into(), sub)));
+            }
             Message::CycleBandwidth => {
                 // Step through common RX filter bandwidths (wraps at the top);
                 // update locally for immediate feedback, then push to the radio.
@@ -848,9 +860,12 @@ impl App {
                 )));
             }
             Message::SelectTxVfo(is_b) => {
-                // TX VFO = B under split, A otherwise (FT / split). FR-UI-12.
-                // Move the highlight immediately; it only re-syncs when the radio
-                // reports a *changed* split, so a stale read-back can't revert it.
+                // Clicking a spectrum pane focuses that VFO: it becomes the active
+                // RX (controls + RX A/B label follow it) and the TX VFO (FT/split).
+                self.active_rx_b = is_b;
+                self.sync_locals();
+                // Move the TX highlight immediately; it only re-syncs on a genuine
+                // split *transition*, so a stale read-back can't revert it.
                 self.tx_vfo_b = is_b;
                 self.send(WorkerCmd::Cat(k4_protocol::cat::set_split(is_b)));
             }
@@ -982,7 +997,22 @@ impl App {
             Message::ToggleNb => {
                 self.send(WorkerCmd::Cat(target_rx("NB/;".into(), self.active_sub())))
             }
-            Message::ToggleNr => self.send(WorkerCmd::ToggleNr),
+            Message::ToggleNr => {
+                let sub = self.active_sub();
+                let on = self.rx_nr_on() == Some(true);
+                let level = if sub {
+                    self.ui.radio.sub_nr_level
+                } else {
+                    self.ui.radio.nr_level
+                }
+                .unwrap_or(5);
+                let mode = if on { 0 } else { 1 };
+                self.send(WorkerCmd::Cat(target_rx(
+                    k4_protocol::cat::set_nr(level, mode),
+                    sub,
+                )));
+                self.send(WorkerCmd::Cat(target_rx("NR;".into(), sub)));
+            }
             Message::TogglePreamp => {
                 self.send(WorkerCmd::Cat(target_rx("PA/;".into(), self.active_sub())))
             }
@@ -1002,6 +1032,13 @@ impl App {
             }
             Message::SetViewMode(m) => {
                 self.view_mode = m;
+                // Single-A/B also picks the active RX VFO; A+B leaves it to a
+                // spectrum-pane click.
+                match m {
+                    ViewMode::SingleA => self.active_rx_b = false,
+                    ViewMode::SingleB => self.active_rx_b = true,
+                    ViewMode::Dual => {}
+                }
                 self.sync_locals(); // load the newly-active RX VFO's slider values
             }
             Message::TapPrimary(p) => {
@@ -1368,6 +1405,11 @@ impl App {
         let cmd = match d {
             DispMsg::Mode(m) => {
                 self.view_mode = m;
+                match m {
+                    ViewMode::SingleA => self.active_rx_b = false,
+                    ViewMode::SingleB => self.active_rx_b = true,
+                    ViewMode::Dual => {}
+                }
                 self.sync_locals(); // active RX VFO may have changed
                 cat::set_pan_mode(pan_mode_code(m))
             }
@@ -1866,7 +1908,7 @@ impl App {
     /// target it with the `$` modifier when so. Sub is active in the single-B
     /// view; otherwise VFO A (main) is the receiver being controlled.
     fn active_sub(&self) -> bool {
-        self.view_mode == ViewMode::SingleB || self.context.active() == Some(ui::Primary::SubRx)
+        self.active_rx_b
     }
 
     /// Short label for the active RX VFO: `A` (main) or `B` (sub).
@@ -1905,6 +1947,51 @@ impl App {
             self.ui.radio.sub_apf_width
         } else {
             self.ui.radio.apf_width
+        }
+    }
+
+    // Chip-control state for the active RX VFO (main mirror on the snapshot, sub
+    // on the radio state).
+    fn rx_atten_on(&self) -> Option<bool> {
+        if self.active_sub() {
+            self.ui.radio.sub_atten_on
+        } else {
+            self.ui.atten_on
+        }
+    }
+    fn rx_atten_db(&self) -> Option<u8> {
+        if self.active_sub() {
+            self.ui.radio.sub_atten_db
+        } else {
+            self.ui.atten_db
+        }
+    }
+    fn rx_preamp_on(&self) -> Option<bool> {
+        if self.active_sub() {
+            self.ui.radio.sub_preamp_on
+        } else {
+            self.ui.preamp_on
+        }
+    }
+    fn rx_nb_on(&self) -> Option<bool> {
+        if self.active_sub() {
+            self.ui.radio.sub_nb_on
+        } else {
+            self.ui.nb_on
+        }
+    }
+    fn rx_nr_on(&self) -> Option<bool> {
+        if self.active_sub() {
+            self.ui.radio.sub_nr_on
+        } else {
+            self.ui.nr_on
+        }
+    }
+    fn rx_agc_mode(&self) -> Option<u8> {
+        if self.active_sub() {
+            self.ui.radio.sub_agc_mode
+        } else {
+            self.ui.agc_mode
         }
     }
 
@@ -2744,27 +2831,27 @@ impl App {
                 Some(Message::CycleBandwidth),
             ))
             .push(two_line_btn(
-                ui::atten_button(self.ui.atten_on, self.ui.atten_db),
-                self.ui.atten_on,
+                ui::atten_button(self.rx_atten_on(), self.rx_atten_db()),
+                self.rx_atten_on(),
                 Some(Message::ToggleAtten),
             ))
             .push(two_line_btn(
-                ui::toggle_button("PRE", self.ui.preamp_on),
-                self.ui.preamp_on,
+                ui::toggle_button("PRE", self.rx_preamp_on()),
+                self.rx_preamp_on(),
                 Some(Message::TogglePreamp),
             ))
             .push(two_line_btn(
-                ui::toggle_button("NB", self.ui.nb_on),
-                self.ui.nb_on,
+                ui::toggle_button("NB", self.rx_nb_on()),
+                self.rx_nb_on(),
                 Some(Message::ToggleNb),
             ))
             .push(two_line_btn(
-                ui::toggle_button("NR", self.ui.nr_on),
-                self.ui.nr_on,
+                ui::toggle_button("NR", self.rx_nr_on()),
+                self.rx_nr_on(),
                 Some(Message::ToggleNr),
             ))
             .push(two_line_btn(
-                ui::agc_button(self.ui.agc_mode),
+                ui::agc_button(self.rx_agc_mode()),
                 None,
                 Some(Message::CycleAgc),
             ))
