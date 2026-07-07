@@ -1,7 +1,7 @@
 ---
 title: "Test Strategy & Traceability"
 status: Draft
-version: "0.49"
+version: "0.50"
 updated: 2026-07-07
 authors:
   - Simon Keimer (DC0SK)
@@ -248,3 +248,4 @@ FR-SES-MULTI, FR-DIAG-02, etc. — get `TC` IDs when promoted to `Approved`.)*
 | 2026-07-06 | 0.47 | DC0SK | Feedback fixes: BW control cycles a local bandwidth value (immediate feedback, seeded from radio); DIAGNOSTICS auto-scroll driven by explicit snap-to-newest so OFF truly freezes the view; moved the six transmit/antenna dual-function switches out of a TX tab into the TRANSMIT panel (by ARM TX); bottom panels 168->220 px, window 884->940 px to fit. |
 | 2026-07-07 | 0.48 | DC0SK | Feedback: fixed the duplicate TRANSMIT switch — ATU TUNE hold is now ATU in/out (SW158) not a second TUNE; fixed auto-scroll OFF (snap_to left a sticky Relative(1.0) that kept following — now converts to a concrete absolute offset so the view freezes). |
 | 2026-07-07 | 0.49 | DC0SK | Fixes: settings Close button right-aligned; keyring root cause fixed — keyring v3 had NO backend feature (silent mock store), added apple-native/windows-native/sync-secret-service/crypto-rust, verified a real Secret Service round-trip via secret-tool; spectrum panes click-to-select TX VFO (FT/split, FR-UI-12) with accent frame + TX tag; spectrum canvas gained a dB scale + grid. |
+| 2026-07-07 | 0.50 | DC0SK | Gap-closing #1 (RX gain/squelch, fable analysis): new `set_squelch` (`SQ`, FR-RX-SQL-01) + SQ state parse; wired the orphaned AF/RF gain (`AG`/`RG`, FR-RX-01) and squelch to sliders in the MAIN RX panel; seeded BW/AG/RG/SQ on connect. Window 940→972 px. 122 tests. |

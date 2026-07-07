@@ -66,6 +66,8 @@ pub struct RadioState {
     pub af_gain: Option<u8>,
     /// RF-gain attenuation, dB (`RG`).
     pub rf_gain_db: Option<u8>,
+    /// Squelch threshold, 0–40 (`SQ`).
+    pub squelch: Option<u8>,
     /// RX attenuator value, dB (`RA`).
     pub atten_db: Option<u8>,
     /// RX attenuator on/off (`RA`).
@@ -207,6 +209,11 @@ impl RadioState {
         } else if let Some(arg) = cmd.strip_prefix("RG") {
             if let Ok(v) = arg.trim_start_matches('-').parse::<u8>() {
                 self.rf_gain_db = Some(v);
+            }
+        } else if let Some(arg) = cmd.strip_prefix("SQ") {
+            // Main squelch only; `SQ$…` (sub) starts with `$` and is skipped.
+            if let Ok(v) = arg.parse::<u8>() {
+                self.squelch = Some(v);
             }
         } else if let Some(arg) = cmd.strip_prefix("RA") {
             // `nn` (dB) followed by a single on/off digit `m`.
@@ -396,6 +403,7 @@ pub fn s_unit_label(dbm: i32) -> String {
 pub fn connect_state_seed() -> &'static [&'static str] {
     &[
         "IF;", "FA;", "FB;", "MD;", "MD$;", "FT;", "SM;", "SMH;", // core
+        "BW;", "AG;", "RG;", "SQ;", // RX levels (bandwidth, AF/RF gain, squelch)
         // Configuration-screen read-back (FR-UI-19 screens):
         "RE;", "TE;", "KP;", "KS;", "MI;", "MG;", "LO;", "AN;", "AR;", "AR$;", "VXV;", "BN;",
         "#REF;", "#SPN;", "#SCL;", "#DPM;", "#WFC;", "#WFH;",

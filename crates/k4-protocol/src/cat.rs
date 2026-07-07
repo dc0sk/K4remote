@@ -120,6 +120,13 @@ pub fn set_rf_gain(db: u8) -> String {
     format!("RG-{:02};", db.min(60))
 }
 
+/// Set squelch threshold, 0–40 (`SQ`; `$`=sub). 0 = open. D12 typical 22.
+///
+/// trace: FR-RX-SQL-01
+pub fn set_squelch(level: u8) -> String {
+    format!("SQ{:03};", level.min(40))
+}
+
 /// Set the RX attenuator: `db` ∈ {0,3,6,9,12,15,18,21}, on/off (`RA`).
 ///
 /// Example: `(12, true)` → `"RA121;"`.

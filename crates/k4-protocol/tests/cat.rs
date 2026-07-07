@@ -7,9 +7,9 @@ use k4_protocol::cat::{
     set_mic_input, set_mic_setup, set_mode, set_mode_sub, set_nb, set_nr, set_pan_average,
     set_pan_mode, set_pan_nb, set_pan_nb_level, set_pan_peak, set_pan_ref, set_pan_scale,
     set_pan_span_hz, set_power, set_preamp, set_rf_gain, set_rit, set_rx_antenna,
-    set_rx_antenna_sub, set_rx_eq, set_split, set_transverter_band, set_tx_antenna, set_tx_eq,
-    set_vfo_a_hz, set_vfo_b_hz, set_vox, set_waterfall_height, set_waterfall_palette, set_xit,
-    switch, vfo_copy_swap,
+    set_rx_antenna_sub, set_rx_eq, set_split, set_squelch, set_transverter_band, set_tx_antenna,
+    set_tx_eq, set_vfo_a_hz, set_vfo_b_hz, set_vox, set_waterfall_height, set_waterfall_palette,
+    set_xit, switch, vfo_copy_swap,
 };
 
 /// trace: FR-VFO-01
@@ -42,6 +42,14 @@ fn fr_rx_gain_and_attenuator() {
     assert_eq!(set_rf_gain(20), "RG-20;");
     assert_eq!(set_attenuator(12, true), "RA121;");
     assert_eq!(set_attenuator(0, false), "RA00;");
+}
+
+/// trace: FR-RX-SQL-01
+#[test]
+fn fr_rx_sql_01_squelch() {
+    assert_eq!(set_squelch(0), "SQ000;"); // open
+    assert_eq!(set_squelch(22), "SQ022;"); // typical
+    assert_eq!(set_squelch(99), "SQ040;"); // clamped to 40
 }
 
 /// trace: FR-VFO-04, FR-VFO-06
