@@ -28,7 +28,7 @@ use iced::widget::{
     button, container, horizontal_space, mouse_area, pick_list, progress_bar, scrollable, slider,
     stack, vertical_slider,
 };
-use iced::widget::{Button, Column, Container, ProgressBar, Row, Text, TextInput};
+use iced::widget::{Button, Column, Container, ProgressBar, Row, Space, Text, TextInput};
 use iced::{Alignment, Background, Border, Color, Element, Length, Subscription, Task, Theme};
 
 thread_local! {
@@ -410,6 +410,9 @@ enum Message {
     SerialBaudChanged(String),
     SetMode(u8),
     CycleMode(bool),
+    /// Tune one frequency digit: (is_b, place value 10^k, up). Rolls within the
+    /// clicked digit only (no carry to neighbours).
+    FreqDigit(bool, u64, bool),
     Band(bool),
     ToggleAtten,
     ToggleSplit,
@@ -1174,6 +1177,25 @@ impl App {
                 k4_protocol::cat::cycle_mode(),
                 is_b,
             ))),
+            Message::FreqDigit(is_b, place, up) => {
+                let cur = if is_b {
+                    self.ui.vfo_b_hz
+                } else {
+                    self.ui.vfo_a_hz
+                };
+                if let Some(freq) = cur {
+                    // Roll the clicked digit 0–9 within its own place (no carry).
+                    let d = (freq / place) % 10;
+                    let new_d = if up { (d + 1) % 10 } else { (d + 9) % 10 };
+                    let delta = new_d as i64 * place as i64 - d as i64 * place as i64;
+                    let new_freq = (freq as i64 + delta).max(0) as u64;
+                    if is_b {
+                        self.send(WorkerCmd::SetFreqB(new_freq));
+                    } else {
+                        self.send(WorkerCmd::SetFreqA(new_freq));
+                    }
+                }
+            }
             Message::Band(up) => self.send(WorkerCmd::Band(up)),
             Message::ToggleAtten => {
                 self.send(WorkerCmd::Cat(target_rx("RA/;".into(), self.active_sub())))
@@ -1853,6 +1875,42 @@ impl App {
     /// One VFO panel for the header band (FR-UI-12): receiver badge, big
     /// dot-grouped frequency, mode, and a proportional S-meter bar — the
     /// reference client's per-VFO block (FR-UI-09/10/15).
+    /// The frequency readout as individually clickable digits (FR-VFO-08):
+    /// a digit's top half increments it, the bottom half decrements it, rolling
+    /// 0–9 within that digit only (no carry to neighbours).
+    fn freq_digits(&self, is_b: bool, hz: Option<u64>, color: Color) -> Element<'_, Message> {
+        let Some(hz) = hz else {
+            return Text::new(ui::format_freq_opt(None))
+                .size(38)
+                .color(color)
+                .into();
+        };
+        let digits = hz.to_string();
+        let n = digits.len();
+        let lead = n % 3;
+        let mut row = Row::new().align_y(Alignment::Center);
+        for (i, ch) in digits.char_indices() {
+            if i != 0 && i >= lead && (i - lead).is_multiple_of(3) {
+                row = row.push(Text::new(".").size(38).color(color));
+            }
+            let place = 10u64.pow((n - 1 - i) as u32);
+            let cell = stack![
+                Text::new(ch.to_string()).size(38).color(color),
+                Column::new()
+                    .push(
+                        mouse_area(Space::new(Length::Fill, Length::Fill))
+                            .on_press(Message::FreqDigit(is_b, place, true)),
+                    )
+                    .push(
+                        mouse_area(Space::new(Length::Fill, Length::Fill))
+                            .on_press(Message::FreqDigit(is_b, place, false)),
+                    ),
+            ];
+            row = row.push(cell);
+        }
+        row.into()
+    }
+
     fn vfo_panel(&self, pane: ui::Pane) -> Element<'_, Message> {
         let is_b = pane.is_b();
         let hz = if is_b {
@@ -1896,11 +1954,7 @@ impl App {
             .align_y(Alignment::Center)
             .push(badge(pane.label(), role))
             .push(tune_btn("◄", false))
-            .push(
-                Text::new(ui::format_freq_opt(hz))
-                    .size(38)
-                    .color(role_color(freq_role)),
-            )
+            .push(self.freq_digits(is_b, hz, role_color(freq_role)))
             .push(tune_btn("►", true))
             .push(horizontal_space())
             // Mode is clickable: tap to step through the K4's enabled modes.
