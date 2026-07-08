@@ -437,6 +437,7 @@ enum Message {
     SetRepeaterMode(char),
     AdjustPlTone(i8),
     TogglePl,
+    DvrPlay(u8),
     SetTxPowerRange(char),
     SetNbLevel(u8),
     SetNrLevel(u8),
@@ -1409,6 +1410,7 @@ impl App {
                 self.send(WorkerCmd::Cat(k4_protocol::cat::set_monitor(m, level)));
             }
             Message::Autospot => self.send(WorkerCmd::Cat(k4_protocol::cat::set_spot(3))),
+            Message::DvrPlay(n) => self.send(WorkerCmd::Cat(k4_protocol::cat::set_dvr(n))),
             Message::SetRepeaterMode(m) => {
                 let off = self.ui.radio.repeater_offset_khz.unwrap_or(600);
                 self.send(WorkerCmd::Cat(k4_protocol::cat::set_repeater(m, off)));
@@ -2386,12 +2388,32 @@ impl App {
             .align_y(Alignment::Center)
             .push(vox_slider("VOX G", self.vox_gain, Message::SetVoxGain))
             .push(vox_slider("A-VOX", self.anti_vox, Message::SetAntiVox));
+        // DVR voice-message playback 1–8 + STOP (FR-DVR-01).
+        let mut dvr_row = Row::new()
+            .spacing(4)
+            .align_y(Alignment::Center)
+            .push(Text::new("DVR").size(10).color(dim));
+        for n in 1..=8u8 {
+            dvr_row = dvr_row.push(
+                Button::new(Text::new(n.to_string()).size(11))
+                    .style(btn_style(BtnKind::Plain))
+                    .padding([2, 7])
+                    .on_press(Message::DvrPlay(n)),
+            );
+        }
+        dvr_row = dvr_row.push(
+            Button::new(Text::new("STOP").size(10))
+                .style(btn_style(BtnKind::Danger))
+                .padding([2, 7])
+                .on_press(Message::DvrPlay(0)),
+        );
         Column::new()
             .spacing(6)
             .push(Text::new("Switches (tap · hold)").size(10).color(dim))
             .push(grid)
             .push(mon_row)
             .push(vox_row)
+            .push(dvr_row)
             .into()
     }
 
