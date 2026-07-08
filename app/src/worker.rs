@@ -598,12 +598,19 @@ fn service(ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnapshot>>) {
                 ws.rx_audio.push(pkt.sequence, pkt.data.to_vec());
             }
         }
+        // Half-duplex: while transmitting, the K4 streams its own TX monitor over
+        // the RX audio channel. Playing it out the PC speakers, with an open mic,
+        // forms a monitor→speaker→mic→TX feedback loop (FR-AUD-TX-01). Keep
+        // decoding to hold the Opus state in sync, but suppress playback on TX.
+        let txing = session.is_transmitting();
         while let Some(opus_frame) = ws.rx_audio.pop() {
             match ws.rx_decoder.as_mut() {
                 Some(dec) => {
                     if let Ok(pcm) = dec.decode_float(&opus_frame) {
-                        if let Some(out) = ws.audio_out.as_mut() {
-                            out.submit_stereo_12k(&pcm);
+                        if !txing {
+                            if let Some(out) = ws.audio_out.as_mut() {
+                                out.submit_stereo_12k(&pcm);
+                            }
                         }
                         ws.audio_frames += 1;
                     }
