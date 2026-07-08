@@ -1,7 +1,7 @@
 ---
 title: "Test Strategy & Traceability"
 status: Draft
-version: "1.07"
+version: "1.08"
 updated: 2026-07-07
 authors:
   - Simon Keimer (DC0SK)
@@ -306,3 +306,4 @@ FR-SES-MULTI, FR-DIAG-02, etc. — get `TC` IDs when promoted to `Approved`.)*
 | 2026-07-08 | 1.05 | DC0SK | Mode-adaptive UI Phase 1 complete: extend de-emphasis to the RX FL presets + SHIFT/SQL/NOTCH sliders and the TX side (VOX/QSK switches, AUTOSPOT, DVR, VOX gain/anti-VOX) via rx_ctl_vis/tx_ctl_vis (slider values grey when dimmed, buttons use BtnKind::Dim). All RxCtl + most TxCtl variants now wired (only Cmp/MicGain await Phase 4). 143 tests. |
 | 2026-07-08 | 1.06 | DC0SK | Mode-adaptive UI Phase 2 (RX mode strip): the MAIN RX frame gains an always-present fixed-height (34 px) mode strip — hosting SPOT+DECODE in CW, DECODE in DATA, and the repeater/PL panel in FM. Replaces the FM-only `push_maybe` (fixes the layout-jump bug). Window default/min height bumped 964→1000 to keep the content fitting without a scrollbar. 143 tests. |
 | 2026-07-08 | 1.07 | DC0SK | Mode-adaptive UI Phase 3 (RX regroup): move APF + APF-width out of the always-visible chips row into the CW mode strip (APF is CW-only) — declutters row 1 and groups the CW peak filter with SPOT/DECODE. Dropped the now-redundant RxCtl::Apf from the visibility model (its show/hide is strip-driven). 143 tests. |
+| 2026-07-08 | 1.08 | DC0SK | Mode-adaptive UI Phase 4 (TX mode strip): the MON/VOX/DVR area becomes mode-aware (height-neutral, 2 rows) — CW shows keyer WPM + CW pitch + QSK delay; Voice/AM show VOX gain + anti-VOX + compression + mic gain + DVR; DATA shows VOX gain; FM shows mic gain + DVR. Surfaces the previously-buried keyer/comp/mic controls. Classic UI keeps VOX G/A-VOX + DVR. TxCtl trimmed to the switch-cell controls (Qsk/Vox/Autospot); last allow(dead_code) removed. 143 tests. |

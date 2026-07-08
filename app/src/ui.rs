@@ -957,18 +957,14 @@ pub enum RxCtl {
     Squelch,
 }
 
-/// Mode-varying TX-frame controls.
+/// Mode-varying TX switch-row controls (VOX/QSK cells + AUTOSPOT). Other
+/// per-mode TX controls (VOX gain, DVR, compression, mic gain, keyer timing)
+/// are shown/hidden structurally by the TX mode strip, not dimmed via this map.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-// `Cmp`/`MicGain` have no main-panel control yet — wired in Phase 4 (mode strip).
-#[allow(dead_code)]
 pub enum TxCtl {
     Qsk,
     Vox,
-    AntiVox,
-    Dvr,
     Autospot,
-    Cmp,
-    MicGain,
 }
 
 /// Visibility of an RX control for a mode class (concept §1).
@@ -1003,16 +999,6 @@ pub fn tx_ctl_vis(c: TxCtl, m: ModeClass) -> Vis {
         (TxCtl::Qsk | TxCtl::Autospot, _) => Hide,
         (TxCtl::Vox, Cw) => Hide,
         (TxCtl::Vox, _) => Show,
-        (TxCtl::AntiVox, Cw) => Hide,
-        (TxCtl::AntiVox, Data) => Dim,
-        (TxCtl::AntiVox, _) => Show,
-        (TxCtl::Dvr, Cw | Data) => Hide,
-        (TxCtl::Dvr, _) => Show,
-        (TxCtl::Cmp, Voice | Am) => Show,
-        (TxCtl::Cmp, Fm) => Dim,
-        (TxCtl::Cmp, _) => Hide,
-        (TxCtl::MicGain, Voice | Am | Fm) => Show,
-        (TxCtl::MicGain, _) => Hide,
     }
 }
 
@@ -1031,13 +1017,12 @@ mod tests {
         assert_eq!(rx_ctl_vis(RxCtl::Squelch, ModeClass::Fm), Vis::Show);
         assert_eq!(rx_ctl_vis(RxCtl::Squelch, ModeClass::Cw), Vis::Dim);
         assert_eq!(rx_ctl_vis(RxCtl::ShiftHiLo, ModeClass::Fm), Vis::Hide);
-        // QSK/autospot CW-only; VOX not in CW; CMP voice; DVR not CW/DATA.
+        // QSK/AUTOSPOT CW-only; VOX everywhere but CW.
         assert_eq!(tx_ctl_vis(TxCtl::Qsk, ModeClass::Cw), Vis::Show);
         assert_eq!(tx_ctl_vis(TxCtl::Qsk, ModeClass::Voice), Vis::Hide);
+        assert_eq!(tx_ctl_vis(TxCtl::Autospot, ModeClass::Cw), Vis::Show);
         assert_eq!(tx_ctl_vis(TxCtl::Vox, ModeClass::Cw), Vis::Hide);
-        assert_eq!(tx_ctl_vis(TxCtl::Cmp, ModeClass::Voice), Vis::Show);
-        assert_eq!(tx_ctl_vis(TxCtl::Cmp, ModeClass::Cw), Vis::Hide);
-        assert_eq!(tx_ctl_vis(TxCtl::Dvr, ModeClass::Data), Vis::Hide);
+        assert_eq!(tx_ctl_vis(TxCtl::Vox, ModeClass::Voice), Vis::Show);
     }
 
     // trace: FR-UI-08 — default view mode is single-A.

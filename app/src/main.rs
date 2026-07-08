@@ -2791,7 +2791,7 @@ impl App {
                 )
         };
         let mon = self.ui.radio.monitor_level.unwrap_or(0);
-        let mon_row = Row::new()
+        let mon_base = Row::new()
             .spacing(14)
             .align_y(Alignment::Center)
             .push(Text::new("MON").size(10).color(dim))
@@ -2800,49 +2800,166 @@ impl App {
                     .step(1u8)
                     .width(Length::Fixed(120.0)),
             )
-            .push(Text::new(format!("{mon}")).size(10).color(rxv))
-            .push(vox_slider(
-                "VOX G",
-                self.vox_gain,
-                Message::SetVoxGain,
-                tx_dim(ui::TxCtl::Vox),
-            ))
-            .push(vox_slider(
-                "A-VOX",
-                self.anti_vox,
-                Message::SetAntiVox,
-                tx_dim(ui::TxCtl::AntiVox),
-            ));
+            .push(Text::new(format!("{mon}")).size(10).color(rxv));
+        // Compact ± stepper for the TX mode strip.
+        let step_ctl = |label: &'static str,
+                        val: String,
+                        dn: Message,
+                        up: Message|
+         -> Element<'static, Message> {
+            Row::new()
+                .spacing(4)
+                .align_y(Alignment::Center)
+                .push(Text::new(label).size(10).color(dim))
+                .push(
+                    Button::new(Text::new("−").size(12))
+                        .style(btn_style(BtnKind::Plain))
+                        .padding([1, 8])
+                        .on_press(dn),
+                )
+                .push(Text::new(val).size(10).color(rxv))
+                .push(
+                    Button::new(Text::new("+").size(12))
+                        .style(btn_style(BtnKind::Plain))
+                        .padding([1, 8])
+                        .on_press(up),
+                )
+                .into()
+        };
+        let lvl = |label: &'static str, val: u8, max: u8, msg: fn(u8) -> Message| {
+            Row::new()
+                .spacing(6)
+                .align_y(Alignment::Center)
+                .push(Text::new(label).size(10).color(dim))
+                .push(
+                    slider(0..=max, val, msg)
+                        .step(1u8)
+                        .width(Length::Fixed(90.0)),
+                )
+                .push(Text::new(format!("{val}")).size(10).color(rxv))
+        };
         // DVR voice-message playback 1–8 + STOP (FR-DVR-01).
-        let dvr_dim = tx_dim(ui::TxCtl::Dvr);
-        let mut dvr_row = Row::new()
-            .spacing(4)
-            .align_y(Alignment::Center)
-            .push(Text::new("DVR").size(10).color(dim));
-        for n in 1..=8u8 {
-            dvr_row = dvr_row.push(
-                Button::new(Text::new(n.to_string()).size(11))
-                    .style(btn_style(if dvr_dim {
-                        BtnKind::Dim
-                    } else {
-                        BtnKind::Plain
-                    }))
+        let dvr_full = || -> Element<'static, Message> {
+            let mut r = Row::new()
+                .spacing(4)
+                .align_y(Alignment::Center)
+                .push(Text::new("DVR").size(10).color(dim));
+            for n in 1..=8u8 {
+                r = r.push(
+                    Button::new(Text::new(n.to_string()).size(11))
+                        .style(btn_style(BtnKind::Plain))
+                        .padding([2, 7])
+                        .on_press(Message::DvrPlay(n)),
+                );
+            }
+            r.push(
+                Button::new(Text::new("STOP").size(10))
+                    .style(btn_style(BtnKind::Danger))
                     .padding([2, 7])
-                    .on_press(Message::DvrPlay(n)),
-            );
-        }
-        dvr_row = dvr_row.push(
-            Button::new(Text::new("STOP").size(10))
-                .style(btn_style(BtnKind::Danger))
-                .padding([2, 7])
-                .on_press(Message::DvrPlay(0)),
-        );
+                    .on_press(Message::DvrPlay(0)),
+            )
+            .into()
+        };
+        let mic_step = |c: TxConfig| {
+            step_ctl(
+                "MIC",
+                format!("{}", c.mic_gain),
+                Message::Tx(TxMsg::MicGain(c.mic_gain.saturating_sub(5))),
+                Message::Tx(TxMsg::MicGain((c.mic_gain + 5).min(80))),
+            )
+        };
+        // Mode-aware TX strip (Phase 4): the MON row keeps universal MON, then
+        // per-mode gain; the action row swaps DVR ↔ CW keyer timing. Two rows in
+        // every mode (height-neutral). Classic UI keeps VOX G / A-VOX + DVR.
+        let c = self.tx_cfg;
+        let voice_dvr = || -> Element<'static, Message> {
+            Row::new()
+                .spacing(12)
+                .align_y(Alignment::Center)
+                .push(mic_step(c))
+                .push(dvr_full())
+                .into()
+        };
+        let (mon_row, action_row): (Element<'_, Message>, Element<'_, Message>) = if adaptive {
+            match tx_class {
+                ui::ModeClass::Cw => (
+                    mon_base
+                        .push(step_ctl(
+                            "WPM",
+                            format!("{}", c.keyer_speed),
+                            Message::Tx(TxMsg::KeyerSpeed(c.keyer_speed.saturating_sub(1))),
+                            Message::Tx(TxMsg::KeyerSpeed((c.keyer_speed + 1).min(100))),
+                        ))
+                        .push(step_ctl(
+                            "PITCH",
+                            format!("{} Hz", self.cw_pitch),
+                            Message::SetCwPitch(self.cw_pitch.saturating_sub(10).max(250)),
+                            Message::SetCwPitch((self.cw_pitch + 10).min(950)),
+                        ))
+                        .into(),
+                    step_ctl(
+                        "QSK DLY",
+                        format!("{}", self.qsk_delay),
+                        Message::SetQskDelay(self.qsk_delay.saturating_sub(1)),
+                        Message::SetQskDelay(self.qsk_delay.saturating_add(1)),
+                    ),
+                ),
+                ui::ModeClass::Voice | ui::ModeClass::Am => (
+                    mon_base
+                        .push(vox_slider(
+                            "VOX G",
+                            self.vox_gain,
+                            Message::SetVoxGain,
+                            false,
+                        ))
+                        .push(vox_slider(
+                            "A-VOX",
+                            self.anti_vox,
+                            Message::SetAntiVox,
+                            false,
+                        ))
+                        .push(lvl("CMP", self.compression, 30, Message::SetCompression))
+                        .into(),
+                    voice_dvr(),
+                ),
+                ui::ModeClass::Data => (
+                    mon_base
+                        .push(vox_slider(
+                            "VOX G",
+                            self.vox_gain,
+                            Message::SetVoxGain,
+                            false,
+                        ))
+                        .into(),
+                    Row::new().height(Length::Fixed(26.0)).into(),
+                ),
+                ui::ModeClass::Fm => (mon_base.into(), voice_dvr()),
+            }
+        } else {
+            (
+                mon_base
+                    .push(vox_slider(
+                        "VOX G",
+                        self.vox_gain,
+                        Message::SetVoxGain,
+                        false,
+                    ))
+                    .push(vox_slider(
+                        "A-VOX",
+                        self.anti_vox,
+                        Message::SetAntiVox,
+                        false,
+                    ))
+                    .into(),
+                dvr_full(),
+            )
+        };
         Column::new()
             .spacing(6)
             .push(Text::new("Switches (tap · hold)").size(10).color(dim))
             .push(switch_row)
             .push(mon_row)
-            .push(dvr_row)
+            .push(action_row)
             .into()
     }
 
