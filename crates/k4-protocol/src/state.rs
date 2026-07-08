@@ -213,6 +213,9 @@ pub struct RadioState {
     pub utc_unix: Option<u64>,
     /// Remote client count (`CC`): ≥1 server w/ n clients, −1 client, 0 else.
     pub client_count: Option<i8>,
+    /// Captured menu-item values (`ME<id>.<value>`), id → value, for full-menu
+    /// config backup. The value string is already in `ME` SET format.
+    pub menu_values: std::collections::BTreeMap<u16, String>,
 }
 
 /// Parse 8 consecutive signed 3-char EQ fields (`+00-01…`) into `[i8; 8]`.
@@ -553,6 +556,15 @@ impl RadioState {
         } else if let Some(arg) = cmd.strip_prefix("AR") {
             if let Ok(v) = arg.parse::<u8>() {
                 self.rx_antenna = Some(v);
+            }
+        } else if cmd.starts_with("MEDF") {
+            // Menu definition — not captured (values arrive via `ME<id>.<v>`).
+        } else if let Some(arg) = cmd.strip_prefix("ME") {
+            // `ME<id>.<value>` — capture the value for full-menu backup.
+            if let Some((id_s, val)) = arg.split_once('.') {
+                if let Ok(id) = id_s.parse::<u16>() {
+                    self.menu_values.insert(id, val.to_string());
+                }
             }
         } else if let Some(arg) = cmd.strip_prefix("UT") {
             if let Ok(t) = arg.parse::<u64>() {

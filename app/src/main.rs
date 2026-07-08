@@ -464,6 +464,7 @@ enum Message {
     MicGainChanged(f32),
     SaveSettings,
     ExportConfig,
+    SweepMenu,
     ImportPathChanged(String),
     LoadConfig,
     PlaybackConfig,
@@ -824,6 +825,11 @@ impl App {
         }
         if let Some(v) = r.wf_height {
             c.push(cat::set_waterfall_height(v));
+        }
+        // Full-menu backup: replay any captured menu values (FR-CFG-07). Populated
+        // by "Sweep menu"; empty otherwise (settings-only export).
+        for (id, val) in &r.menu_values {
+            c.push(format!("ME{id:04}.{val};"));
         }
         c
     }
@@ -1478,6 +1484,15 @@ impl App {
             }
             Message::SaveSettings => self.save_config(),
             Message::ExportConfig => self.export_config(),
+            Message::SweepMenu => {
+                for (id, _) in ui::menu_items() {
+                    self.send(WorkerCmd::Cat(k4_protocol::cat::menu_query(*id)));
+                }
+                self.backup_status = format!(
+                    "Querying {} menu items — wait a moment, then Export.",
+                    ui::menu_items().len()
+                );
+            }
             Message::ImportPathChanged(v) => self.import_path = v,
             Message::LoadConfig => self.load_config_file(),
             Message::PlaybackConfig => {
@@ -4369,6 +4384,7 @@ impl App {
                     .spacing(8)
                     .align_y(Alignment::Center)
                     .push(small_btn("Export K4 settings", Message::ExportConfig))
+                    .push(small_btn("Sweep menu", Message::SweepMenu))
                     .push(
                         Text::new("→ K4-<serial>-<time>.cfg, SHA-256 verified")
                             .size(10)
