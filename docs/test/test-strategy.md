@@ -1,7 +1,7 @@
 ---
 title: "Test Strategy & Traceability"
 status: Draft
-version: "0.77"
+version: "0.78"
 updated: 2026-07-07
 authors:
   - Simon Keimer (DC0SK)
@@ -276,3 +276,4 @@ FR-SES-MULTI, FR-DIAG-02, etc. — get `TC` IDs when promoted to `Approved`.)*
 | 2026-07-08 | 0.75 | DC0SK | FM extras (FR-FM-01): in FM mode the MAIN RX frame shows a sub-panel with repeater offset mode S/+/− (`RP`) + offset kHz, and PL/CTCSS on/off + tone index with Hz from the 50-entry CTCSS table (`PL`). Parse/seed RP + PL. 140 tests. |
 | 2026-07-08 | 0.76 | DC0SK | Status strip (FR-UI-STATUS-01): the header shows the radio UTC clock (`UT`, polled ~2 s) and remote client count (`CC`). Supply-V/I omitted — the `SI`/AI4 report format is undocumented in D12. 140 tests. |
 | 2026-07-08 | 0.77 | DC0SK | Full-menu backup (FR-CFG-07): a "Sweep menu" button queries all ~96 menu items (`ME<id>`); captured `ME<id>.<value>` responses are stored in `menu_values` and appended to the config export as replayable `ME` SETs. MEDF definitions are ignored. The `ME<id>` GET→`ME<id>.<value>` RESP shape needs live verification. 141 tests. |
+| 2026-07-08 | 0.78 | DC0SK | Per-pan targeting (FR-PAN-CTL-01): the DISPLAY screen gains an A/B TARGET selector; REF/SPAN/SCALE/AVG/PEAK/FREEZE/WF commands are routed with a `$` modifier (`target_pan`) to the chosen pan (the global `#DPM` mode is never targeted). The K4 ignores a `$` on attributes without a per-pan variant, so it's safe; which attributes honor it needs live verification. 141 tests. |
