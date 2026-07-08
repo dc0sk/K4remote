@@ -4139,26 +4139,39 @@ impl App {
             }
             row.into()
         };
-        // Mini-pan overview: a single full-width strip above the whole band when
-        // the 0x03 stream is on (FR-UI-14) — it's one wide-span overview, not
-        // per-VFO.
-        let spectrum_band: Element<Message> = if self.ui.mini_pan.is_empty() {
-            band_inner
+        // Mini-pan overview: a single full-width framed strip above the whole
+        // band (FR-UI-14) — one wide-span overview, not per-VFO. Always present
+        // (like the spectrum frames) so the layout never shifts; shows a
+        // placeholder until the 0x03 stream is on.
+        let mini_inner: Element<Message> = if self.ui.mini_pan.is_empty() {
+            Container::new(
+                Text::new("mini-pan — enable on the DISPLAY screen")
+                    .size(11)
+                    .color(dim),
+            )
+            .center_y(Length::Fill)
+            .width(Length::Fill)
+            .into()
         } else {
-            Column::new()
-                .spacing(6)
-                .push(
-                    Canvas::new(spectrum::MiniPan {
-                        latest: &self.ui.mini_pan,
-                        top_dbm: -30.0,
-                        range_db: 100.0,
-                    })
-                    .width(Length::Fill)
-                    .height(Length::Fixed(40.0)),
-                )
-                .push(band_inner)
-                .into()
+            Canvas::new(spectrum::MiniPan {
+                latest: &self.ui.mini_pan,
+                top_dbm: -30.0,
+                range_db: 100.0,
+            })
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
         };
+        let mini_frame = Container::new(mini_inner)
+            .style(pane_style(false))
+            .padding(8)
+            .width(Length::Fill)
+            .height(Length::Fixed(MINI_PAN_H));
+        let spectrum_band: Element<Message> = Column::new()
+            .spacing(10)
+            .push(mini_frame)
+            .push(band_inner)
+            .into();
 
         // The spectrum frame's slot shows a menu screen when a primary softkey
         // is active, and the spectrum otherwise (FR-UI-19). Only this slot
@@ -4820,6 +4833,9 @@ const VFO_BAND_H: f32 = 160.0;
 /// Height of a menu screen shown in place of the spectrum frame (FR-UI-19).
 /// Matches the panadapter footprint so the layout doesn't jump.
 const SCREEN_H: f32 = 300.0;
+
+/// Height of the always-present mini-pan overview frame (FR-UI-14).
+const MINI_PAN_H: f32 = 56.0;
 
 /// Visual kind of a styled button (FR-UI-10/15): rest-state control, engaged
 /// (blue fill, like the reference client), transmit-critical (red edge),
