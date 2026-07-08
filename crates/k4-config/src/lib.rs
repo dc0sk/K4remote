@@ -64,6 +64,13 @@ pub struct Prefs {
     /// Show the diagnostics console in a separate window. Default off.
     #[serde(default)]
     pub diagnostics_window: bool,
+    /// PTT push-to-talk keyboard hotkey (e.g. `Ctrl+Space`).
+    #[serde(default = "default_ptt_hotkey")]
+    pub ptt_hotkey: String,
+}
+
+fn default_ptt_hotkey() -> String {
+    "Ctrl+Space".to_string()
 }
 
 fn default_pct() -> u16 {
@@ -85,6 +92,7 @@ impl Default for Prefs {
             theme: None,
             mute_radio_mon: true,
             diagnostics_window: false,
+            ptt_hotkey: default_ptt_hotkey(),
         }
     }
 }

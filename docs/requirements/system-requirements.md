@@ -138,6 +138,7 @@ Programmer's Reference rev. D12 (`PRG`) command mnemonics.
 | `FR-TX-SAFE-02` | configure and rely on the radio-side CW fail-safe timeout (`KZF`, 1ÃÂ¢ÃÂÃÂ10 min) so a stalled stream cannot hold the key down indefinitely. | STK-08 | M | T | `KZF` is set on connect; value configurable. |
 | `FR-TX-SAFE-03` | provide an explicit, unmistakable TX **arm** control in the UI; transmit is impossible while disarmed. | STK-08/13 | M | T | With TX disarmed, all TX triggers are inert (no `TX;`/`KZ` emitted). |
 | `FR-TX-SAFE-04` | provide an always-available emergency "stop transmit / unkey" action. | STK-08 | M | T | Emergency stop emits `RX;` and clears keying regardless of UI focus. |
+| `FR-TX-PTT-01` | provide a configurable **PTT keyboard hotkey** (default `Ctrl+Space`) for push-to-talk; if pressed while disarmed, blink the ARM control ~3× instead of keying. | STK-06 | C | D | The Settings hotkey captures a combo; pressing it keys while armed, blinks ARM while disarmed. |
 
 ## I. Audio Streaming ÃÂ¢ÃÂÃÂ `FR-AUD`
 
