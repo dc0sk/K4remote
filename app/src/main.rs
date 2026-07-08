@@ -172,6 +172,12 @@ struct App {
     // actually changes (a genuine transition), so a static/absent read-back never
     // snaps the optimistic highlight back.
     last_split: Option<bool>,
+    // Optimistic VFO frequency after a digit click, so the readout updates
+    // instantly instead of waiting for the radio's echo (FR-VFO-08). Cleared
+    // once the radio confirms, or after a short staleness timeout.
+    opt_vfo_a: Option<u64>,
+    opt_vfo_b: Option<u64>,
+    opt_vfo_age: u8,
     // Same optimistic pattern for the TX power range (H/L/X): adopt the radio's
     // range only on a genuine change, so a lagging read-back doesn't revert a
     // just-clicked range button.
@@ -677,6 +683,9 @@ impl App {
             bw_hz: 2800,
             tx_vfo_b: false,
             last_split: None,
+            opt_vfo_a: None,
+            opt_vfo_b: None,
+            opt_vfo_age: 0,
             last_pwr_range: None,
             af_gain: 30,
             rf_gain: 0,
@@ -1178,10 +1187,12 @@ impl App {
                 is_b,
             ))),
             Message::FreqDigit(is_b, place, up) => {
+                // Base on the optimistic value so rapid clicks accumulate without
+                // waiting for the radio's echo.
                 let cur = if is_b {
-                    self.ui.vfo_b_hz
+                    self.opt_vfo_b.or(self.ui.vfo_b_hz)
                 } else {
-                    self.ui.vfo_a_hz
+                    self.opt_vfo_a.or(self.ui.vfo_a_hz)
                 };
                 if let Some(freq) = cur {
                     // Roll the clicked digit 0–9 within its own place (no carry).
@@ -1189,9 +1200,12 @@ impl App {
                     let new_d = if up { (d + 1) % 10 } else { (d + 9) % 10 };
                     let delta = new_d as i64 * place as i64 - d as i64 * place as i64;
                     let new_freq = (freq as i64 + delta).max(0) as u64;
+                    self.opt_vfo_age = 0;
                     if is_b {
+                        self.opt_vfo_b = Some(new_freq);
                         self.send(WorkerCmd::SetFreqB(new_freq));
                     } else {
+                        self.opt_vfo_a = Some(new_freq);
                         self.send(WorkerCmd::SetFreqA(new_freq));
                     }
                 }
@@ -1237,9 +1251,12 @@ impl App {
             Message::PaneQsy(is_b, hz) => {
                 // Click-to-QSY: tune the pane's VFO to the clicked frequency.
                 // (In dual view a wrapping mouse_area also selects the TX VFO.)
+                self.opt_vfo_age = 0;
                 if is_b {
+                    self.opt_vfo_b = Some(hz);
                     self.send(WorkerCmd::SetFreqB(hz));
                 } else {
+                    self.opt_vfo_a = Some(hz);
                     self.send(WorkerCmd::SetFreqA(hz));
                 }
             }
@@ -1802,6 +1819,24 @@ impl App {
                         self.tx_pwr_range = r;
                     }
                 }
+                // Reconcile the optimistic VFO freq: drop it once the radio
+                // confirms our value, or after a staleness timeout (~2 s) so a
+                // clamped/rejected set falls back to the radio's real value.
+                if self.opt_vfo_a == self.ui.vfo_a_hz {
+                    self.opt_vfo_a = None;
+                }
+                if self.opt_vfo_b == self.ui.vfo_b_hz {
+                    self.opt_vfo_b = None;
+                }
+                if self.opt_vfo_a.is_some() || self.opt_vfo_b.is_some() {
+                    self.opt_vfo_age = self.opt_vfo_age.saturating_add(1);
+                    if self.opt_vfo_age > 15 {
+                        self.opt_vfo_a = None;
+                        self.opt_vfo_b = None;
+                    }
+                } else {
+                    self.opt_vfo_age = 0;
+                }
                 // Expire the momentary switch-tap highlight.
                 if self.switch_flash_ticks > 0 {
                     self.switch_flash_ticks -= 1;
@@ -1913,10 +1948,12 @@ impl App {
 
     fn vfo_panel(&self, pane: ui::Pane) -> Element<'_, Message> {
         let is_b = pane.is_b();
+        // Prefer the optimistic freq (instant digit-click feedback) over the
+        // radio snapshot until the radio confirms it (FR-VFO-08).
         let hz = if is_b {
-            self.ui.vfo_b_hz
+            self.opt_vfo_b.or(self.ui.vfo_b_hz)
         } else {
-            self.ui.vfo_a_hz
+            self.opt_vfo_a.or(self.ui.vfo_a_hz)
         };
         let mode = if is_b { self.ui.mode_b } else { self.ui.mode_a };
         let dbm = if is_b {
