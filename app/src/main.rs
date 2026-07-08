@@ -2906,8 +2906,26 @@ impl App {
 
     /// Mode class for the `SD` delay command, derived from the main mode (`C`=CW
     /// & direct data, `D`=AF data, `V`=voice) — FR-TX-DLY-01.
+    /// Mode of the active RX VFO (drives the MAIN RX frame's mode-awareness).
+    fn active_mode(&self) -> Option<&'static str> {
+        if self.active_rx_b {
+            self.ui.mode_b
+        } else {
+            self.ui.mode_a
+        }
+    }
+
+    /// Mode of the transmit VFO (B under split, else A) — drives the TX frame.
+    fn tx_mode(&self) -> Option<&'static str> {
+        if self.tx_vfo_b {
+            self.ui.mode_b
+        } else {
+            self.ui.mode_a
+        }
+    }
+
     fn tx_mode_class(&self) -> char {
-        match self.ui.mode_a {
+        match self.tx_mode() {
             Some("CW") | Some("CW-R") => 'C',
             Some("DATA") | Some("DATA-R") | Some("FSK") | Some("FSK-D") => 'D',
             _ => 'V',
@@ -4202,7 +4220,7 @@ impl App {
             .push(gain("RF", self.rf_gain, 60, Message::SetRfGain, " dB"))
             .push(gain("SQL", self.squelch, 40, Message::SetSquelch, ""))
             .push(hz_slider(
-                "PITCH",
+                "NOTCH",
                 self.notch_pitch,
                 150,
                 5000,
@@ -4239,7 +4257,7 @@ impl App {
                 .push(tune_row)
                 .push(gain_row)
                 // FM-only sub-panel: repeater offset + PL/CTCSS tone.
-                .push_maybe((self.ui.mode_a == Some("FM")).then(|| self.fm_panel())),
+                .push_maybe((self.active_mode() == Some("FM")).then(|| self.fm_panel())),
         )
         .style(panel_style)
         .padding(12)
