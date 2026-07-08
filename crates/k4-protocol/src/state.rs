@@ -77,6 +77,9 @@ pub struct RadioState {
     /// VOX gain 0–60 (`VG`) and anti-VOX/inhibit level 0–60 (`VI`).
     pub vox_gain: Option<u8>,
     pub anti_vox: Option<u8>,
+    /// VFO tuning step, Hz (`VT`/`VT$`: 10^n for step index n).
+    pub tune_step_hz: Option<u32>,
+    pub sub_tune_step_hz: Option<u32>,
     /// Speech compression, 0–30 (`CP`).
     pub compression: Option<u8>,
     /// CW sidetone pitch, Hz (`CW`).
@@ -599,6 +602,15 @@ impl RadioState {
                     self.pl_on = Some(b[2] == b'1');
                 }
             }
+        } else if let Some(arg) = cmd.strip_prefix("VT") {
+            // `VT[$]nm` — n is the step index (0–5 → 1 Hz … 100 kHz).
+            let (sub, a) = split_sub(arg);
+            if let Some(nc) = a.bytes().next() {
+                if nc.is_ascii_digit() {
+                    let step = 10u32.pow(u32::from(nc - b'0'));
+                    *sub_or(&mut self.tune_step_hz, &mut self.sub_tune_step_hz, sub) = Some(step);
+                }
+            }
         } else if let Some(arg) = cmd.strip_prefix("VG") {
             // `VGmnnn` — VOX gain (m = V/D); surface the level.
             if arg.len() >= 4 {
@@ -737,6 +749,7 @@ pub fn connect_state_seed() -> &'static [&'static str] {
         "RO;",  // RIT/XIT offset (Hz)
         "ML0;", "ML1;", "ML2;", // monitor levels (CW / AF-data / voice)
         "VGV;", "VI;", // VOX gain (voice) + anti-VOX level
+        "VT;", "VT$;", // VFO tuning step (for optimistic ◄► stepping)
         "RP;", "PL;", // FM repeater offset + PL/CTCSS tone
         "UT;", "CC;",   // radio UTC time + remote client count (status strip)
         "#MP$;", // mini-pan on/off

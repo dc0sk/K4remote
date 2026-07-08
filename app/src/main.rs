@@ -1169,16 +1169,7 @@ impl App {
             Message::ToggleSerialMode => self.serial_mode = !self.serial_mode,
             Message::SerialPathChanged(v) => self.serial_path = v,
             Message::SerialBaudChanged(v) => self.serial_baud = v,
-            Message::Tune(is_b, up) => {
-                // VFO up/down one step at the radio's current step size.
-                let cmd = match (is_b, up) {
-                    (false, true) => "UP;",
-                    (false, false) => "DN;",
-                    (true, true) => "UPB;",
-                    (true, false) => "DNB;",
-                };
-                self.send(WorkerCmd::Cat(cmd.to_string()));
-            }
+            Message::Tune(is_b, up) => self.step_vfo(is_b, up),
             Message::SetMode(digit) => self.send(WorkerCmd::SetMode(digit)),
             // MD+ (MD$+ for the sub) steps the mode through the K4's enabled
             // set; the MODE switch tap (SW43) only opens a chooser on the LCD.
@@ -1260,15 +1251,7 @@ impl App {
                     self.send(WorkerCmd::SetFreqA(hz));
                 }
             }
-            Message::PaneWheel(is_b, dir) => {
-                let cmd = match (is_b, dir > 0) {
-                    (false, true) => "UP;",
-                    (false, false) => "DN;",
-                    (true, true) => "UPB;",
-                    (true, false) => "DNB;",
-                };
-                self.send(WorkerCmd::Cat(cmd.to_string()));
-            }
+            Message::PaneWheel(is_b, dir) => self.step_vfo(is_b, dir > 0),
             Message::SetAfGain(v) => {
                 self.af_gain = v;
                 self.send(WorkerCmd::Cat(target_rx(
@@ -1910,6 +1893,49 @@ impl App {
     /// One VFO panel for the header band (FR-UI-12): receiver badge, big
     /// dot-grouped frequency, mode, and a proportional S-meter bar — the
     /// reference client's per-VFO block (FR-UI-09/10/15).
+    /// Step a VFO up/down by the radio's tuning rate (`VT`). When the step is
+    /// known, compute the new frequency and set it optimistically (FA/FB) so the
+    /// readout moves instantly; otherwise fall back to the radio's `UP/DN`.
+    fn step_vfo(&mut self, is_b: bool, up: bool) {
+        let step = if is_b {
+            self.ui.radio.sub_tune_step_hz
+        } else {
+            self.ui.radio.tune_step_hz
+        };
+        let cur = if is_b {
+            self.opt_vfo_b.or(self.ui.vfo_b_hz)
+        } else {
+            self.opt_vfo_a.or(self.ui.vfo_a_hz)
+        };
+        match (step, cur) {
+            (Some(step), Some(cur)) => {
+                let step = u64::from(step);
+                let new = if up {
+                    cur + step
+                } else {
+                    cur.saturating_sub(step)
+                };
+                self.opt_vfo_age = 0;
+                if is_b {
+                    self.opt_vfo_b = Some(new);
+                    self.send(WorkerCmd::SetFreqB(new));
+                } else {
+                    self.opt_vfo_a = Some(new);
+                    self.send(WorkerCmd::SetFreqA(new));
+                }
+            }
+            _ => {
+                let cmd = match (is_b, up) {
+                    (false, true) => "UP;",
+                    (false, false) => "DN;",
+                    (true, true) => "UPB;",
+                    (true, false) => "DNB;",
+                };
+                self.send(WorkerCmd::Cat(cmd.to_string()));
+            }
+        }
+    }
+
     /// The frequency readout as individually clickable digits (FR-VFO-08):
     /// a digit's top half increments it, the bottom half decrements it, rolling
     /// 0–9 within that digit only (no carry to neighbours).
