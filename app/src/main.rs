@@ -1941,14 +1941,24 @@ impl App {
         };
 
         // Fixed height matching the centre box (Fill is not allowed inside the
-        // scrollable body), content vertically centred.
-        Container::new(Column::new().spacing(8).push(head).push(meter))
-            .style(panel_style)
+        // scrollable body), content vertically centred. In dual view the panel
+        // is clickable to select the TX VFO and shows the accent border when it
+        // is the transmit VFO — matching the spectrum panes (FR-UI-12).
+        let dual = self.view_mode == ViewMode::Dual;
+        let selected = dual && is_b == self.tx_vfo_b;
+        let panel = Container::new(Column::new().spacing(8).push(head).push(meter))
+            .style(pane_style(selected))
             .padding(12)
             .width(Length::Fill)
             .height(Length::Fixed(VFO_BAND_H))
-            .align_y(Alignment::Center)
-            .into()
+            .align_y(Alignment::Center);
+        if dual {
+            mouse_area(panel)
+                .on_press(Message::SelectTxVfo(is_b))
+                .into()
+        } else {
+            panel.into()
+        }
     }
 
     /// The shared TX / SPLIT / RIT-XIT box that sits between the VFOs (FR-UI-12),
