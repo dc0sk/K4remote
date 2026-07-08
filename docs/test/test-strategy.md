@@ -1,7 +1,7 @@
 ---
 title: "Test Strategy & Traceability"
 status: Draft
-version: "0.96"
+version: "0.97"
 updated: 2026-07-07
 authors:
   - Simon Keimer (DC0SK)
@@ -295,3 +295,4 @@ FR-SES-MULTI, FR-DIAG-02, etc. — get `TC` IDs when promoted to `Approved`.)*
 | 2026-07-08 | 0.94 | DC0SK | Window height fits the content: default + minimum height set to 964 px (930 was too short and re-introduced a vertical scrollbar). 142 tests. |
 | 2026-07-08 | 0.95 | DC0SK | VFO panels select the TX VFO too: in dual view the top RX A/B frames are now clickable (mouse_area → SelectTxVfo) and carry the same accent selection border as the spectrum panes (pane_style(selected)); single view stays plain (FR-UI-12). 142 tests. |
 | 2026-07-08 | 0.96 | DC0SK | Clickable mode in the VFO frames: the mode label is now a button that sends the K4 MODE switch (`SW43`), which steps only through the modes enabled in the K4's config — so the radio does the filtering. (SW43 acts on the main/focused VFO's mode.) 142 tests. |
+| 2026-07-08 | 0.97 | DC0SK | Fix clickable-mode cycling: the MODE switch tap (SW43) only opens a chooser on the K4 LCD — replace it with the mode INCR command `MD+` (`MD$+` for the sub via target_rx), which steps directly through the K4's enabled modes. Each VFO frame now cycles its own mode (CycleMode(is_b)). 142 tests. |

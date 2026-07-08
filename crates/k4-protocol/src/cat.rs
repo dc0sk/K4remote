@@ -93,6 +93,15 @@ pub fn set_mode(digit: u8) -> String {
 /// Set the operating mode for sub RX (`MD$`).
 ///
 /// trace: FR-MODE-01
+/// Step the operating mode up through the enabled modes (`MD+`; `MD$+` for the
+/// sub via `target_rx`). Unlike the MODE switch tap (which opens a chooser), this
+/// advances the mode directly.
+///
+/// trace: FR-MODE-01
+pub fn cycle_mode() -> String {
+    "MD+;".to_string()
+}
+
 pub fn set_mode_sub(digit: u8) -> String {
     format!("MD${digit};")
 }
