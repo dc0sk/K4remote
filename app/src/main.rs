@@ -73,8 +73,6 @@ struct App {
     port: String,
     password: String,
     // tuning form
-    freq_mhz: String,
-    freq_b_mhz: String,
     // use TLS-PSK (port 9204) instead of plaintext (9205)
     use_tls: bool,
     // serial (USB/RS232) transport instead of Ethernet
@@ -385,9 +383,6 @@ enum Message {
     HostChanged(String),
     PortChanged(String),
     PasswordChanged(String),
-    FreqChanged(String),
-    FreqBChanged(String),
-    SetFreqB,
     Tune(bool, bool),
     Connect,
     Disconnect,
@@ -396,7 +391,6 @@ enum Message {
     ToggleSerialMode,
     SerialPathChanged(String),
     SerialBaudChanged(String),
-    SetFreq,
     SetMode(u8),
     Band(bool),
     ToggleAtten,
@@ -584,8 +578,6 @@ impl App {
             host: last.host,
             port: last.port.to_string(),
             password,
-            freq_mhz: "14.074".into(),
-            freq_b_mhz: "14.074".into(),
             use_tls: last.use_tls,
             serial_mode: false,
             serial_path: "/dev/ttyUSB0".into(),
@@ -1089,7 +1081,6 @@ impl App {
             Message::HostChanged(v) => self.host = v,
             Message::PortChanged(v) => self.port = v,
             Message::PasswordChanged(v) => self.password = v,
-            Message::FreqChanged(v) => self.freq_mhz = v,
             Message::Connect => {
                 if self.serial_mode {
                     self.send(WorkerCmd::Connect(ConnectTarget::Serial {
@@ -1119,17 +1110,6 @@ impl App {
             Message::ToggleSerialMode => self.serial_mode = !self.serial_mode,
             Message::SerialPathChanged(v) => self.serial_path = v,
             Message::SerialBaudChanged(v) => self.serial_baud = v,
-            Message::SetFreq => {
-                if let Some(hz) = parse_mhz(&self.freq_mhz) {
-                    self.send(WorkerCmd::SetFreqA(hz));
-                }
-            }
-            Message::SetFreqB => {
-                if let Some(hz) = parse_mhz(&self.freq_b_mhz) {
-                    self.send(WorkerCmd::SetFreqB(hz));
-                }
-            }
-            Message::FreqBChanged(v) => self.freq_b_mhz = v,
             Message::Tune(is_b, up) => {
                 // VFO up/down one step at the radio's current step size.
                 let cmd = match (is_b, up) {
@@ -2795,12 +2775,11 @@ impl App {
         } {
             self.notch_pitch = v;
         }
-        // TX sliders are not per-RX-VFO — always follow the radio.
+        // TX sliders are not per-RX-VFO — always follow the radio. The power
+        // *range* (H/L/X) is a user selection, so it is NOT re-synced here — a
+        // lagging read-back would otherwise snap the range buttons back.
         if let Some(v) = r.tx_power {
             self.tx_power = v;
-        }
-        if let Some(rng) = r.tx_power_range {
-            self.tx_pwr_range = rng;
         }
         if let Some(v) = r.compression {
             self.compression = v;
@@ -3128,6 +3107,10 @@ impl App {
         }
         if let Some(v) = r.tx_power {
             self.tx_power = v;
+        }
+        // Adopt the radio's power range once on connect (not on every resync).
+        if let Some(rng) = r.tx_power_range {
+            self.tx_pwr_range = rng;
         }
         if let Some(v) = r.compression {
             self.compression = v;
@@ -3778,26 +3761,7 @@ impl App {
             .push(small_btn_string("FL1".into(), Message::FilterPreset(1)))
             .push(small_btn_string("FL2".into(), Message::FilterPreset(2)))
             .push(small_btn_string("FL3".into(), Message::FilterPreset(3)))
-            .push(small_btn("NORMALIZE", Message::FilterNormalize))
-            .push(horizontal_space())
-            .push(Text::new("A MHz").size(12).color(dim))
-            .push(
-                TextInput::new("14.074", &self.freq_mhz)
-                    .on_input(Message::FreqChanged)
-                    .on_submit(Message::SetFreq)
-                    .size(13)
-                    .width(Length::Fixed(96.0)),
-            )
-            .push(small_btn("SET", Message::SetFreq))
-            .push(Text::new("B MHz").size(12).color(dim))
-            .push(
-                TextInput::new("14.074", &self.freq_b_mhz)
-                    .on_input(Message::FreqBChanged)
-                    .on_submit(Message::SetFreqB)
-                    .size(13)
-                    .width(Length::Fixed(96.0)),
-            )
-            .push(small_btn("SET", Message::SetFreqB));
+            .push(small_btn("NORMALIZE", Message::FilterNormalize));
         // AF/RF gain + squelch sliders for the main receiver (FR-RX-01,
         // FR-RX-SQL-01) — the K4's RF/SQL knob, plus radio-side AF.
         let rxv = role_color(ui::ColorRole::RxValue);
@@ -5164,13 +5128,4 @@ fn target_rx(cmd: String, sub: bool) -> String {
     } else {
         cmd
     }
-}
-
-/// Parse a MHz string (e.g. "14.074") into Hz.
-fn parse_mhz(s: &str) -> Option<u64> {
-    let mhz: f64 = s.trim().parse().ok()?;
-    if mhz <= 0.0 {
-        return None;
-    }
-    Some((mhz * 1_000_000.0).round() as u64)
 }
