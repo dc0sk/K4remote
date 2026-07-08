@@ -2524,14 +2524,31 @@ impl App {
     /// (EQ / KEYER / MIC / LINE) mirroring the K4's TX config row, with the
     /// selected sub-panel below.
     fn tx_screen(&self) -> Element<'_, Message> {
+        // Mode-adaptive: dim the TX config tabs the transmit mode doesn't use
+        // (KEYER↔CW, MIC↔voice, LINE↔data, TEXT↔CW/data); EQ/ANT always apply.
+        let tx_class = ui::ModeClass::from_mode(self.tx_mode());
+        let adaptive = self.mode_aware_ui;
+        let relevant = move |tab: TxTab| match tab {
+            TxTab::Keyer => tx_class == ui::ModeClass::Cw,
+            TxTab::Mic => matches!(
+                tx_class,
+                ui::ModeClass::Voice | ui::ModeClass::Am | ui::ModeClass::Fm
+            ),
+            TxTab::Line => tx_class == ui::ModeClass::Data,
+            TxTab::Text => matches!(tx_class, ui::ModeClass::Cw | ui::ModeClass::Data),
+            TxTab::Eq | TxTab::Ant => true,
+        };
         let tab_btn = |tab: TxTab, label: &'static str| -> Element<Message> {
             let active = self.tx_tab == tab;
+            let kind = if active {
+                BtnKind::Active
+            } else if adaptive && !relevant(tab) {
+                BtnKind::Dim
+            } else {
+                BtnKind::Plain
+            };
             Button::new(Text::new(label).size(12))
-                .style(btn_style(if active {
-                    BtnKind::Active
-                } else {
-                    BtnKind::Plain
-                }))
+                .style(btn_style(kind))
                 .padding([5, 12])
                 .on_press(Message::SetTxTab(tab))
                 .into()
