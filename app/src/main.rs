@@ -49,22 +49,30 @@ fn active_theme() -> ui::EffectiveTheme {
 use worker::{ConnectTarget, UiSnapshot, WorkerCmd};
 
 pub fn main() -> iced::Result {
-    // App icon (taskbar / window bar), embedded from the packaging assets.
-    let icon = iced::window::icon::from_file_data(
+    // Multi-window (daemon): the main window plus an optional detached
+    // diagnostics window (FR-DIAG-04). Windows are opened in `App::new`.
+    iced::daemon(App::title, App::update, App::view)
+        .subscription(App::subscription)
+        .theme(|app, _id| app.theme())
+        .run_with(App::new)
+}
+
+/// App icon (taskbar / window bar), embedded from the packaging assets.
+fn app_icon() -> Option<iced::window::Icon> {
+    iced::window::icon::from_file_data(
         include_bytes!("../../packaging/icons/k4remote-128.png"),
         None,
     )
-    .ok();
-    iced::application("K4 Remote", App::update, App::view)
-        .subscription(App::subscription)
-        .theme(App::theme)
-        // Start in landscape (wider than tall) — the layout is horizontal.
-        .window(iced::window::Settings {
-            size: iced::Size::new(ui::DEFAULT_WINDOW_SIZE.0, ui::DEFAULT_WINDOW_SIZE.1),
-            icon,
-            ..Default::default()
-        })
-        .run_with(App::new)
+    .ok()
+}
+
+/// Window settings for the detached diagnostics console.
+fn diag_window_settings() -> iced::window::Settings {
+    iced::window::Settings {
+        size: iced::Size::new(560.0, 420.0),
+        icon: app_icon(),
+        ..Default::default()
+    }
 }
 
 struct App {
@@ -145,6 +153,11 @@ struct App {
     mic_gain: f32, // TX capture gain 0.0–3.0
     // Two-step guard for the remote power-off (FR-PWR-01).
     power_off_armed: bool,
+    // Multi-window: the main window id and the optional detached diagnostics
+    // window (FR-DIAG-04).
+    main_window: iced::window::Id,
+    diag_window: Option<iced::window::Id>,
+    diag_enabled: bool,
     // Diagnostics log: show/hide + follow-newest (auto-scroll).
     show_log: bool,
     log_autoscroll: bool,
@@ -482,6 +495,9 @@ enum Message {
     PowerOffConfirm,
     // Diagnostics log display options.
     ToggleShowLog,
+    ToggleDiagWindow,
+    WindowOpened,
+    WindowClosed(iced::window::Id),
     ToggleLogAutoscroll,
     // Graphic-EQ screens (FR-EQ-01).
     EqChanged(EqTarget, usize, i8),
@@ -508,7 +524,7 @@ enum Message {
     DxFilter(String),
     // RX config sub-screens (FR-ANT-01/FR-AUD-CFG-01, Phase D).
     Rx(RxMsg),
-    Resized(f32),
+    Resized(iced::window::Id, f32),
     Tick,
 }
 
@@ -554,6 +570,23 @@ impl App {
         let _ = cmd_tx.send(WorkerCmd::SetMicGain(mic_gain));
         let theme_mode = theme_from_prefs(prefs.theme.as_deref());
         let mute_mon = prefs.mute_radio_mon;
+        let diag_enabled = prefs.diagnostics_window;
+
+        // Open the main window; the daemon starts with none (FR-DIAG-04).
+        let (main_window, open_main) = iced::window::open(iced::window::Settings {
+            size: iced::Size::new(ui::DEFAULT_WINDOW_SIZE.0, ui::DEFAULT_WINDOW_SIZE.1),
+            icon: app_icon(),
+            ..Default::default()
+        });
+        let mut window_tasks = vec![open_main.map(|_| Message::WindowOpened)];
+        // Restore the detached diagnostics window if it was enabled.
+        let diag_window = if diag_enabled {
+            let (id, open) = iced::window::open(diag_window_settings());
+            window_tasks.push(open.map(|_| Message::WindowOpened));
+            Some(id)
+        } else {
+            None
+        };
 
         // Choose a secret store; load the saved password if "remember" is set.
         #[cfg(feature = "keychain")]
@@ -626,6 +659,9 @@ impl App {
             volume,
             mic_gain,
             power_off_armed: false,
+            main_window,
+            diag_window,
+            diag_enabled,
             show_log: false,
             log_autoscroll: true,
             log_id: scrollable::Id::new("diag-log"),
@@ -665,7 +701,7 @@ impl App {
             loaded_commands: Vec::new(),
             backup_status: String::new(),
         };
-        (app, Task::none())
+        (app, Task::batch(window_tasks))
     }
 
     /// Persist the current connection profile (no password) and store/clear the
@@ -927,6 +963,7 @@ impl App {
                     mic_gain_pct: (self.mic_gain * 100.0).round() as u16,
                     theme: Some(theme_to_str(self.theme_mode).to_string()),
                     mute_radio_mon: self.mute_mon,
+                    diagnostics_window: self.diag_enabled,
                     ..Default::default()
                 },
             };
@@ -1525,6 +1562,29 @@ impl App {
                 self.power_off_armed = false;
             }
             Message::ToggleShowLog => self.show_log = !self.show_log,
+            Message::ToggleDiagWindow => {
+                if let Some(id) = self.diag_window.take() {
+                    self.diag_enabled = false;
+                    self.save_config();
+                    return iced::window::close(id);
+                }
+                let (id, open) = iced::window::open(diag_window_settings());
+                self.diag_window = Some(id);
+                self.diag_enabled = true;
+                self.save_config();
+                return open.map(|_| Message::WindowOpened);
+            }
+            Message::WindowOpened => {} // ids are captured at open time
+            Message::WindowClosed(id) => {
+                if id == self.main_window {
+                    return iced::exit(); // closing the main window quits the app
+                }
+                if Some(id) == self.diag_window {
+                    self.diag_window = None;
+                    self.diag_enabled = false;
+                    self.save_config();
+                }
+            }
             Message::ToggleLogAutoscroll => {
                 self.log_autoscroll = !self.log_autoscroll;
                 if self.log_autoscroll {
@@ -1635,7 +1695,11 @@ impl App {
             Message::SetFnTab(t) => self.fn_tab = t,
             Message::DxFilter(q) => self.dx_filter = q,
             Message::Rx(m) => self.apply_rx(m),
-            Message::Resized(w) => self.window_w = w,
+            Message::Resized(id, w) => {
+                if id == self.main_window {
+                    self.window_w = w;
+                }
+            }
             Message::Tick => {
                 if let Ok(snap) = self.snapshot.lock() {
                     self.ui = snap.clone();
@@ -1745,8 +1809,11 @@ impl App {
         // Poll the shared snapshot ~6×/s; the UI thread never blocks on I/O.
         let tick = iced::time::every(Duration::from_millis(150)).map(|_| Message::Tick);
         // Track window width for the responsive band layout (FR-UI-12).
-        let resize = iced::window::resize_events().map(|(_id, size)| Message::Resized(size.width));
-        Subscription::batch([tick, resize])
+        let resize =
+            iced::window::resize_events().map(|(id, size)| Message::Resized(id, size.width));
+        // Window lifecycle: quit on main-window close; track the diag window.
+        let closed = iced::window::close_events().map(Message::WindowClosed);
+        Subscription::batch([tick, resize, closed])
     }
 
     /// The effective (resolved) theme for this frame (FR-UI-17).
@@ -3525,9 +3592,89 @@ impl App {
         col.into()
     }
 
-    fn view(&self) -> Element<'_, Message> {
+    /// The detached diagnostics window's content (FR-DIAG-04): the console
+    /// (raw-CAT entry, LOG/AUTOSCROLL toggles, and the log) filling the window.
+    fn diag_window_view(&self) -> Element<'_, Message> {
+        set_active_theme(self.effective_theme());
+        let dim = role_color(ui::ColorRole::Inactive);
+        let mut log_col = Column::new().spacing(1);
+        for line in &self.ui.diag_lines {
+            log_col = log_col.push(Text::new(line.clone()).size(11).color(dim));
+        }
+        let opt = |label: &'static str, on: bool, msg: Message| {
+            Button::new(Text::new(label).size(11))
+                .style(btn_style(if on { BtnKind::Active } else { BtnKind::Plain }))
+                .padding([3, 8])
+                .on_press(msg)
+        };
+        let diag_header = Row::new()
+            .spacing(8)
+            .align_y(Alignment::Center)
+            .push(Text::new("DIAGNOSTICS").size(11).color(dim))
+            .push(horizontal_space())
+            .push(opt("LOG", self.show_log, Message::ToggleShowLog))
+            .push(opt(
+                "AUTOSCROLL",
+                self.log_autoscroll,
+                Message::ToggleLogAutoscroll,
+            ));
+        let mut diag_col = Column::new()
+            .spacing(8)
+            .push(diag_header)
+            .push(
+                Row::new()
+                    .spacing(8)
+                    .push(
+                        TextInput::new("raw CAT, e.g. IF;", &self.cat_input)
+                            .on_input(Message::CatInputChanged)
+                            .on_submit(Message::SendCat)
+                            .size(13)
+                            .width(Length::Fixed(200.0)),
+                    )
+                    .push(small_btn("SEND", Message::SendCat)),
+            )
+            .push(
+                Text::new(format!(
+                    "RX audio frames: {}   spectrum: {} bins",
+                    self.ui.audio_frames, self.ui.spectrum_bins
+                ))
+                .size(11)
+                .color(dim),
+            );
+        if self.show_log {
+            let log = scrollable(log_col)
+                .id(self.log_id.clone())
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .direction(scrollable::Direction::Vertical(
+                    scrollable::Scrollbar::new().width(6.0).scroller_width(6.0),
+                ));
+            diag_col = diag_col.push(log);
+        }
+        Container::new(diag_col)
+            .style(panel_style)
+            .padding(12)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+    }
+
+    /// Per-window title (daemon).
+    fn title(&self, window: iced::window::Id) -> String {
+        if Some(window) == self.diag_window {
+            "K4 Remote — Diagnostics".into()
+        } else {
+            "K4 Remote".into()
+        }
+    }
+
+    fn view(&self, window: iced::window::Id) -> Element<'_, Message> {
         // Resolve colours against the active theme for the whole tree (FR-UI-17).
         set_active_theme(self.effective_theme());
+        // The detached diagnostics window renders only the console (FR-DIAG-04).
+        if Some(window) == self.diag_window {
+            return self.diag_window_view();
+        }
         let dim = role_color(ui::ColorRole::Inactive);
 
         // Header band: title, link state, status line, the A / B / A+B view
@@ -4248,84 +4395,9 @@ impl App {
             .into(),
         );
 
-        // Diagnostics console (FR-DIAG-01/02). Log oldest→newest so auto-scroll
-        // follows the bottom.
-        let mut log_col = Column::new().spacing(1);
-        for line in &self.ui.diag_lines {
-            log_col = log_col.push(Text::new(line.clone()).size(11).color(dim));
-        }
-        let opt = |label: &'static str, on: bool, msg: Message| {
-            Button::new(Text::new(label).size(11))
-                .style(btn_style(if on { BtnKind::Active } else { BtnKind::Plain }))
-                .padding([3, 8])
-                .on_press(msg)
-        };
-        let diag_header = Row::new()
-            .spacing(8)
-            .align_y(Alignment::Center)
-            .push(Text::new("DIAGNOSTICS").size(11).color(dim))
-            .push(horizontal_space())
-            .push(opt("LOG", self.show_log, Message::ToggleShowLog))
-            .push(opt(
-                "AUTOSCROLL",
-                self.log_autoscroll,
-                Message::ToggleLogAutoscroll,
-            ));
-        let mut diag_col = Column::new()
-            .spacing(8)
-            .push(diag_header)
-            .push(
-                Row::new()
-                    .spacing(8)
-                    .push(
-                        TextInput::new("raw CAT, e.g. IF;", &self.cat_input)
-                            .on_input(Message::CatInputChanged)
-                            .on_submit(Message::SendCat)
-                            .size(13)
-                            .width(Length::Fixed(200.0)),
-                    )
-                    .push(small_btn("SEND", Message::SendCat)),
-            )
-            .push(
-                Text::new(format!(
-                    "RX audio frames: {}   spectrum: {} bins",
-                    self.ui.audio_frames, self.ui.spectrum_bins
-                ))
-                .size(11)
-                .color(dim),
-            );
-        if self.show_log {
-            // Fixed always-present scrollbar on the right (no jumping). Auto-scroll
-            // is driven from the tick (snap to newest); with it off the view holds
-            // its position so you can read back through the log.
-            let log = scrollable(log_col)
-                .id(self.log_id.clone())
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .direction(scrollable::Direction::Vertical(
-                    scrollable::Scrollbar::new().width(6.0).scroller_width(6.0),
-                ));
-            diag_col = diag_col.push(log);
-        }
-        let diagnostics = Container::new(diag_col)
-            .style(panel_style)
-            .padding(12)
-            .width(Length::Fill)
-            .height(Length::Fixed(BOTTOM_PANEL_H));
-
-        let bottom: Element<Message> = if bl.stacked {
-            Column::new()
-                .spacing(10)
-                .push(tx_panel)
-                .push(diagnostics)
-                .into()
-        } else {
-            Row::new()
-                .spacing(10)
-                .push(tx_panel)
-                .push(diagnostics)
-                .into()
-        };
+        // The diagnostics console lives in its own window now (FR-DIAG-04), so
+        // the transmit panel stretches across the whole bottom row.
+        let bottom: Element<Message> = tx_panel.into();
 
         // K4-faithful band order (FR-UI-12/13/19): header, VFO band, main-RX
         // controls, then the spectrum slot (spectrum or the active primary's
@@ -4590,6 +4662,24 @@ impl App {
                     ))
                     .push(
                         Text::new("keeps the shack speaker quiet during remote TX")
+                            .size(10)
+                            .color(dim),
+                    ),
+            )
+            .push(
+                Row::new()
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                    .push(small_btn(
+                        if self.diag_window.is_some() {
+                            "Diagnostics window: ON"
+                        } else {
+                            "Diagnostics window: OFF"
+                        },
+                        Message::ToggleDiagWindow,
+                    ))
+                    .push(
+                        Text::new("show the CAT/diagnostics console in a separate window")
                             .size(10)
                             .color(dim),
                     ),
