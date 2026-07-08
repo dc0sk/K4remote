@@ -1,7 +1,7 @@
 ---
 title: "Test Strategy & Traceability"
 status: Draft
-version: "0.91"
+version: "0.92"
 updated: 2026-07-07
 authors:
   - Simon Keimer (DC0SK)
@@ -290,3 +290,4 @@ FR-SES-MULTI, FR-DIAG-02, etc. — get `TC` IDs when promoted to `Approved`.)*
 | 2026-07-08 | 0.89 | DC0SK | Diagnostics as a separate window (FR-DIAG-04): migrate the app from single-window `iced::application` to multi-window `iced::daemon`. The main window opens on startup; a detached diagnostics window (CAT console + LOG/AUTOSCROLL + log) is off by default, toggled from Settings (persisted in prefs), and its view/title dispatch on `window::Id`. Closing the main window quits (`iced::exit`); closing the diag window clears the flag; resize is filtered to the main window. The transmit panel now stretches the full bottom width (diagnostics removed from the main layout). 142 tests. |
 | 2026-07-08 | 0.90 | DC0SK | Main window min width 1320 (min_size, initial size clamped ≥1320); TRANSMIT panel reorder — three transmit controls (ARM · PTT/UNKEY · E-STOP) on top, then the switch grid, then the PA/PWR controls (H/L/X range + power slider) at the bottom. 142 tests. |
 | 2026-07-08 | 0.91 | DC0SK | TX panel fits all controls: the dual-function switches now render on one wide row (the panel is full-width), and the TRANSMIT container is content-sized instead of a fixed 220 px, so nothing is clipped. Order stays transmit controls · switches (+ MON/VOX/DVR) · PA/PWR controls; the scrollable body keeps everything reachable. Dropped the now-unused BOTTOM_PANEL_H. 142 tests. |
+| 2026-07-08 | 0.92 | DC0SK | TX panel compaction: PA/PWR controls moved into row 1 (right of EMERGENCY STOP), AUTOSPOT moved onto the switch row (right of SUB A), and VOX G / A-VOX sliders moved onto the MON row (right of MON) — dropping the separate power and VOX rows. 142 tests. |
