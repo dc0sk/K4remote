@@ -7,6 +7,8 @@
 
 /// PAN payload type byte.
 pub const PAN_TYPE: u8 = 0x02;
+/// Mini-pan payload type byte (same header layout, wide-span overview).
+pub const MINI_PAN_TYPE: u8 = 0x03;
 /// Header length before the bin data.
 pub const PAN_HEADER_SIZE: usize = 27;
 /// Per-bin dBm offset: `dBm = raw_byte − K4_DBM_OFFSET`.
@@ -25,15 +27,20 @@ pub struct PanFrame {
     pub noise_floor_db: f32,
     /// Per-bin levels, dBm.
     pub bins_dbm: Vec<f32>,
+    /// `true` if this is a mini-pan (`0x03`) frame rather than the main pan.
+    pub mini: bool,
 }
 
 impl PanFrame {
-    /// Decode a PAN payload (the body of a `0x02` frame). Returns `None` if the
-    /// payload is not PAN or is shorter than the header.
+    /// Decode a PAN payload (the body of a `0x02` main-pan or `0x03` mini-pan
+    /// frame; they share the header layout). Returns `None` if the payload is
+    /// neither type or is shorter than the header.
     ///
-    /// trace: FR-PAN-01
+    /// trace: FR-PAN-01, FR-UI-14
     pub fn decode(payload: &[u8]) -> Option<Self> {
-        if payload.len() < PAN_HEADER_SIZE || payload[0] != PAN_TYPE {
+        if payload.len() < PAN_HEADER_SIZE
+            || (payload[0] != PAN_TYPE && payload[0] != MINI_PAN_TYPE)
+        {
             return None;
         }
         let center_freq_hz = i64::from_le_bytes(payload[11..19].try_into().ok()?);
@@ -49,6 +56,7 @@ impl PanFrame {
             sample_rate,
             noise_floor_db: noise_raw as f32 / 10.0,
             bins_dbm,
+            mini: payload[0] == MINI_PAN_TYPE,
         })
     }
 

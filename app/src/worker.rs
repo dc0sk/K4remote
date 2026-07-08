@@ -158,6 +158,8 @@ pub struct UiSnapshot {
     pub waterfall: Vec<Vec<f32>>,
     /// Waterfall history for the sub RX / VFO B.
     pub waterfall_sub: Vec<Vec<f32>>,
+    /// Latest mini-pan trace (0x03), empty if disabled.
+    pub mini_pan: Vec<f32>,
     /// Recent diagnostic log lines (FR-DIAG-01/02).
     pub diag_lines: Vec<String>,
     /// Human-readable status / last error.
@@ -267,6 +269,8 @@ struct WorkerState {
     // 1=sub/B), so a dual-pan view shows each RX's own trace (FR-PAN-02).
     spectrum_latest: [Vec<f32>; 2],
     waterfall: [VecDeque<Vec<f32>>; 2],
+    // Latest mini-pan (0x03) trace, if enabled (FR-UI-14).
+    mini_pan: Vec<f32>,
     diag: DiagLog,
     // Reconnect (FR-SES-RECONNECT): retained target + backoff schedule.
     connect_params: Option<ConnectTarget>,
@@ -302,6 +306,7 @@ impl WorkerState {
             spectrum_bins: 0,
             spectrum_latest: [Vec::new(), Vec::new()],
             waterfall: [VecDeque::new(), VecDeque::new()],
+            mini_pan: Vec::new(),
             // Debug level so the raw CAT console shows traffic; bounded ring.
             diag: DiagLog::new(300, Level::Debug),
             connect_params: None,
@@ -335,6 +340,7 @@ impl WorkerState {
             self.spectrum_latest[rx].clear();
             self.waterfall[rx].clear();
         }
+        self.mini_pan.clear();
     }
 }
 
@@ -395,6 +401,7 @@ fn publish(snapshot: &Arc<Mutex<UiSnapshot>>, ws: &WorkerState) {
         s.spectrum_sub = ws.spectrum_latest[1].clone();
         s.waterfall = ws.waterfall[0].iter().cloned().collect();
         s.waterfall_sub = ws.waterfall[1].iter().cloned().collect();
+        s.mini_pan = ws.mini_pan.clone();
         s.diag_lines = ws.diag.recent(30);
         s.radio = st.clone();
     }
@@ -613,9 +620,13 @@ fn service(ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnapshot>>) {
         // Spectrum → downsampled trace + waterfall history (FR-PAN-02/03).
         for payload in &inbound.spectrum {
             if let Some(frame) = PanFrame::decode(payload) {
+                let row = downsample(&frame.bins_dbm, SPECTRUM_WIDTH);
+                if frame.mini {
+                    ws.mini_pan = row; // mini-pan overview (FR-UI-14)
+                    continue;
+                }
                 let rx = usize::from(frame.receiver.min(1)); // 0=main/A, 1=sub/B
                 ws.spectrum_bins = frame.bins_dbm.len();
-                let row = downsample(&frame.bins_dbm, SPECTRUM_WIDTH);
                 ws.spectrum_latest[rx] = row.clone();
                 ws.waterfall[rx].push_front(row);
                 while ws.waterfall[rx].len() > WATERFALL_ROWS {

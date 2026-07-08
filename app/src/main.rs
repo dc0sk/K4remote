@@ -416,6 +416,7 @@ enum Message {
     SetLoCut(u16),
     SetHiCut(u16),
     SetPanTarget(bool),
+    ToggleMiniPan,
     FilterPreset(u8),
     FilterNormalize,
     ToggleSubRx,
@@ -1292,6 +1293,7 @@ impl App {
             }
             Message::ToggleFilterEdgeView => self.filter_edge_view = !self.filter_edge_view,
             Message::SetPanTarget(b) => self.pan_target_b = b,
+            Message::ToggleMiniPan => self.send(WorkerCmd::Cat("#MP$/;".into())),
             Message::SetLoCut(lo) => self.set_passband_edge(Some(lo), None),
             Message::SetHiCut(hi) => self.set_passband_edge(None, Some(hi)),
             Message::FilterPreset(n) => self.send(WorkerCmd::Cat(target_rx(
@@ -3270,6 +3272,11 @@ impl App {
             Some(d.freeze),
             Some(Message::Disp(DispMsg::Freeze(!d.freeze))),
         );
+        let minipan = two_line_btn(
+            ui::toggle_button("MINI-PAN", self.ui.radio.mini_pan_on),
+            self.ui.radio.mini_pan_on,
+            Some(Message::ToggleMiniPan),
+        );
         // Steppers laid out on a fixed 3-column grid so labels, −/+ buttons and
         // values align across rows and columns.
         let grid_row = || Row::new().spacing(12);
@@ -3318,6 +3325,7 @@ impl App {
                     .align_y(Alignment::Center)
                     .push(peak)
                     .push(freeze)
+                    .push(minipan)
                     .push(small_btn_string(
                         format!("WF: {pal}"),
                         Message::Disp(DispMsg::Palette((d.wf_palette + 1) % 5)),
@@ -3962,13 +3970,32 @@ impl App {
             })
             .width(Length::Fill)
             .height(Length::Fixed(meter_h));
-            let pane = Container::new(Column::new().spacing(6).push(header).push(meter).push(plot))
-                .style(pane_style(selected))
-                .padding(8)
-                .width(Length::Fill)
-                // Match the menu-screen slot exactly so the frame doesn't resize
-                // when swapping the spectrum for a config screen (FR-UI-19).
-                .height(Length::Fixed(SCREEN_H));
+            // Mini-pan overview strip on the main pane, when the 0x03 stream is on.
+            let mini: Option<Element<Message>> =
+                (!p.is_b() && !self.ui.mini_pan.is_empty()).then(|| {
+                    Canvas::new(spectrum::MiniPan {
+                        latest: &self.ui.mini_pan,
+                        top_dbm: -30.0,
+                        range_db: 100.0,
+                    })
+                    .width(Length::Fill)
+                    .height(Length::Fixed(40.0))
+                    .into()
+                });
+            let pane = Container::new(
+                Column::new()
+                    .spacing(6)
+                    .push(header)
+                    .push(meter)
+                    .push_maybe(mini)
+                    .push(plot),
+            )
+            .style(pane_style(selected))
+            .padding(8)
+            .width(Length::Fill)
+            // Match the menu-screen slot exactly so the frame doesn't resize
+            // when swapping the spectrum for a config screen (FR-UI-19).
+            .height(Length::Fixed(SCREEN_H));
             spectrum_panes.push(if dual {
                 mouse_area(pane)
                     .on_press(Message::SelectTxVfo(p.is_b()))

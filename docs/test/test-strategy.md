@@ -1,7 +1,7 @@
 ---
 title: "Test Strategy & Traceability"
 status: Draft
-version: "0.79"
+version: "0.80"
 updated: 2026-07-07
 authors:
   - Simon Keimer (DC0SK)
@@ -278,3 +278,4 @@ FR-SES-MULTI, FR-DIAG-02, etc. — get `TC` IDs when promoted to `Approved`.)*
 | 2026-07-08 | 0.77 | DC0SK | Full-menu backup (FR-CFG-07): a "Sweep menu" button queries all ~96 menu items (`ME<id>`); captured `ME<id>.<value>` responses are stored in `menu_values` and appended to the config export as replayable `ME` SETs. MEDF definitions are ignored. The `ME<id>` GET→`ME<id>.<value>` RESP shape needs live verification. 141 tests. |
 | 2026-07-08 | 0.78 | DC0SK | Per-pan targeting (FR-PAN-CTL-01): the DISPLAY screen gains an A/B TARGET selector; REF/SPAN/SCALE/AVG/PEAK/FREEZE/WF commands are routed with a `$` modifier (`target_pan`) to the chosen pan (the global `#DPM` mode is never targeted). The K4 ignores a `$` on attributes without a per-pan variant, so it's safe; which attributes honor it needs live verification. 141 tests. |
 | 2026-07-08 | 0.79 | DC0SK | DVR voice-message playback (FR-DVR-01): a DVR row in the TX panel with buttons 1–8 (`PBn`) + STOP (`PB0`). Record-over-CAT is not well-specified in D12, so recording stays on the front panel for now. 142 tests. |
+| 2026-07-08 | 0.80 | DC0SK | Mini-pan (FR-UI-14): the PAN decoder accepts 0x03 mini-pan frames (shared header, `mini` flag), the worker routes them to a `mini_pan` buffer, and a thin cyan overview strip renders above the main pane. A MINI-PAN toggle (`#MP$/`) on the DISPLAY screen + `#MP` state parse/seed. The 0x03 frame layout is assumed identical to 0x02 — verify live. 142 tests. |
