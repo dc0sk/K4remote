@@ -3970,32 +3970,13 @@ impl App {
             })
             .width(Length::Fill)
             .height(Length::Fixed(meter_h));
-            // Mini-pan overview strip on the main pane, when the 0x03 stream is on.
-            let mini: Option<Element<Message>> =
-                (!p.is_b() && !self.ui.mini_pan.is_empty()).then(|| {
-                    Canvas::new(spectrum::MiniPan {
-                        latest: &self.ui.mini_pan,
-                        top_dbm: -30.0,
-                        range_db: 100.0,
-                    })
-                    .width(Length::Fill)
-                    .height(Length::Fixed(40.0))
-                    .into()
-                });
-            let pane = Container::new(
-                Column::new()
-                    .spacing(6)
-                    .push(header)
-                    .push(meter)
-                    .push_maybe(mini)
-                    .push(plot),
-            )
-            .style(pane_style(selected))
-            .padding(8)
-            .width(Length::Fill)
-            // Match the menu-screen slot exactly so the frame doesn't resize
-            // when swapping the spectrum for a config screen (FR-UI-19).
-            .height(Length::Fixed(SCREEN_H));
+            let pane = Container::new(Column::new().spacing(6).push(header).push(meter).push(plot))
+                .style(pane_style(selected))
+                .padding(8)
+                .width(Length::Fill)
+                // Match the menu-screen slot exactly so the frame doesn't resize
+                // when swapping the spectrum for a config screen (FR-UI-19).
+                .height(Length::Fixed(SCREEN_H));
             spectrum_panes.push(if dual {
                 mouse_area(pane)
                     .on_press(Message::SelectTxVfo(p.is_b()))
@@ -4004,7 +3985,7 @@ impl App {
                 pane.into()
             });
         }
-        let spectrum_band: Element<Message> = if bl.stacked {
+        let band_inner: Element<Message> = if bl.stacked {
             let mut col = Column::new().spacing(10);
             for e in spectrum_panes {
                 col = col.push(e);
@@ -4016,6 +3997,26 @@ impl App {
                 row = row.push(e);
             }
             row.into()
+        };
+        // Mini-pan overview: a single full-width strip above the whole band when
+        // the 0x03 stream is on (FR-UI-14) — it's one wide-span overview, not
+        // per-VFO.
+        let spectrum_band: Element<Message> = if self.ui.mini_pan.is_empty() {
+            band_inner
+        } else {
+            Column::new()
+                .spacing(6)
+                .push(
+                    Canvas::new(spectrum::MiniPan {
+                        latest: &self.ui.mini_pan,
+                        top_dbm: -30.0,
+                        range_db: 100.0,
+                    })
+                    .width(Length::Fill)
+                    .height(Length::Fixed(40.0)),
+                )
+                .push(band_inner)
+                .into()
         };
 
         // The spectrum frame's slot shows a menu screen when a primary softkey
