@@ -209,6 +209,10 @@ pub struct RadioState {
     pub band: Option<u8>,
     /// K4 serial number (`SN`).
     pub serial: Option<String>,
+    /// Radio UTC time, Unix seconds (`UT`).
+    pub utc_unix: Option<u64>,
+    /// Remote client count (`CC`): ≥1 server w/ n clients, −1 client, 0 else.
+    pub client_count: Option<i8>,
 }
 
 /// Parse 8 consecutive signed 3-char EQ fields (`+00-01…`) into `[i8; 8]`.
@@ -550,6 +554,14 @@ impl RadioState {
             if let Ok(v) = arg.parse::<u8>() {
                 self.rx_antenna = Some(v);
             }
+        } else if let Some(arg) = cmd.strip_prefix("UT") {
+            if let Ok(t) = arg.parse::<u64>() {
+                self.utc_unix = Some(t);
+            }
+        } else if let Some(arg) = cmd.strip_prefix("CC") {
+            if let Ok(n) = arg.parse::<i8>() {
+                self.client_count = Some(n);
+            }
         } else if let Some(arg) = cmd.strip_prefix("RP") {
             // `RPmnnnnn` — repeater mode + offset kHz.
             let b = arg.as_bytes();
@@ -707,6 +719,7 @@ pub fn connect_state_seed() -> &'static [&'static str] {
         "ML0;", "ML1;", "ML2;", // monitor levels (CW / AF-data / voice)
         "VGV;", "VI;", // VOX gain (voice) + anti-VOX level
         "RP;", "PL;", // FM repeater offset + PL/CTCSS tone
+        "UT;", "CC;", // radio UTC time + remote client count (status strip)
         // Configuration-screen read-back (FR-UI-19 screens):
         "RE;", "TE;", "KP;", "KS;", "MI;", "MG;", "LO;", "AN;", "AR;", "AR$;", "VXV;", "BN;",
         "#REF;", "#SPN;", "#SCL;", "#DPM;", "#WFC;", "#WFH;",
