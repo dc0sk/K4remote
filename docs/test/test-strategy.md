@@ -1,7 +1,7 @@
 ---
 title: "Test Strategy & Traceability"
 status: Draft
-version: "0.95"
+version: "0.96"
 updated: 2026-07-07
 authors:
   - Simon Keimer (DC0SK)
@@ -294,3 +294,4 @@ FR-SES-MULTI, FR-DIAG-02, etc. — get `TC` IDs when promoted to `Approved`.)*
 | 2026-07-08 | 0.93 | DC0SK | Mini-pan framed + always present: the overview now sits in its own bordered frame (pane_style, fixed MINI_PAN_H=56) above the spectrum band, reserving the space even when not connected (placeholder shown until the 0x03 stream is on), like the spectrum frames. Default window height trimmed 980→930 to remove the bottom slack. 142 tests. |
 | 2026-07-08 | 0.94 | DC0SK | Window height fits the content: default + minimum height set to 964 px (930 was too short and re-introduced a vertical scrollbar). 142 tests. |
 | 2026-07-08 | 0.95 | DC0SK | VFO panels select the TX VFO too: in dual view the top RX A/B frames are now clickable (mouse_area → SelectTxVfo) and carry the same accent selection border as the spectrum panes (pane_style(selected)); single view stays plain (FR-UI-12). 142 tests. |
+| 2026-07-08 | 0.96 | DC0SK | Clickable mode in the VFO frames: the mode label is now a button that sends the K4 MODE switch (`SW43`), which steps only through the modes enabled in the K4's config — so the radio does the filtering. (SW43 acts on the main/focused VFO's mode.) 142 tests. |
