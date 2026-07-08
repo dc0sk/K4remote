@@ -195,3 +195,49 @@ impl<Message> canvas::Program<Message> for Spectrum<'_, Message> {
         vec![frame.into_geometry()]
     }
 }
+
+/// Thin mini-pan overview strip (0x03 stream): just a filled trace, no
+/// waterfall or grid. trace: FR-UI-14
+pub struct MiniPan<'a> {
+    pub latest: &'a [f32],
+    pub top_dbm: f32,
+    pub range_db: f32,
+}
+
+impl<Message> canvas::Program<Message> for MiniPan<'_> {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &(),
+        renderer: &Renderer,
+        _theme: &Theme,
+        bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Vec<Geometry> {
+        let mut frame = Frame::new(renderer, bounds.size());
+        let (w, h) = (bounds.width, bounds.height);
+        frame.fill_rectangle(Point::ORIGIN, Size::new(w, h), Color::from_rgb8(12, 12, 18));
+        if self.latest.len() > 1 {
+            let n = self.latest.len();
+            let trace = Path::new(|b| {
+                for (i, &dbm) in self.latest.iter().enumerate() {
+                    let x = i as f32 / (n - 1) as f32 * w;
+                    let y = dbm_to_y(dbm, self.top_dbm, self.range_db, h);
+                    if i == 0 {
+                        b.move_to(Point::new(x, y));
+                    } else {
+                        b.line_to(Point::new(x, y));
+                    }
+                }
+            });
+            frame.stroke(
+                &trace,
+                Stroke::default()
+                    .with_width(1.0)
+                    .with_color(Color::from_rgb8(0x5A, 0xC8, 0xFA)),
+            );
+        }
+        vec![frame.into_geometry()]
+    }
+}

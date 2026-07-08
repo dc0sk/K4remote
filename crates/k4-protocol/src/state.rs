@@ -186,6 +186,8 @@ pub struct RadioState {
     /// Waterfall palette 0–4 (`#WFC`) and height 0–100 (`#WFH`).
     pub wf_palette: Option<u8>,
     pub wf_height: Option<u8>,
+    /// Mini-pan display on/off (`#MP`).
+    pub mini_pan_on: Option<bool>,
     /// ATU mode (`AT`): 1 = bypass (out of line), 2 = auto (in line).
     pub atu_mode: Option<u8>,
     /// TX antenna 1–3 (`AN`), main/sub RX antenna 0–7 (`AR`/`AR$`).
@@ -537,6 +539,10 @@ impl RadioState {
             if let Ok(v) = arg.parse::<u8>() {
                 self.wf_height = Some(v);
             }
+        } else if let Some(arg) = cmd.strip_prefix("#MP") {
+            // `#MP$n` — mini-pan on/off (n = -1/0/1). `$` optional.
+            let (_, a) = split_sub(arg);
+            self.mini_pan_on = Some(a.starts_with('1'));
         } else if let Some(arg) = cmd.strip_prefix("ACM") {
             self.rx_ant_avail = Some(parse_ant_mask(arg));
         } else if let Some(arg) = cmd.strip_prefix("ACS") {
@@ -731,7 +737,8 @@ pub fn connect_state_seed() -> &'static [&'static str] {
         "ML0;", "ML1;", "ML2;", // monitor levels (CW / AF-data / voice)
         "VGV;", "VI;", // VOX gain (voice) + anti-VOX level
         "RP;", "PL;", // FM repeater offset + PL/CTCSS tone
-        "UT;", "CC;", // radio UTC time + remote client count (status strip)
+        "UT;", "CC;",   // radio UTC time + remote client count (status strip)
+        "#MP$;", // mini-pan on/off
         // Configuration-screen read-back (FR-UI-19 screens):
         "RE;", "TE;", "KP;", "KS;", "MI;", "MG;", "LO;", "AN;", "AR;", "AR$;", "VXV;", "BN;",
         "#REF;", "#SPN;", "#SCL;", "#DPM;", "#WFC;", "#WFH;",

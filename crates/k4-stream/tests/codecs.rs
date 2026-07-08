@@ -60,6 +60,12 @@ fn fr_pan_01_pan_packet_decode() {
     assert!((frame.noise_floor_db - (-123.4)).abs() < 1e-4);
     assert_eq!(frame.bins_dbm, vec![0.0, -100.0, 100.0]);
     assert_eq!(K4_DBM_OFFSET, 146.0);
+    assert!(!frame.mini);
+
+    // A 0x03 payload decodes as a mini-pan frame (same layout).
+    p[0] = 0x03;
+    let mini = PanFrame::decode(&p).expect("mini decodes");
+    assert!(mini.mini); // trace: FR-UI-14
 }
 
 /// PAN decode rejects non-PAN / short payloads.
