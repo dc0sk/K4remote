@@ -607,7 +607,7 @@ impl App {
                 ui::DEFAULT_WINDOW_SIZE.0.max(1320.0),
                 ui::DEFAULT_WINDOW_SIZE.1,
             ),
-            min_size: Some(iced::Size::new(1320.0, 964.0)),
+            min_size: Some(iced::Size::new(1320.0, 1000.0)),
             icon: app_icon(),
             ..Default::default()
         });
@@ -2590,6 +2590,50 @@ impl App {
 
     /// FM sub-panel (shown in FM mode): repeater offset mode (`RP`) + PL/CTCSS
     /// tone (`PL`). trace: FR-FM-01
+    /// The MAIN RX mode strip: a fixed-height row (always present, so the frame
+    /// never resizes) holding mode-specific extras — SPOT + text-decode in CW,
+    /// decode in DATA, the repeater/PL panel in FM (FR-UI-24). Adaptive-only
+    /// extras appear only when the mode-adaptive UI is on; the FM panel shows in
+    /// both modes (it has nowhere else to live).
+    fn rx_mode_strip(&self, class: ui::ModeClass) -> Element<'_, Message> {
+        let decode = || {
+            Button::new(
+                Text::new(if self.decode_on {
+                    "DECODE ON"
+                } else {
+                    "DECODE"
+                })
+                .size(12),
+            )
+            .style(btn_style(if self.decode_on {
+                BtnKind::Active
+            } else {
+                BtnKind::Plain
+            }))
+            .padding([5, 10])
+            .on_press(Message::ToggleDecode)
+        };
+        let mut row = Row::new().spacing(10).align_y(Alignment::Center);
+        if self.mode_aware_ui {
+            match class {
+                ui::ModeClass::Cw => {
+                    row = row
+                        .push(small_btn("SPOT", Message::Switch(42)))
+                        .push(decode());
+                }
+                ui::ModeClass::Data => row = row.push(decode()),
+                _ => {}
+            }
+        }
+        if class == ui::ModeClass::Fm {
+            row = row.push(self.fm_panel());
+        }
+        Container::new(row)
+            .height(Length::Fixed(RX_STRIP_H))
+            .width(Length::Fill)
+            .into()
+    }
+
     fn fm_panel(&self) -> Element<'_, Message> {
         let dim = role_color(ui::ColorRole::Inactive);
         let rxv = role_color(ui::ColorRole::RxValue);
@@ -4363,8 +4407,9 @@ impl App {
                 )
                 .push(tune_row)
                 .push(gain_row)
-                // FM-only sub-panel: repeater offset + PL/CTCSS tone.
-                .push_maybe((self.active_mode() == Some("FM")).then(|| self.fm_panel())),
+                // Always-present fixed-height mode strip (fixes the old FM
+                // layout jump; hosts mode-specific extras when adaptive).
+                .push(self.rx_mode_strip(rx_class)),
         )
         .style(panel_style)
         .padding(12)
@@ -5218,6 +5263,9 @@ const SCREEN_H: f32 = 300.0;
 
 /// Height of the always-present mini-pan overview frame (FR-UI-14).
 const MINI_PAN_H: f32 = 56.0;
+
+/// Height of the always-present MAIN RX mode strip (fixes the FM layout jump).
+const RX_STRIP_H: f32 = 34.0;
 
 /// Visual kind of a styled button (FR-UI-10/15): rest-state control, engaged
 /// (blue fill, like the reference client), transmit-critical (red edge),
