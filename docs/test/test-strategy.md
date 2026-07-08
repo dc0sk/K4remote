@@ -1,7 +1,7 @@
 ---
 title: "Test Strategy & Traceability"
 status: Draft
-version: "0.76"
+version: "0.77"
 updated: 2026-07-07
 authors:
   - Simon Keimer (DC0SK)
@@ -275,3 +275,4 @@ FR-SES-MULTI, FR-DIAG-02, etc. — get `TC` IDs when promoted to `Approved`.)*
 | 2026-07-08 | 0.74 | DC0SK | Passband graphic (FR-FIL-03): the Spectrum canvas draws a translucent BW-wide band + VFO centre line over each pane (from the active RX bandwidth + `#SPN`, assuming a VFO-centred pan). |
 | 2026-07-08 | 0.75 | DC0SK | FM extras (FR-FM-01): in FM mode the MAIN RX frame shows a sub-panel with repeater offset mode S/+/− (`RP`) + offset kHz, and PL/CTCSS on/off + tone index with Hz from the 50-entry CTCSS table (`PL`). Parse/seed RP + PL. 140 tests. |
 | 2026-07-08 | 0.76 | DC0SK | Status strip (FR-UI-STATUS-01): the header shows the radio UTC clock (`UT`, polled ~2 s) and remote client count (`CC`). Supply-V/I omitted — the `SI`/AI4 report format is undocumented in D12. 140 tests. |
+| 2026-07-08 | 0.77 | DC0SK | Full-menu backup (FR-CFG-07): a "Sweep menu" button queries all ~96 menu items (`ME<id>`); captured `ME<id>.<value>` responses are stored in `menu_values` and appended to the config export as replayable `ME` SETs. MEDF definitions are ignored. The `ME<id>` GET→`ME<id>.<value>` RESP shape needs live verification. 141 tests. |

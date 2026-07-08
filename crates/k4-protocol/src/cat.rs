@@ -706,6 +706,13 @@ pub fn menu_set(id: u16, value: &str) -> String {
     format!("ME{id:04}.{value};")
 }
 
+/// **Get** a menu item's value (`ME<id>;`); the RESP is `ME<id>.<value>;`.
+///
+/// trace: FR-CFG-07
+pub fn menu_query(id: u16) -> String {
+    format!("ME{id:04};")
+}
+
 /// Emulate a front-panel **switch** press by its code (`SW`, 1–3 digits). Reaches
 /// functions that have no dedicated CAT command — e.g. the quick-memory keys
 /// M1–M4 (tap = recall/play, hold codes = store) and PF1–PF4.

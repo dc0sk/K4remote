@@ -1,7 +1,7 @@
 //! CAT encoding tests. trace: FR-VFO-01, FR-VFO-04, FR-VFO-06, FR-MODE-01,
 //! FR-MODE-02, FR-RX-01, FR-RX-02
 use k4_protocol::cat::{
-    band_down, band_stack_next, band_up, clear_rit_xit, filter_normalize, menu_open,
+    band_down, band_stack_next, band_up, clear_rit_xit, filter_normalize, menu_open, menu_query,
     menu_query_def, menu_set, passband_edges, rx_eq_flat, send_text, set_af_gain, set_agc,
     set_antivox, set_apf, set_attenuator, set_auto_notch, set_band, set_band_sub, set_bandwidth_hz,
     set_compression, set_cw_pitch, set_diversity, set_filter_preset, set_keyer, set_keyer_speed,
@@ -292,6 +292,7 @@ fn fr_menu_01_menu_addressed_access() {
     assert_eq!(menu_open(101), "MO0101;");
     assert_eq!(menu_query_def(73), "MEDF0073;");
     assert_eq!(menu_set(101, "0005"), "ME0101.0005;");
+    assert_eq!(menu_query(30), "ME0030;"); // FR-CFG-07 value GET
 }
 
 /// trace: FR-SW-01

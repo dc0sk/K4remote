@@ -287,3 +287,14 @@ fn fr_ant_01_rx_antenna_access_mask() {
     s.apply_cat("ACM10000000;");
     assert_eq!(s.rx_ant_avail, Some(0b1111_1110));
 }
+
+/// trace: FR-CFG-07
+#[test]
+fn fr_cfg_07_menu_value_capture() {
+    let mut s = RadioState::new();
+    s.apply_cat("ME0030.0002;");
+    assert_eq!(s.menu_values.get(&30).map(String::as_str), Some("0002"));
+    // MEDF definitions are not captured as menu values.
+    s.apply_cat("MEDF0030;");
+    assert_eq!(s.menu_values.len(), 1);
+}
