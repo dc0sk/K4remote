@@ -197,6 +197,12 @@ pub struct RadioState {
     /// `AR$v` antenna is in the switch rotation.
     pub rx_ant_avail: Option<u8>,
     pub sub_ant_avail: Option<u8>,
+    /// FM repeater offset mode (`RP`): `S`/`+`/`-`, and shift kHz.
+    pub repeater_mode: Option<char>,
+    pub repeater_offset_khz: Option<u32>,
+    /// PL/CTCSS tone (`PL`): table index 1–50 + on/off.
+    pub pl_index: Option<u8>,
+    pub pl_on: Option<bool>,
     /// Voice VOX on/off (`VX` mode `V`).
     pub vox_voice: Option<bool>,
     /// Current band number 00–25 (`BN`).
@@ -544,6 +550,25 @@ impl RadioState {
             if let Ok(v) = arg.parse::<u8>() {
                 self.rx_antenna = Some(v);
             }
+        } else if let Some(arg) = cmd.strip_prefix("RP") {
+            // `RPmnnnnn` — repeater mode + offset kHz.
+            let b = arg.as_bytes();
+            if !b.is_empty() {
+                self.repeater_mode = Some(b[0] as char);
+                if let Ok(k) = arg.get(1..6).unwrap_or("").parse::<u32>() {
+                    self.repeater_offset_khz = Some(k);
+                }
+            }
+        } else if let Some(arg) = cmd.strip_prefix("PL") {
+            // `PLnnm` (or `PL$nnm`) — tone index + on/off.
+            let (_, a) = split_sub(arg);
+            let b = a.as_bytes();
+            if b.len() >= 3 {
+                if let Ok(i) = a[0..2].parse::<u8>() {
+                    self.pl_index = Some(i);
+                    self.pl_on = Some(b[2] == b'1');
+                }
+            }
         } else if let Some(arg) = cmd.strip_prefix("VG") {
             // `VGmnnn` — VOX gain (m = V/D); surface the level.
             if arg.len() >= 4 {
@@ -681,6 +706,7 @@ pub fn connect_state_seed() -> &'static [&'static str] {
         "RO;",  // RIT/XIT offset (Hz)
         "ML0;", "ML1;", "ML2;", // monitor levels (CW / AF-data / voice)
         "VGV;", "VI;", // VOX gain (voice) + anti-VOX level
+        "RP;", "PL;", // FM repeater offset + PL/CTCSS tone
         // Configuration-screen read-back (FR-UI-19 screens):
         "RE;", "TE;", "KP;", "KS;", "MI;", "MG;", "LO;", "AN;", "AR;", "AR$;", "VXV;", "BN;",
         "#REF;", "#SPN;", "#SCL;", "#DPM;", "#WFC;", "#WFH;",

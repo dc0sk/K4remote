@@ -431,6 +431,9 @@ enum Message {
     AdjustRitOffset(i16),
     SetMonitor(u8),
     Autospot,
+    SetRepeaterMode(char),
+    AdjustPlTone(i8),
+    TogglePl,
     SetTxPowerRange(char),
     SetNbLevel(u8),
     SetNrLevel(u8),
@@ -1395,6 +1398,24 @@ impl App {
                 self.send(WorkerCmd::Cat(k4_protocol::cat::set_monitor(m, level)));
             }
             Message::Autospot => self.send(WorkerCmd::Cat(k4_protocol::cat::set_spot(3))),
+            Message::SetRepeaterMode(m) => {
+                let off = self.ui.radio.repeater_offset_khz.unwrap_or(600);
+                self.send(WorkerCmd::Cat(k4_protocol::cat::set_repeater(m, off)));
+            }
+            Message::AdjustPlTone(d) => {
+                let cur = self.ui.radio.pl_index.unwrap_or(1) as i16;
+                let idx = (cur + d as i16).clamp(1, 50) as u8;
+                self.send(WorkerCmd::Cat(k4_protocol::cat::set_pl_tone(
+                    idx,
+                    self.ui.radio.pl_on == Some(true),
+                )));
+            }
+            Message::TogglePl => {
+                self.send(WorkerCmd::Cat(k4_protocol::cat::set_pl_tone(
+                    self.ui.radio.pl_index.unwrap_or(1),
+                    self.ui.radio.pl_on != Some(true),
+                )));
+            }
             Message::ToggleArm => self.send(WorkerCmd::ArmTx(!self.ui.tx_armed)),
             Message::ToggleKey => self.send(WorkerCmd::Key(!self.ui.transmitting)),
             Message::EmergencyStop => self.send(WorkerCmd::EmergencyStop),
@@ -2197,6 +2218,68 @@ impl App {
             ),
             _ => (self.switch_flash == Some(code), label.into()), // momentary flash
         }
+    }
+
+    /// FM sub-panel (shown in FM mode): repeater offset mode (`RP`) + PL/CTCSS
+    /// tone (`PL`). trace: FR-FM-01
+    fn fm_panel(&self) -> Element<'_, Message> {
+        let dim = role_color(ui::ColorRole::Inactive);
+        let rxv = role_color(ui::ColorRole::RxValue);
+        let r = &self.ui.radio;
+        let mode_btn = |lbl: &'static str, m: char| {
+            Button::new(Text::new(lbl).size(11))
+                .style(btn_style(if r.repeater_mode == Some(m) {
+                    BtnKind::Active
+                } else {
+                    BtnKind::Plain
+                }))
+                .padding([4, 8])
+                .on_press(Message::SetRepeaterMode(m))
+        };
+        let step = |lbl: &'static str, d: i8| {
+            Button::new(Text::new(lbl).size(12))
+                .style(btn_style(BtnKind::Plain))
+                .padding([2, 8])
+                .on_press(Message::AdjustPlTone(d))
+        };
+        Row::new()
+            .spacing(8)
+            .align_y(Alignment::Center)
+            .push(Text::new("RPT").size(10).color(dim))
+            .push(mode_btn("S", 'S'))
+            .push(mode_btn("+", '+'))
+            .push(mode_btn("−", '-'))
+            .push(
+                Text::new(format!("{} kHz", r.repeater_offset_khz.unwrap_or(0)))
+                    .size(10)
+                    .color(rxv),
+            )
+            .push(horizontal_space())
+            .push(
+                Button::new(
+                    Text::new(if r.pl_on == Some(true) {
+                        "PL On"
+                    } else {
+                        "PL Off"
+                    })
+                    .size(11),
+                )
+                .style(btn_style(if r.pl_on == Some(true) {
+                    BtnKind::Active
+                } else {
+                    BtnKind::Plain
+                }))
+                .padding([4, 8])
+                .on_press(Message::TogglePl),
+            )
+            .push(step("−", -1))
+            .push(
+                Text::new(format!("{:.1} Hz", ctcss_hz(r.pl_index.unwrap_or(1))))
+                    .size(10)
+                    .color(rxv),
+            )
+            .push(step("+", 1))
+            .into()
     }
 
     /// The K4's transmit/antenna dual-function switches (tap left / hold right,
@@ -3695,7 +3778,9 @@ impl App {
                 )
                 .push(tune_row)
                 .push(gain_row)
-                .push(dsp_row),
+                .push(dsp_row)
+                // FM-only sub-panel: repeater offset + PL/CTCSS tone.
+                .push_maybe((self.ui.mode_a == Some("FM")).then(|| self.fm_panel())),
         )
         .style(panel_style)
         .padding(12)
@@ -4818,6 +4903,22 @@ fn fmt_dbm(dbm: Option<i32>) -> String {
 fn role_color(role: ui::ColorRole) -> Color {
     let (r, g, b) = ui::role_rgb(active_theme(), role);
     Color::from_rgb8(r, g, b)
+}
+
+/// CTCSS tone table (Hz) for PL index 1–50 (K4 Programmer's Ref D12).
+const CTCSS_HZ: [f32; 50] = [
+    67.0, 69.3, 71.9, 74.4, 77.0, 79.7, 82.5, 85.4, 88.5, 91.5, 94.8, 97.4, 100.0, 103.5, 107.2,
+    110.9, 114.8, 118.8, 123.0, 127.3, 131.8, 136.5, 141.3, 146.2, 151.4, 156.7, 159.8, 162.2,
+    165.5, 167.9, 171.3, 173.8, 177.3, 179.9, 183.5, 186.2, 189.9, 192.8, 196.6, 199.5, 203.5,
+    206.5, 210.7, 218.1, 225.7, 229.1, 233.6, 241.8, 250.3, 254.1,
+];
+
+/// PL/CTCSS tone frequency (Hz) for a 1–50 table index.
+fn ctcss_hz(index: u8) -> f32 {
+    CTCSS_HZ
+        .get(usize::from(index.max(1) - 1))
+        .copied()
+        .unwrap_or(0.0)
 }
 
 /// `MD`/`MD$` digit for a mode.

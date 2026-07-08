@@ -1,7 +1,7 @@
 ---
 title: "Test Strategy & Traceability"
 status: Draft
-version: "0.74"
+version: "0.75"
 updated: 2026-07-07
 authors:
   - Simon Keimer (DC0SK)
@@ -273,3 +273,4 @@ FR-SES-MULTI, FR-DIAG-02, etc. — get `TC` IDs when promoted to `Approved`.)*
 | 2026-07-07 | 0.72 | DC0SK | Remaining level sliders: NB/NR level sliders in the MAIN RX frame (FR-RX-04), VOX gain + anti-VOX sliders in the TX panel (VG/VI, FR-VOX-02), and a TX power range selector H/L/X with a range-aware slider + units (`set_tx_power_range`, FR-TX-02; tx_power now stores the raw nnn field + `tx_power_range`). VG/VI parse + seed. 139 tests. |
 | 2026-07-08 | 0.73 | DC0SK | Canvas interactions (FR-PAN-04): the Spectrum canvas Program gains an `update` handler — left-click maps cursor-x → frequency (center ± span/2) and QSYs the pane's VFO (FA/FB), returning `Ignored` so the dual-view mouse_area still selects the TX VFO; mouse-wheel steps the VFO up/down (UP/DN, UPB/DNB). Assumes a VFO-centered pan; needs live verification. 139 tests. |
 | 2026-07-08 | 0.74 | DC0SK | Passband graphic (FR-FIL-03): the Spectrum canvas draws a translucent BW-wide band + VFO centre line over each pane (from the active RX bandwidth + `#SPN`, assuming a VFO-centred pan). |
+| 2026-07-08 | 0.75 | DC0SK | FM extras (FR-FM-01): in FM mode the MAIN RX frame shows a sub-panel with repeater offset mode S/+/− (`RP`) + offset kHz, and PL/CTCSS on/off + tone index with Hz from the 50-entry CTCSS table (`PL`). Parse/seed RP + PL. 140 tests. |
