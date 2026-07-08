@@ -2452,45 +2452,23 @@ impl App {
                 .on_press(Message::Switch(code))
                 .into()
         };
-        // All six dual-function switches on one row — the TX panel is full width
-        // now, so a single wide row keeps the panel short and everything visible.
-        let mut grid = Column::new().spacing(4);
-        for pair in ui::tx_function_switches().chunks(6) {
-            let mut row = Row::new().spacing(10);
-            for (tl, tap, hl, hold) in pair {
-                row = row.push(
-                    Row::new()
-                        .spacing(3)
-                        .push(cell(tl, *tap))
-                        .push(cell(hl, *hold)),
-                );
-            }
-            grid = grid.push(row);
-        }
-        // Monitor level (ML, sidetone/speech) + autospot (SP3), below the grid.
-        let mon = self.ui.radio.monitor_level.unwrap_or(0);
-        let mon_row = Row::new()
-            .spacing(8)
-            .align_y(Alignment::Center)
-            .push(Text::new("MON").size(10).color(dim))
-            .push(
-                slider(0..=100u8, mon, Message::SetMonitor)
-                    .step(1u8)
-                    .width(Length::Fixed(120.0)),
-            )
-            .push(
-                Text::new(format!("{mon}"))
-                    .size(10)
-                    .color(role_color(ui::ColorRole::RxValue)),
-            )
-            .push(horizontal_space())
-            .push(
-                Button::new(Text::new("AUTOSPOT").size(11))
-                    .style(btn_style(BtnKind::Plain))
-                    .padding([4, 8])
-                    .on_press(Message::Autospot),
+        // AUTOSPOT (SP3) sits at the end of the switch row, right of SUB A.
+        let autospot = Button::new(Text::new("AUTOSPOT").size(11))
+            .style(btn_style(BtnKind::Plain))
+            .padding([4, 8])
+            .on_press(Message::Autospot);
+        // All six dual-function switch pairs on one wide row, then AUTOSPOT.
+        let mut switch_row = Row::new().spacing(10).align_y(Alignment::Center);
+        for (tl, tap, hl, hold) in ui::tx_function_switches() {
+            switch_row = switch_row.push(
+                Row::new()
+                    .spacing(3)
+                    .push(cell(tl, *tap))
+                    .push(cell(hl, *hold)),
             );
-        // VOX gain + anti-VOX (VG/VI) sliders (FR-VOX-02).
+        }
+        switch_row = switch_row.push(autospot);
+        // MON (ML) + VOX gain (VG) + anti-VOX (VI) on one row (FR-VOX-02).
         let rxv = role_color(ui::ColorRole::RxValue);
         let vox_slider = |label: &'static str, val: u8, msg: fn(u8) -> Message| {
             Row::new()
@@ -2504,9 +2482,17 @@ impl App {
                 )
                 .push(Text::new(format!("{val}")).size(10).color(rxv))
         };
-        let vox_row = Row::new()
+        let mon = self.ui.radio.monitor_level.unwrap_or(0);
+        let mon_row = Row::new()
             .spacing(14)
             .align_y(Alignment::Center)
+            .push(Text::new("MON").size(10).color(dim))
+            .push(
+                slider(0..=100u8, mon, Message::SetMonitor)
+                    .step(1u8)
+                    .width(Length::Fixed(120.0)),
+            )
+            .push(Text::new(format!("{mon}")).size(10).color(rxv))
             .push(vox_slider("VOX G", self.vox_gain, Message::SetVoxGain))
             .push(vox_slider("A-VOX", self.anti_vox, Message::SetAntiVox));
         // DVR voice-message playback 1–8 + STOP (FR-DVR-01).
@@ -2531,9 +2517,8 @@ impl App {
         Column::new()
             .spacing(6)
             .push(Text::new("Switches (tap · hold)").size(10).color(dim))
-            .push(grid)
+            .push(switch_row)
             .push(mon_row)
-            .push(vox_row)
             .push(dvr_row)
             .into()
     }
@@ -4237,13 +4222,6 @@ impl App {
             .style(btn_style(BtnKind::Danger))
             .padding([6, 10])
             .on_press(Message::EmergencyStop);
-        // The three transmit controls: ARM, PTT/UNKEY, EMERGENCY STOP.
-        let transmit_row = Row::new()
-            .spacing(8)
-            .align_y(Alignment::Center)
-            .push(arm)
-            .push(key)
-            .push(estop);
         // PA/PWR controls: power range H (QRO) / L (QRP) / X (mW) + PWR slider
         // (FR-TX-02). Seeded from the radio.
         let range_btn = |lbl: &'static str, r: char, cur: char| {
@@ -4262,9 +4240,15 @@ impl App {
             'X' => format!("{:.1} mW", f32::from(self.tx_power) / 10.0),
             _ => format!("{:.1} W", f32::from(self.tx_power) / 10.0),
         };
-        let power_row = Row::new()
+        // Row 1: the three transmit controls (ARM / PTT / E-STOP), then the
+        // PA/PWR controls to their right.
+        let transmit_row = Row::new()
             .spacing(8)
             .align_y(Alignment::Center)
+            .push(arm)
+            .push(key)
+            .push(estop)
+            .push(horizontal_space())
             .push(Text::new("PWR").size(11).color(dim))
             .push(range_btn("H", 'H', self.tx_pwr_range))
             .push(range_btn("L", 'L', self.tx_pwr_range))
@@ -4275,14 +4259,13 @@ impl App {
                     .size(11)
                     .color(role_color(ui::ColorRole::RxValue)),
             );
-        // Order: three transmit controls · switches · PA/PWR controls.
+        // Order: transmit + PA/PWR controls · switches (+ MON/VOX · DVR).
         let tx_panel = Container::new(
             Column::new()
                 .spacing(8)
                 .push(Text::new("TRANSMIT").size(11).color(dim))
                 .push(transmit_row)
-                .push(self.tx_switch_grid())
-                .push(power_row),
+                .push(self.tx_switch_grid()),
         )
         .style(panel_style)
         .padding(12)
