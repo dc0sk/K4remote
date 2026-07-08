@@ -2613,11 +2613,39 @@ impl App {
             .padding([5, 10])
             .on_press(Message::ToggleDecode)
         };
+        // APF (CW peak filter) as a single-line toggle + width cycle, sized to
+        // fit the strip (moved out of the chips row in Phase 3).
+        let apf = || {
+            Button::new(Text::new("APF").size(12))
+                .style(btn_style(if self.rx_apf_on() == Some(true) {
+                    BtnKind::Active
+                } else {
+                    BtnKind::Plain
+                }))
+                .padding([5, 10])
+                .on_press(Message::ToggleApf)
+        };
+        let apf_bw = || {
+            small_btn_string(
+                format!(
+                    "APF {}",
+                    match self.rx_apf_width() {
+                        Some(0) => "30",
+                        Some(1) => "50",
+                        Some(2) => "150",
+                        _ => "—",
+                    }
+                ),
+                Message::CycleApfWidth,
+            )
+        };
         let mut row = Row::new().spacing(10).align_y(Alignment::Center);
         if self.mode_aware_ui {
             match class {
                 ui::ModeClass::Cw => {
                     row = row
+                        .push(apf())
+                        .push(apf_bw())
                         .push(small_btn("SPOT", Message::Switch(42)))
                         .push(decode());
                 }
@@ -4173,25 +4201,9 @@ impl App {
                 self.rx_auto_notch(),
                 Some(Message::ToggleAutoNotch),
                 rx_dim(ui::RxCtl::AutoNotch),
-            ))
-            .push(two_line_btn_dim(
-                ui::toggle_button("APF", self.rx_apf_on()),
-                self.rx_apf_on(),
-                Some(Message::ToggleApf),
-                rx_dim(ui::RxCtl::Apf),
-            ))
-            .push(small_btn_string(
-                format!(
-                    "APF {}",
-                    match self.rx_apf_width() {
-                        Some(0) => "30",
-                        Some(1) => "50",
-                        Some(2) => "150",
-                        _ => "—",
-                    }
-                ),
-                Message::CycleApfWidth,
             ));
+        // APF (CW audio peak filter) is CW-only — it lives in the CW mode strip
+        // (see rx_mode_strip), not the always-visible chips row (Phase 3).
         let mode_btn = |label: &'static str, digit: u8| -> Element<'_, Message> {
             let active = self.ui.mode_a == Some(label);
             Button::new(Text::new(label).size(12))
