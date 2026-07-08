@@ -2655,9 +2655,20 @@ impl App {
     /// Selection/toggle switches reflect the live radio state (FR-UI-22-style).
     fn tx_switch_grid(&self) -> Element<'_, Message> {
         let dim = role_color(ui::ColorRole::Inactive);
+        // Mode-adaptive: dim TX controls the transmit VFO's mode doesn't use.
+        let tx_class = ui::ModeClass::from_mode(self.tx_mode());
+        let adaptive = self.mode_aware_ui;
+        let tx_dim = move |c: ui::TxCtl| adaptive && ui::tx_ctl_vis(c, tx_class) != ui::Vis::Show;
         let cell = |label: &str, code: u16| -> Element<Message> {
             let (active, text) = self.sw_state(label, code);
-            let kind = if active {
+            let dimmed = match code {
+                50 => tx_dim(ui::TxCtl::Vox),  // VOX
+                134 => tx_dim(ui::TxCtl::Qsk), // QSK
+                _ => false,
+            };
+            let kind = if dimmed {
+                BtnKind::Dim
+            } else if active {
                 BtnKind::Active
             } else {
                 BtnKind::Plain
@@ -2671,7 +2682,11 @@ impl App {
         };
         // AUTOSPOT (SP3) sits at the end of the switch row, right of SUB A.
         let autospot = Button::new(Text::new("AUTOSPOT").size(11))
-            .style(btn_style(BtnKind::Plain))
+            .style(btn_style(if tx_dim(ui::TxCtl::Autospot) {
+                BtnKind::Dim
+            } else {
+                BtnKind::Plain
+            }))
             .padding([4, 8])
             .on_press(Message::Autospot);
         // All six dual-function switch pairs on one wide row, then AUTOSPOT.
@@ -2687,7 +2702,7 @@ impl App {
         switch_row = switch_row.push(autospot);
         // MON (ML) + VOX gain (VG) + anti-VOX (VI) on one row (FR-VOX-02).
         let rxv = role_color(ui::ColorRole::RxValue);
-        let vox_slider = |label: &'static str, val: u8, msg: fn(u8) -> Message| {
+        let vox_slider = |label: &'static str, val: u8, msg: fn(u8) -> Message, d: bool| {
             Row::new()
                 .spacing(6)
                 .align_y(Alignment::Center)
@@ -2697,7 +2712,11 @@ impl App {
                         .step(1u8)
                         .width(Length::Fixed(90.0)),
                 )
-                .push(Text::new(format!("{val}")).size(10).color(rxv))
+                .push(
+                    Text::new(format!("{val}"))
+                        .size(10)
+                        .color(if d { dim } else { rxv }),
+                )
         };
         let mon = self.ui.radio.monitor_level.unwrap_or(0);
         let mon_row = Row::new()
@@ -2710,9 +2729,20 @@ impl App {
                     .width(Length::Fixed(120.0)),
             )
             .push(Text::new(format!("{mon}")).size(10).color(rxv))
-            .push(vox_slider("VOX G", self.vox_gain, Message::SetVoxGain))
-            .push(vox_slider("A-VOX", self.anti_vox, Message::SetAntiVox));
+            .push(vox_slider(
+                "VOX G",
+                self.vox_gain,
+                Message::SetVoxGain,
+                tx_dim(ui::TxCtl::Vox),
+            ))
+            .push(vox_slider(
+                "A-VOX",
+                self.anti_vox,
+                Message::SetAntiVox,
+                tx_dim(ui::TxCtl::AntiVox),
+            ));
         // DVR voice-message playback 1–8 + STOP (FR-DVR-01).
+        let dvr_dim = tx_dim(ui::TxCtl::Dvr);
         let mut dvr_row = Row::new()
             .spacing(4)
             .align_y(Alignment::Center)
@@ -2720,7 +2750,11 @@ impl App {
         for n in 1..=8u8 {
             dvr_row = dvr_row.push(
                 Button::new(Text::new(n.to_string()).size(11))
-                    .style(btn_style(BtnKind::Plain))
+                    .style(btn_style(if dvr_dim {
+                        BtnKind::Dim
+                    } else {
+                        BtnKind::Plain
+                    }))
                     .padding([2, 7])
                     .on_press(Message::DvrPlay(n)),
             );
@@ -4151,30 +4185,50 @@ impl App {
                     .on_press(Message::Switch(149)),
             )
             // Filter presets for the active RX VFO, right of SCAN.
-            .push(small_btn_string("FL1".into(), Message::FilterPreset(1)))
-            .push(small_btn_string("FL2".into(), Message::FilterPreset(2)))
-            .push(small_btn_string("FL3".into(), Message::FilterPreset(3)))
-            .push(small_btn("NORMALIZE", Message::FilterNormalize));
+            .push(small_btn_dim(
+                "FL1".into(),
+                Message::FilterPreset(1),
+                rx_dim(ui::RxCtl::FilterPresets),
+            ))
+            .push(small_btn_dim(
+                "FL2".into(),
+                Message::FilterPreset(2),
+                rx_dim(ui::RxCtl::FilterPresets),
+            ))
+            .push(small_btn_dim(
+                "FL3".into(),
+                Message::FilterPreset(3),
+                rx_dim(ui::RxCtl::FilterPresets),
+            ))
+            .push(small_btn_dim(
+                "NORMALIZE".into(),
+                Message::FilterNormalize,
+                rx_dim(ui::RxCtl::FilterPresets),
+            ));
         // AF/RF gain + squelch sliders for the main receiver (FR-RX-01,
         // FR-RX-SQL-01) — the K4's RF/SQL knob, plus radio-side AF.
         let rxv = role_color(ui::ColorRole::RxValue);
+        // Slider value colour: bright normally, grey when de-emphasised (the
+        // label is already dim, so greying the value is the mode-adaptive cue).
+        let vcol = |d: bool| if d { dim } else { rxv };
         let gain = |label: &'static str,
                     val: u8,
                     max: u8,
                     msg: fn(u8) -> Message,
-                    unit: &'static str|
+                    unit: &'static str,
+                    d: bool|
          -> Element<Message> {
             Row::new()
                 .spacing(6)
                 .align_y(Alignment::Center)
                 .push(Text::new(label).size(11).color(dim))
                 .push(slider(0..=max, val, msg).width(Length::Fixed(110.0)))
-                .push(Text::new(format!("{val}{unit}")).size(11).color(rxv))
+                .push(Text::new(format!("{val}{unit}")).size(11).color(vcol(d)))
                 .into()
         };
         // Third row: SHIFT, then AF / RF / SQL, then PITCH — all for the active VFO.
         let hz_slider =
-            |label: &'static str, val: u16, lo: u16, hi: u16, msg: fn(u16) -> Message| {
+            |label: &'static str, val: u16, lo: u16, hi: u16, msg: fn(u16) -> Message, d: bool| {
                 Row::new()
                     .spacing(6)
                     .align_y(Alignment::Center)
@@ -4184,7 +4238,7 @@ impl App {
                             .step(10u16)
                             .width(Length::Fixed(110.0)),
                     )
-                    .push(Text::new(format!("{val} Hz")).size(11).color(rxv))
+                    .push(Text::new(format!("{val} Hz")).size(11).color(vcol(d)))
             };
         let level_slider = |label: &'static str, val: u8, max: u8, msg: fn(u8) -> Message| {
             Row::new()
@@ -4201,6 +4255,14 @@ impl App {
         // Filter view toggles the SHIFT slider for LO/HI-cut edges (FR-FIL-02);
         // it sits in the gain row, right of NR LVL.
         let (lo_edge, hi_edge) = k4_protocol::cat::passband_edges(self.bw_hz, self.shift_hz);
+        let shift_dim = rx_dim(ui::RxCtl::ShiftHiLo);
+        let shift_kind = if shift_dim {
+            BtnKind::Dim
+        } else if self.filter_edge_view {
+            BtnKind::Active
+        } else {
+            BtnKind::Plain
+        };
         let mut filter_ctl = Row::new().spacing(10).align_y(Alignment::Center).push(
             Button::new(
                 Text::new(if self.filter_edge_view {
@@ -4210,18 +4272,28 @@ impl App {
                 })
                 .size(11),
             )
-            .style(btn_style(if self.filter_edge_view {
-                BtnKind::Active
-            } else {
-                BtnKind::Plain
-            }))
+            .style(btn_style(shift_kind))
             .padding([5, 8])
             .on_press(Message::ToggleFilterEdgeView),
         );
         filter_ctl = if self.filter_edge_view {
             filter_ctl
-                .push(hz_slider("LO", lo_edge, 0, 3000, Message::SetLoCut))
-                .push(hz_slider("HI", hi_edge, 100, 5000, Message::SetHiCut))
+                .push(hz_slider(
+                    "LO",
+                    lo_edge,
+                    0,
+                    3000,
+                    Message::SetLoCut,
+                    shift_dim,
+                ))
+                .push(hz_slider(
+                    "HI",
+                    hi_edge,
+                    100,
+                    5000,
+                    Message::SetHiCut,
+                    shift_dim,
+                ))
         } else {
             filter_ctl.push(hz_slider(
                 "SHIFT",
@@ -4229,21 +4301,37 @@ impl App {
                 200,
                 3000,
                 Message::SetShift,
+                shift_dim,
             ))
         };
         // Gain row: AF / RF / SQL / PITCH, the NB / NR level sliders, then SHIFT.
         let gain_row = Row::new()
             .spacing(14)
             .align_y(Alignment::Center)
-            .push(gain("AF", self.af_gain, 60, Message::SetAfGain, ""))
-            .push(gain("RF", self.rf_gain, 60, Message::SetRfGain, " dB"))
-            .push(gain("SQL", self.squelch, 40, Message::SetSquelch, ""))
+            .push(gain("AF", self.af_gain, 60, Message::SetAfGain, "", false))
+            .push(gain(
+                "RF",
+                self.rf_gain,
+                60,
+                Message::SetRfGain,
+                " dB",
+                false,
+            ))
+            .push(gain(
+                "SQL",
+                self.squelch,
+                40,
+                Message::SetSquelch,
+                "",
+                rx_dim(ui::RxCtl::Squelch),
+            ))
             .push(hz_slider(
                 "NOTCH",
                 self.notch_pitch,
                 150,
                 5000,
                 Message::SetNotchPitch,
+                rx_dim(ui::RxCtl::ManualNotch),
             ))
             .push(level_slider(
                 "NB LVL",
@@ -5357,6 +5445,16 @@ fn small_btn(label: &'static str, msg: Message) -> Element<'static, Message> {
 fn small_btn_string(label: String, msg: Message) -> Element<'static, Message> {
     Button::new(Text::new(label).size(12))
         .style(btn_style(BtnKind::Plain))
+        .padding([5, 10])
+        .on_press(msg)
+        .into()
+}
+
+/// Small action button, de-emphasised (`BtnKind::Dim`) when `dim` — for the
+/// mode-adaptive UI. Still clickable.
+fn small_btn_dim(label: String, msg: Message, dim: bool) -> Element<'static, Message> {
+    Button::new(Text::new(label).size(12))
+        .style(btn_style(if dim { BtnKind::Dim } else { BtnKind::Plain }))
         .padding([5, 10])
         .on_press(msg)
         .into()

@@ -912,7 +912,6 @@ pub fn band_layout(window_w: f32, mode: ViewMode) -> BandLayout {
 /// Presentation class derived from the operating mode. Drives which controls
 /// are shown/dimmed/hidden in the mode-aware UI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)] // wired into rendering in Phase 1
 pub enum ModeClass {
     Cw,
     Voice,
@@ -922,7 +921,6 @@ pub enum ModeClass {
 }
 
 impl ModeClass {
-    #[allow(dead_code)]
     /// Classify a K4 mode string; unknown/absent → `Voice` (safe default).
     /// trace: FR-UI-24
     pub fn from_mode(m: Option<&str>) -> ModeClass {
@@ -938,7 +936,6 @@ impl ModeClass {
 
 /// How a control should appear for the current mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum Vis {
     /// Full emphasis.
     Show,
@@ -950,7 +947,6 @@ pub enum Vis {
 
 /// Mode-varying RX-frame controls.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum RxCtl {
     Bw,
     FilterPresets,
@@ -964,6 +960,7 @@ pub enum RxCtl {
 
 /// Mode-varying TX-frame controls.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// `Cmp`/`MicGain` have no main-panel control yet — wired in Phase 4 (mode strip).
 #[allow(dead_code)]
 pub enum TxCtl {
     Qsk,
@@ -976,7 +973,6 @@ pub enum TxCtl {
 }
 
 /// Visibility of an RX control for a mode class (concept §1).
-#[allow(dead_code)]
 /// trace: FR-UI-24
 pub fn rx_ctl_vis(c: RxCtl, m: ModeClass) -> Vis {
     use ModeClass::*;
@@ -1001,7 +997,6 @@ pub fn rx_ctl_vis(c: RxCtl, m: ModeClass) -> Vis {
 }
 
 /// Visibility of a TX control for a mode class (concept §1).
-#[allow(dead_code)]
 /// trace: FR-UI-24
 pub fn tx_ctl_vis(c: TxCtl, m: ModeClass) -> Vis {
     use ModeClass::*;

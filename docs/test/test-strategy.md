@@ -1,7 +1,7 @@
 ---
 title: "Test Strategy & Traceability"
 status: Draft
-version: "1.04"
+version: "1.05"
 updated: 2026-07-07
 authors:
   - Simon Keimer (DC0SK)
@@ -303,3 +303,4 @@ FR-SES-MULTI, FR-DIAG-02, etc. — get `TC` IDs when promoted to `Approved`.)*
 | 2026-07-08 | 1.02 | DC0SK | PTT hotkey toggle mode (FR-TX-PTT-01): add a Toggle/Hold mode option (default Toggle) — toggle mode flips TX on each hotkey press (like the PTT button), hold mode keys on key-down / unkeys on key-up. Settings gains a "Mode: Toggle/Hold" button; persisted (ptt_toggle, default true). 142 tests. |
 | 2026-07-08 | 1.03 | DC0SK | Mode-adaptive UI Phase 0 (FR-UI-24): pure visibility model in ui.rs — `ModeClass::from_mode`, `Vis`, `RxCtl`/`TxCtl`, `rx_ctl_vis`/`tx_ctl_vis` encoding the concept matrix (unit-tested). New pref `mode_aware_ui` (default on) + Settings toggle. Model marked allow(dead_code) until Phase 1 wires it into rendering. Also fixed active/TX-VFO mode adaptation + relabelled the notch slider (prior PR). 143 tests. |
 | 2026-07-08 | 1.04 | DC0SK | Mode-adaptive UI Phase 1 (RX chips): wire the MAIN RX chips (BW, AGC, NOTCH, AUTO NCH, APF) to `rx_ctl_vis` via the active-RX mode — controls the mode doesn't use render dimmed (new `BtnKind::Dim` + `two_line_btn_dim`), still clickable, no layout change. Gated by the `mode_aware_ui` toggle (off = classic). TX-side + sliders + mode strips (later phases) still allow(dead_code) for the unwired variants. 143 tests. |
+| 2026-07-08 | 1.05 | DC0SK | Mode-adaptive UI Phase 1 complete: extend de-emphasis to the RX FL presets + SHIFT/SQL/NOTCH sliders and the TX side (VOX/QSK switches, AUTOSPOT, DVR, VOX gain/anti-VOX) via rx_ctl_vis/tx_ctl_vis (slider values grey when dimmed, buttons use BtnKind::Dim). All RxCtl + most TxCtl variants now wired (only Cmp/MicGain await Phase 4). 143 tests. |
