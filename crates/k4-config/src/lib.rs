@@ -67,6 +67,10 @@ pub struct Prefs {
     /// PTT push-to-talk keyboard hotkey (e.g. `Ctrl+Space`).
     #[serde(default = "default_ptt_hotkey")]
     pub ptt_hotkey: String,
+    /// PTT hotkey mode: `true` = toggle (press on/off), `false` = hold-to-talk.
+    /// Default toggle.
+    #[serde(default = "default_true")]
+    pub ptt_toggle: bool,
 }
 
 fn default_ptt_hotkey() -> String {
@@ -93,6 +97,7 @@ impl Default for Prefs {
             mute_radio_mon: true,
             diagnostics_window: false,
             ptt_hotkey: default_ptt_hotkey(),
+            ptt_toggle: true,
         }
     }
 }

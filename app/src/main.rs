@@ -216,6 +216,7 @@ struct App {
     // and press/keyed tracking. `arm_flash` blinks the ARM button when the
     // hotkey is pressed while disarmed.
     ptt_hotkey: String,
+    ptt_toggle: bool,
     capturing_hotkey: bool,
     hotkey_down: bool,
     hotkey_keyed: bool,
@@ -478,6 +479,7 @@ enum Message {
     SetVoxGain(u8),
     SetAntiVox(u8),
     ToggleArm,
+    TogglePttMode,
     KeyPressed(iced::keyboard::Key, iced::keyboard::Modifiers),
     KeyReleased(iced::keyboard::Key, iced::keyboard::Modifiers),
     StartCaptureHotkey,
@@ -592,6 +594,7 @@ impl App {
         let theme_mode = theme_from_prefs(prefs.theme.as_deref());
         let mute_mon = prefs.mute_radio_mon;
         let ptt_hotkey = prefs.ptt_hotkey.clone();
+        let ptt_toggle = prefs.ptt_toggle;
         let diag_enabled = prefs.diagnostics_window;
 
         // Open the main window; the daemon starts with none (FR-DIAG-04).
@@ -719,6 +722,7 @@ impl App {
             mute_mon,
             mon_muted: false,
             ptt_hotkey,
+            ptt_toggle,
             capturing_hotkey: false,
             hotkey_down: false,
             hotkey_keyed: false,
@@ -999,6 +1003,7 @@ impl App {
                     mute_radio_mon: self.mute_mon,
                     diagnostics_window: self.diag_enabled,
                     ptt_hotkey: self.ptt_hotkey.clone(),
+                    ptt_toggle: self.ptt_toggle,
                     ..Default::default()
                 },
             };
@@ -1526,6 +1531,10 @@ impl App {
             Message::ToggleArm => self.send(WorkerCmd::ArmTx(!self.ui.tx_armed)),
             // PTT keyboard hotkey (push-to-talk). trace: FR-TX-PTT-01
             Message::StartCaptureHotkey => self.capturing_hotkey = true,
+            Message::TogglePttMode => {
+                self.ptt_toggle = !self.ptt_toggle;
+                self.save_config();
+            }
             Message::KeyPressed(key, mods) => {
                 if self.capturing_hotkey {
                     // Ignore bare modifier presses; the next real key sets the combo.
@@ -1536,11 +1545,15 @@ impl App {
                     }
                 } else if hotkey_string(&key, mods) == self.ptt_hotkey && !self.hotkey_down {
                     self.hotkey_down = true; // guard against key-repeat
-                    if self.ui.tx_armed {
-                        self.hotkey_keyed = true;
-                        self.send(WorkerCmd::Key(true)); // push-to-talk: key down
-                    } else {
+                    if !self.ui.tx_armed {
                         self.arm_flash = 18; // blink ARM ~3× (must arm first)
+                    } else if self.ptt_toggle {
+                        // Toggle mode: press flips TX (like the PTT button).
+                        self.send(WorkerCmd::Key(!self.ui.transmitting));
+                    } else {
+                        // Hold-to-talk: key down now, key up on release.
+                        self.hotkey_keyed = true;
+                        self.send(WorkerCmd::Key(true));
                     }
                 }
             }
@@ -4899,6 +4912,14 @@ impl App {
                             "Set PTT hotkey"
                         },
                         Message::StartCaptureHotkey,
+                    ))
+                    .push(small_btn(
+                        if self.ptt_toggle {
+                            "Mode: Toggle"
+                        } else {
+                            "Mode: Hold"
+                        },
+                        Message::TogglePttMode,
                     ))
                     .push(
                         Text::new(format!("push-to-talk: {}", self.ptt_hotkey))
