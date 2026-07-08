@@ -3744,7 +3744,7 @@ impl App {
                 .on_press(Message::SetMode(digit))
                 .into()
         };
-        let mut tune_row = Row::new()
+        let tune_row = Row::new()
             .spacing(6)
             .align_y(Alignment::Center)
             .push(mode_btn("LSB", 1))
@@ -3817,7 +3817,7 @@ impl App {
                 .push(Text::new(format!("{val}")).size(11).color(rxv))
         };
         // Filter view toggles the SHIFT slider for LO/HI-cut edges (FR-FIL-02);
-        // it sits in the tune row, right of NORMALIZE.
+        // it sits in the gain row, right of NR LVL.
         let (lo_edge, hi_edge) = k4_protocol::cat::passband_edges(self.bw_hz, self.shift_hz);
         let mut filter_ctl = Row::new().spacing(10).align_y(Alignment::Center).push(
             Button::new(
@@ -3849,8 +3849,7 @@ impl App {
                 Message::SetShift,
             ))
         };
-        tune_row = tune_row.push(filter_ctl);
-        // Gain row: AF / RF / SQL / PITCH, then the NB / NR level sliders.
+        // Gain row: AF / RF / SQL / PITCH, the NB / NR level sliders, then SHIFT.
         let gain_row = Row::new()
             .spacing(14)
             .align_y(Alignment::Center)
@@ -3875,7 +3874,8 @@ impl App {
                 self.nr_level,
                 10,
                 Message::SetNrLevel,
-            ));
+            ))
+            .push(filter_ctl);
         let controls = Container::new(
             Column::new()
                 .spacing(8)
