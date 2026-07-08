@@ -1,7 +1,7 @@
 ---
 title: "Test Strategy & Traceability"
 status: Draft
-version: "0.81"
+version: "0.82"
 updated: 2026-07-07
 authors:
   - Simon Keimer (DC0SK)
@@ -280,3 +280,4 @@ FR-SES-MULTI, FR-DIAG-02, etc. — get `TC` IDs when promoted to `Approved`.)*
 | 2026-07-08 | 0.79 | DC0SK | DVR voice-message playback (FR-DVR-01): a DVR row in the TX panel with buttons 1–8 (`PBn`) + STOP (`PB0`). Record-over-CAT is not well-specified in D12, so recording stays on the front panel for now. 142 tests. |
 | 2026-07-08 | 0.80 | DC0SK | Mini-pan (FR-UI-14): the PAN decoder accepts 0x03 mini-pan frames (shared header, `mini` flag), the worker routes them to a `mini_pan` buffer, and a thin cyan overview strip renders above the main pane. A MINI-PAN toggle (`#MP$/`) on the DISPLAY screen + `#MP` state parse/seed. The 0x03 frame layout is assumed identical to 0x02 — verify live. 142 tests. |
 | 2026-07-08 | 0.81 | DC0SK | Mini-pan placement fix: render the mini-pan as a single full-width overview strip above the whole spectrum band instead of inside the RX A pane (it's one wide-span overview, not per-VFO) — keeps A/B panes symmetric. 142 tests. |
+| 2026-07-08 | 0.82 | DC0SK | Move meters out of the panadapter: remove the in-pane S-meter / TX bar graphs from the spectrum/waterfall frames (now header + plot only). The top VFO panels keep the S-meter on RX; while transmitting, the active RX's VFO panel shows the four TX graphs (RF/ALC/SWR/CMP) in place of its S-meter. 142 tests. |
