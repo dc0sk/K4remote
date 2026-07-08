@@ -367,6 +367,13 @@ pub fn set_pl_tone(index: u8, on: bool) -> String {
     format!("PL{:02}{};", index.clamp(1, 50), on as u8)
 }
 
+/// DVR voice-message playback (`PB`): message 1–8, or 0 to cancel play/record.
+///
+/// trace: FR-DVR-01
+pub fn set_dvr(n: u8) -> String {
+    format!("PB{};", n.min(8))
+}
+
 /// Set RIT on/off (`RT`).
 ///
 /// trace: FR-VFO-05
