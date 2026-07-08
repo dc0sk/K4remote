@@ -212,6 +212,7 @@ Programmer's Reference rev. D12 (`PRG`) command mnemonics.
 |---|---|---|---|---|---|
 | `FR-DIAG-01` | provide structured, levelled logging of transport, CAT frames, and session events. | STK-17 | S | T | Log records carry level, timestamp, category; CAT frames optionally traced. |
 | `FR-DIAG-02` | offer a raw CAT command/console view for troubleshooting (send arbitrary command, see raw RESP). | STK-17 | C | D | Operator can send `IF;` and see the raw reply. |
+| `FR-DIAG-04` | show the diagnostics console in a **separate window**, off by default, toggled from Settings. | STK-13 | C | D | Settings toggles a detached diagnostics window; closing the main window quits. |
 | `FR-DIAG-03` | never log secrets (passwords) or full audio payloads. | STK-14/17 | M | I | Inspection confirms redaction. |
 
 ## N. Radio configuration commands (screen support) Ã¢ÂÂ `FR-EQ / FR-KEY / FR-AUD-CFG / FR-ANT / FR-MENU`

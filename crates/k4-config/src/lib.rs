@@ -61,6 +61,9 @@ pub struct Prefs {
     /// doesn't blare the shack speaker. Default on.
     #[serde(default = "default_true")]
     pub mute_radio_mon: bool,
+    /// Show the diagnostics console in a separate window. Default off.
+    #[serde(default)]
+    pub diagnostics_window: bool,
 }
 
 fn default_pct() -> u16 {
@@ -81,6 +84,7 @@ impl Default for Prefs {
             mic_gain_pct: 100,
             theme: None,
             mute_radio_mon: true,
+            diagnostics_window: false,
         }
     }
 }
