@@ -2452,8 +2452,10 @@ impl App {
                 .on_press(Message::Switch(code))
                 .into()
         };
+        // All six dual-function switches on one row — the TX panel is full width
+        // now, so a single wide row keeps the panel short and everything visible.
         let mut grid = Column::new().spacing(4);
-        for pair in ui::tx_function_switches().chunks(2) {
+        for pair in ui::tx_function_switches().chunks(6) {
             let mut row = Row::new().spacing(10);
             for (tl, tap, hl, hold) in pair {
                 row = row.push(
@@ -4284,8 +4286,7 @@ impl App {
         )
         .style(panel_style)
         .padding(12)
-        .width(Length::Fill)
-        .height(Length::Fixed(BOTTOM_PANEL_H));
+        .width(Length::Fill);
 
         // Connection panel (FR-UI-01) — Ethernet or serial fields.
         let fields: Column<Message> = if self.serial_mode {
@@ -4836,12 +4837,6 @@ const VFO_BAND_H: f32 = 160.0;
 /// Height of a menu screen shown in place of the spectrum frame (FR-UI-19).
 /// Matches the panadapter footprint so the layout doesn't jump.
 const SCREEN_H: f32 = 300.0;
-
-/// (raised to fit the TRANSMIT switch grid.)
-/// Shared height of the bottom TRANSMIT / DIAGNOSTICS panels so they line up
-/// (the scrollable body can't stretch them to match, so fix it). The diagnostics
-/// log scrolls within this height.
-const BOTTOM_PANEL_H: f32 = 220.0;
 
 /// Visual kind of a styled button (FR-UI-10/15): rest-state control, engaged
 /// (blue fill, like the reference client), transmit-critical (red edge),
