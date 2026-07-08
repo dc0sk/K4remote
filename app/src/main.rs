@@ -1807,10 +1807,10 @@ impl App {
                     .color(role_color(role)),
             );
 
-        // The active RX's panel shows the TX bar graphs (RF/ALC/SWR/CMP) while
-        // transmitting (FR-MTR-03); otherwise the proportional S-meter on the
-        // K4's S1..S9+60 face (FR-UI-15).
-        let show_tx = self.ui.transmitting && is_b == self.active_rx_b;
+        // The transmit VFO's panel shows the TX bar graphs (RF/ALC/SWR/CMP)
+        // while transmitting (FR-MTR-03); otherwise the proportional S-meter on
+        // the K4's S1..S9+60 face (FR-UI-15).
+        let show_tx = self.ui.transmitting && is_b == self.tx_vfo_b;
         let meter: Element<Message> = if show_tx {
             Canvas::new(meter::Meter {
                 tx: true,
