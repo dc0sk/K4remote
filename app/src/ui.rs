@@ -907,9 +907,148 @@ pub fn band_layout(window_w: f32, mode: ViewMode) -> BandLayout {
     }
 }
 
+// --- Mode-adaptive UI (docs/concept/mode-aware-ui.md) -----------------------
+
+/// Presentation class derived from the operating mode. Drives which controls
+/// are shown/dimmed/hidden in the mode-aware UI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)] // wired into rendering in Phase 1
+pub enum ModeClass {
+    Cw,
+    Voice,
+    Data,
+    Am,
+    Fm,
+}
+
+impl ModeClass {
+    #[allow(dead_code)]
+    /// Classify a K4 mode string; unknown/absent → `Voice` (safe default).
+    /// trace: FR-UI-24
+    pub fn from_mode(m: Option<&str>) -> ModeClass {
+        match m {
+            Some("CW") | Some("CW-R") => ModeClass::Cw,
+            Some("DATA") | Some("DATA-R") | Some("FSK") | Some("FSK-D") => ModeClass::Data,
+            Some("AM") => ModeClass::Am,
+            Some("FM") => ModeClass::Fm,
+            _ => ModeClass::Voice,
+        }
+    }
+}
+
+/// How a control should appear for the current mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub enum Vis {
+    /// Full emphasis.
+    Show,
+    /// Visible but de-emphasised (still usable).
+    Dim,
+    /// Not shown (lives only in the mode strip).
+    Hide,
+}
+
+/// Mode-varying RX-frame controls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub enum RxCtl {
+    Bw,
+    FilterPresets,
+    ShiftHiLo,
+    Agc,
+    ManualNotch,
+    AutoNotch,
+    Apf,
+    Squelch,
+}
+
+/// Mode-varying TX-frame controls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub enum TxCtl {
+    Qsk,
+    Vox,
+    AntiVox,
+    Dvr,
+    Autospot,
+    Cmp,
+    MicGain,
+}
+
+/// Visibility of an RX control for a mode class (concept §1).
+#[allow(dead_code)]
+/// trace: FR-UI-24
+pub fn rx_ctl_vis(c: RxCtl, m: ModeClass) -> Vis {
+    use ModeClass::*;
+    use Vis::*;
+    match (c, m) {
+        (RxCtl::Bw | RxCtl::FilterPresets | RxCtl::Agc, Fm) => Dim,
+        (RxCtl::Bw | RxCtl::FilterPresets | RxCtl::Agc, _) => Show,
+        (RxCtl::ShiftHiLo, Fm) => Hide,
+        (RxCtl::ShiftHiLo, Am) => Dim,
+        (RxCtl::ShiftHiLo, _) => Show,
+        (RxCtl::ManualNotch, Cw) => Dim,
+        (RxCtl::ManualNotch, Fm) => Hide,
+        (RxCtl::ManualNotch, _) => Show,
+        (RxCtl::AutoNotch, Cw | Fm) => Hide,
+        (RxCtl::AutoNotch, Data) => Dim,
+        (RxCtl::AutoNotch, _) => Show,
+        (RxCtl::Apf, Cw) => Show,
+        (RxCtl::Apf, _) => Hide,
+        (RxCtl::Squelch, Fm) => Show,
+        (RxCtl::Squelch, _) => Dim,
+    }
+}
+
+/// Visibility of a TX control for a mode class (concept §1).
+#[allow(dead_code)]
+/// trace: FR-UI-24
+pub fn tx_ctl_vis(c: TxCtl, m: ModeClass) -> Vis {
+    use ModeClass::*;
+    use Vis::*;
+    match (c, m) {
+        (TxCtl::Qsk | TxCtl::Autospot, Cw) => Show,
+        (TxCtl::Qsk | TxCtl::Autospot, _) => Hide,
+        (TxCtl::Vox, Cw) => Hide,
+        (TxCtl::Vox, _) => Show,
+        (TxCtl::AntiVox, Cw) => Hide,
+        (TxCtl::AntiVox, Data) => Dim,
+        (TxCtl::AntiVox, _) => Show,
+        (TxCtl::Dvr, Cw | Data) => Hide,
+        (TxCtl::Dvr, _) => Show,
+        (TxCtl::Cmp, Voice | Am) => Show,
+        (TxCtl::Cmp, Fm) => Dim,
+        (TxCtl::Cmp, _) => Hide,
+        (TxCtl::MicGain, Voice | Am | Fm) => Show,
+        (TxCtl::MicGain, _) => Hide,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// trace: FR-UI-24
+    #[test]
+    fn fr_ui_24_mode_class_and_visibility() {
+        assert_eq!(ModeClass::from_mode(Some("CW-R")), ModeClass::Cw);
+        assert_eq!(ModeClass::from_mode(Some("USB")), ModeClass::Voice);
+        assert_eq!(ModeClass::from_mode(Some("FM")), ModeClass::Fm);
+        assert_eq!(ModeClass::from_mode(None), ModeClass::Voice);
+        // APF only in CW; squelch promoted in FM, dimmed elsewhere.
+        assert_eq!(rx_ctl_vis(RxCtl::Apf, ModeClass::Cw), Vis::Show);
+        assert_eq!(rx_ctl_vis(RxCtl::Apf, ModeClass::Voice), Vis::Hide);
+        assert_eq!(rx_ctl_vis(RxCtl::Squelch, ModeClass::Fm), Vis::Show);
+        assert_eq!(rx_ctl_vis(RxCtl::Squelch, ModeClass::Cw), Vis::Dim);
+        assert_eq!(rx_ctl_vis(RxCtl::ShiftHiLo, ModeClass::Fm), Vis::Hide);
+        // QSK/autospot CW-only; VOX not in CW; CMP voice; DVR not CW/DATA.
+        assert_eq!(tx_ctl_vis(TxCtl::Qsk, ModeClass::Cw), Vis::Show);
+        assert_eq!(tx_ctl_vis(TxCtl::Qsk, ModeClass::Voice), Vis::Hide);
+        assert_eq!(tx_ctl_vis(TxCtl::Vox, ModeClass::Cw), Vis::Hide);
+        assert_eq!(tx_ctl_vis(TxCtl::Cmp, ModeClass::Voice), Vis::Show);
+        assert_eq!(tx_ctl_vis(TxCtl::Cmp, ModeClass::Cw), Vis::Hide);
+        assert_eq!(tx_ctl_vis(TxCtl::Dvr, ModeClass::Data), Vis::Hide);
+    }
 
     // trace: FR-UI-08 — default view mode is single-A.
     #[test]

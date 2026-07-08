@@ -217,6 +217,8 @@ struct App {
     // hotkey is pressed while disarmed.
     ptt_hotkey: String,
     ptt_toggle: bool,
+    // Mode-adaptive UI: per-mode control emphasis (docs/concept/mode-aware-ui.md).
+    mode_aware_ui: bool,
     capturing_hotkey: bool,
     hotkey_down: bool,
     hotkey_keyed: bool,
@@ -480,6 +482,7 @@ enum Message {
     SetAntiVox(u8),
     ToggleArm,
     TogglePttMode,
+    ToggleModeAwareUi,
     KeyPressed(iced::keyboard::Key, iced::keyboard::Modifiers),
     KeyReleased(iced::keyboard::Key, iced::keyboard::Modifiers),
     StartCaptureHotkey,
@@ -595,6 +598,7 @@ impl App {
         let mute_mon = prefs.mute_radio_mon;
         let ptt_hotkey = prefs.ptt_hotkey.clone();
         let ptt_toggle = prefs.ptt_toggle;
+        let mode_aware_ui = prefs.mode_aware_ui;
         let diag_enabled = prefs.diagnostics_window;
 
         // Open the main window; the daemon starts with none (FR-DIAG-04).
@@ -723,6 +727,7 @@ impl App {
             mon_muted: false,
             ptt_hotkey,
             ptt_toggle,
+            mode_aware_ui,
             capturing_hotkey: false,
             hotkey_down: false,
             hotkey_keyed: false,
@@ -1004,6 +1009,7 @@ impl App {
                     diagnostics_window: self.diag_enabled,
                     ptt_hotkey: self.ptt_hotkey.clone(),
                     ptt_toggle: self.ptt_toggle,
+                    mode_aware_ui: self.mode_aware_ui,
                     ..Default::default()
                 },
             };
@@ -1533,6 +1539,10 @@ impl App {
             Message::StartCaptureHotkey => self.capturing_hotkey = true,
             Message::TogglePttMode => {
                 self.ptt_toggle = !self.ptt_toggle;
+                self.save_config();
+            }
+            Message::ToggleModeAwareUi => {
+                self.mode_aware_ui = !self.mode_aware_ui;
                 self.save_config();
             }
             Message::KeyPressed(key, mods) => {
@@ -4941,6 +4951,24 @@ impl App {
                     ))
                     .push(
                         Text::new(format!("push-to-talk: {}", self.ptt_hotkey))
+                            .size(10)
+                            .color(dim),
+                    ),
+            )
+            .push(
+                Row::new()
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                    .push(small_btn(
+                        if self.mode_aware_ui {
+                            "Mode-adaptive UI: ON"
+                        } else {
+                            "Mode-adaptive UI: OFF"
+                        },
+                        Message::ToggleModeAwareUi,
+                    ))
+                    .push(
+                        Text::new("dim/hide controls that don't apply to the current mode")
                             .size(10)
                             .color(dim),
                     ),
