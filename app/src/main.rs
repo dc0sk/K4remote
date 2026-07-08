@@ -409,6 +409,7 @@ enum Message {
     SerialPathChanged(String),
     SerialBaudChanged(String),
     SetMode(u8),
+    CycleMode,
     Band(bool),
     ToggleAtten,
     ToggleSplit,
@@ -1167,6 +1168,9 @@ impl App {
                 self.send(WorkerCmd::Cat(cmd.to_string()));
             }
             Message::SetMode(digit) => self.send(WorkerCmd::SetMode(digit)),
+            // The MODE switch (SW43) steps only through the modes enabled in the
+            // K4's config, so the radio does the filtering for us.
+            Message::CycleMode => self.send(WorkerCmd::Cat(k4_protocol::cat::switch(43))),
             Message::Band(up) => self.send(WorkerCmd::Band(up)),
             Message::ToggleAtten => {
                 self.send(WorkerCmd::Cat(target_rx("RA/;".into(), self.active_sub())))
@@ -1896,10 +1900,16 @@ impl App {
             )
             .push(tune_btn("►", true))
             .push(horizontal_space())
+            // Mode is clickable: tap to step through the K4's enabled modes.
             .push(
-                Text::new(mode.unwrap_or("—"))
-                    .size(15)
-                    .color(role_color(role)),
+                Button::new(
+                    Text::new(mode.unwrap_or("—"))
+                        .size(15)
+                        .color(role_color(role)),
+                )
+                .style(btn_style(BtnKind::Plain))
+                .padding([2, 8])
+                .on_press(Message::CycleMode),
             );
 
         // The transmit VFO's panel shows the TX bar graphs (RF/ALC/SWR/CMP)
