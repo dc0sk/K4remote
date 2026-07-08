@@ -3744,7 +3744,7 @@ impl App {
                 .on_press(Message::SetMode(digit))
                 .into()
         };
-        let tune_row = Row::new()
+        let mut tune_row = Row::new()
             .spacing(6)
             .align_y(Alignment::Center)
             .push(mode_btn("LSB", 1))
@@ -3804,9 +3804,22 @@ impl App {
                     )
                     .push(Text::new(format!("{val} Hz")).size(11).color(rxv))
             };
-        // Filter view toggles the SHIFT slider for LO/HI-cut edges (FR-FIL-02).
+        let level_slider = |label: &'static str, val: u8, max: u8, msg: fn(u8) -> Message| {
+            Row::new()
+                .spacing(6)
+                .align_y(Alignment::Center)
+                .push(Text::new(label).size(11).color(dim))
+                .push(
+                    slider(0..=max, val, msg)
+                        .step(1u8)
+                        .width(Length::Fixed(96.0)),
+                )
+                .push(Text::new(format!("{val}")).size(11).color(rxv))
+        };
+        // Filter view toggles the SHIFT slider for LO/HI-cut edges (FR-FIL-02);
+        // it sits in the tune row, right of NORMALIZE.
         let (lo_edge, hi_edge) = k4_protocol::cat::passband_edges(self.bw_hz, self.shift_hz);
-        let mut gain_row = Row::new().spacing(14).align_y(Alignment::Center).push(
+        let mut filter_ctl = Row::new().spacing(10).align_y(Alignment::Center).push(
             Button::new(
                 Text::new(if self.filter_edge_view {
                     "HI/LO"
@@ -3823,12 +3836,12 @@ impl App {
             .padding([5, 8])
             .on_press(Message::ToggleFilterEdgeView),
         );
-        gain_row = if self.filter_edge_view {
-            gain_row
+        filter_ctl = if self.filter_edge_view {
+            filter_ctl
                 .push(hz_slider("LO", lo_edge, 0, 3000, Message::SetLoCut))
                 .push(hz_slider("HI", hi_edge, 100, 5000, Message::SetHiCut))
         } else {
-            gain_row.push(hz_slider(
+            filter_ctl.push(hz_slider(
                 "SHIFT",
                 self.shift_hz,
                 200,
@@ -3836,7 +3849,11 @@ impl App {
                 Message::SetShift,
             ))
         };
-        let gain_row = gain_row
+        tune_row = tune_row.push(filter_ctl);
+        // Gain row: AF / RF / SQL / PITCH, then the NB / NR level sliders.
+        let gain_row = Row::new()
+            .spacing(14)
+            .align_y(Alignment::Center)
             .push(gain("AF", self.af_gain, 60, Message::SetAfGain, ""))
             .push(gain("RF", self.rf_gain, 60, Message::SetRfGain, " dB"))
             .push(gain("SQL", self.squelch, 40, Message::SetSquelch, ""))
@@ -3846,23 +3863,7 @@ impl App {
                 150,
                 5000,
                 Message::SetNotchPitch,
-            ));
-        // NB / NR level sliders for the active RX (FR-RX-04).
-        let level_slider = |label: &'static str, val: u8, max: u8, msg: fn(u8) -> Message| {
-            Row::new()
-                .spacing(6)
-                .align_y(Alignment::Center)
-                .push(Text::new(label).size(11).color(dim))
-                .push(
-                    slider(0..=max, val, msg)
-                        .step(1u8)
-                        .width(Length::Fixed(96.0)),
-                )
-                .push(Text::new(format!("{val}")).size(11).color(rxv))
-        };
-        let dsp_row = Row::new()
-            .spacing(18)
-            .align_y(Alignment::Center)
+            ))
             .push(level_slider(
                 "NB LVL",
                 self.nb_level,
@@ -3892,7 +3893,6 @@ impl App {
                 )
                 .push(tune_row)
                 .push(gain_row)
-                .push(dsp_row)
                 // FM-only sub-panel: repeater offset + PL/CTCSS tone.
                 .push_maybe((self.ui.mode_a == Some("FM")).then(|| self.fm_panel())),
         )

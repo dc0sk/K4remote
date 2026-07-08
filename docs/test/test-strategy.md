@@ -1,7 +1,7 @@
 ---
 title: "Test Strategy & Traceability"
 status: Draft
-version: "0.86"
+version: "0.87"
 updated: 2026-07-07
 authors:
   - Simon Keimer (DC0SK)
@@ -285,3 +285,4 @@ FR-SES-MULTI, FR-DIAG-02, etc. — get `TC` IDs when promoted to `Approved`.)*
 | 2026-07-08 | 0.84 | DC0SK | Mute-radio-MON-on-connect option (FR-AUD-MON-01): a Settings/Audio toggle (default ON) sends `ML0000;ML1000;ML2000;` once per connect so a remote session never drives the shack speaker; persisted in prefs (`mute_radio_mon`), applied immediately when toggled on while connected. 142 tests. |
 | 2026-07-08 | 0.85 | DC0SK | Power-range fix + freq-input removal: the H/L/X power range is now a sticky user selection — `sync_locals` no longer re-pulls `tx_power_range` (a lagging read-back was snapping the buttons back); the range is still adopted once from the radio on connect. Removed the A/B "MHz" frequency inputs + SET buttons from the MAIN RX frame (tuning is via click-to-QSY, the ◄► steps, and band keys); dropped the now-unused freq fields/messages/`parse_mhz`. 142 tests. |
 | 2026-07-08 | 0.86 | DC0SK | PA/power reflect real TRX state: the connect seed was missing the MAIN `RA/GT/NB/NR/PA` GETs (only the sub `$` variants were queried), so the main atten/AGC/NB/NR/preamp chips (incl. PA level) never re-polled — added them. Power range now uses the genuine-transition pattern (adopt the radio's `PC` range on a real change, so it reflects the TRX incl. changes made there, without a lagging echo snapping a just-clicked button back). 142 tests. |
+| 2026-07-08 | 0.87 | DC0SK | MAIN RX frame layout: move the SHFT/HI-LO filter control up into the tune row (right of NORMALIZE) and the NB LVL / NR LVL sliders up into the gain row (right of PITCH), collapsing the former 4th row. Now: chips · modes/BAND/SCAN/FL/NORMALIZE/SHIFT · AF/RF/SQL/PITCH/NB/NR. 142 tests. |
