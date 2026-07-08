@@ -954,7 +954,6 @@ pub enum RxCtl {
     Agc,
     ManualNotch,
     AutoNotch,
-    Apf,
     Squelch,
 }
 
@@ -989,8 +988,6 @@ pub fn rx_ctl_vis(c: RxCtl, m: ModeClass) -> Vis {
         (RxCtl::AutoNotch, Cw | Fm) => Hide,
         (RxCtl::AutoNotch, Data) => Dim,
         (RxCtl::AutoNotch, _) => Show,
-        (RxCtl::Apf, Cw) => Show,
-        (RxCtl::Apf, _) => Hide,
         (RxCtl::Squelch, Fm) => Show,
         (RxCtl::Squelch, _) => Dim,
     }
@@ -1030,9 +1027,7 @@ mod tests {
         assert_eq!(ModeClass::from_mode(Some("USB")), ModeClass::Voice);
         assert_eq!(ModeClass::from_mode(Some("FM")), ModeClass::Fm);
         assert_eq!(ModeClass::from_mode(None), ModeClass::Voice);
-        // APF only in CW; squelch promoted in FM, dimmed elsewhere.
-        assert_eq!(rx_ctl_vis(RxCtl::Apf, ModeClass::Cw), Vis::Show);
-        assert_eq!(rx_ctl_vis(RxCtl::Apf, ModeClass::Voice), Vis::Hide);
+        // Squelch promoted in FM, dimmed elsewhere.
         assert_eq!(rx_ctl_vis(RxCtl::Squelch, ModeClass::Fm), Vis::Show);
         assert_eq!(rx_ctl_vis(RxCtl::Squelch, ModeClass::Cw), Vis::Dim);
         assert_eq!(rx_ctl_vis(RxCtl::ShiftHiLo, ModeClass::Fm), Vis::Hide);
