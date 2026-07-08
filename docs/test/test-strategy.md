@@ -1,7 +1,7 @@
 ---
 title: "Test Strategy & Traceability"
 status: Draft
-version: "0.98"
+version: "0.99"
 updated: 2026-07-07
 authors:
   - Simon Keimer (DC0SK)
@@ -297,3 +297,4 @@ FR-SES-MULTI, FR-DIAG-02, etc. — get `TC` IDs when promoted to `Approved`.)*
 | 2026-07-08 | 0.96 | DC0SK | Clickable mode in the VFO frames: the mode label is now a button that sends the K4 MODE switch (`SW43`), which steps only through the modes enabled in the K4's config — so the radio does the filtering. (SW43 acts on the main/focused VFO's mode.) 142 tests. |
 | 2026-07-08 | 0.97 | DC0SK | Fix clickable-mode cycling: the MODE switch tap (SW43) only opens a chooser on the K4 LCD — replace it with the mode INCR command `MD+` (`MD$+` for the sub via target_rx), which steps directly through the K4's enabled modes. Each VFO frame now cycles its own mode (CycleMode(is_b)). 142 tests. |
 | 2026-07-08 | 0.98 | DC0SK | Per-digit frequency tuning (FR-VFO-08): the VFO-frame frequency is now rendered as individually clickable digits (Stack of the digit over two half-height mouse_areas) — top half increments, bottom half decrements, rolling 0–9 within that digit's place only (no carry), then sends FA/FB. Dot separators stay non-clickable; placeholder shown when the VFO is unknown. 142 tests. |
+| 2026-07-08 | 0.99 | DC0SK | Fix laggy digit tuning (FR-VFO-08): the frequency readout was waiting for the radio's echo (~2 s over a remote link) before updating. Add an optimistic VFO value set on each digit click / click-to-QSY so the readout changes instantly; rapid clicks accumulate on it; the tick reconciles it away once the radio confirms (or after a ~2 s staleness fallback for a clamped set). 142 tests. |
