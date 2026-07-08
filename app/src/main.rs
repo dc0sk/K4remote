@@ -1629,6 +1629,10 @@ impl App {
                     if self.resync_tick.is_multiple_of(20) {
                         self.sync_locals();
                     }
+                    // Poll the radio clock every ~2 s for the status strip.
+                    if self.resync_tick.is_multiple_of(13) {
+                        self.send(WorkerCmd::Cat("UT;".into()));
+                    }
                     if self.resync_tick.is_multiple_of(53) {
                         for cmd in k4_protocol::state::connect_state_seed() {
                             // Skip one-shot enables (`TM1;`) — only re-GET settings.
@@ -3483,6 +3487,17 @@ impl App {
                     .size(12)
                     .color(role_color(status_role)),
             );
+        // Status strip: radio UTC clock + remote client count (FR-UI-STATUS-01).
+        let mut status_bits: Vec<String> = Vec::new();
+        if let Some(t) = self.ui.radio.utc_unix {
+            status_bits.push(format!("{} UTC", fmt_utc_hms(t)));
+        }
+        if let Some(n) = self.ui.radio.client_count {
+            if n > 1 {
+                status_bits.push(format!("{n} clients"));
+            }
+        }
+        let status_strip = Text::new(status_bits.join("  ·  ")).size(12).color(dim);
         let header = Row::new()
             .spacing(12)
             .align_y(Alignment::Center)
@@ -3494,6 +3509,7 @@ impl App {
                     .color(dim)
                     .width(Length::Fill),
             )
+            .push(status_strip)
             .push(seg_row)
             .push(conn_btn)
             .push(settings_btn)
@@ -4912,6 +4928,12 @@ const CTCSS_HZ: [f32; 50] = [
     165.5, 167.9, 171.3, 173.8, 177.3, 179.9, 183.5, 186.2, 189.9, 192.8, 196.6, 199.5, 203.5,
     206.5, 210.7, 218.1, 225.7, 229.1, 233.6, 241.8, 250.3, 254.1,
 ];
+
+/// Format a Unix timestamp as a UTC `HH:MM:SS` time-of-day.
+fn fmt_utc_hms(unix: u64) -> String {
+    let s = unix % 86_400;
+    format!("{:02}:{:02}:{:02}", s / 3600, s % 3600 / 60, s % 60)
+}
 
 /// PL/CTCSS tone frequency (Hz) for a 1–50 table index.
 fn ctcss_hz(index: u8) -> f32 {
