@@ -25,6 +25,8 @@ pub struct Spectrum<'a, Message> {
     /// click-to-QSY. `span_hz == 0` disables QSY (span unknown / fixed-tune).
     pub center_hz: u64,
     pub span_hz: u32,
+    /// Active RX filter bandwidth (Hz), for the passband overlay. `0` = none.
+    pub bw_hz: u32,
     /// Left-click → tune this VFO to the clicked frequency.
     pub on_qsy: fn(bool, u64) -> Message,
     /// Wheel scroll → step this VFO up (`+1`) / down (`-1`).
@@ -126,6 +128,25 @@ impl<Message> canvas::Program<Message> for Spectrum<'_, Message> {
             frame.stroke(
                 &Path::line(Point::new(x, 0.0), Point::new(x, spec_h)),
                 Stroke::default().with_width(1.0).with_color(grid),
+            );
+        }
+
+        // Passband overlay: a translucent band of width BW centred on the VFO
+        // (assumes a VFO-centred pan) plus the VFO centre line.
+        // trace: FR-FIL-03
+        if self.span_hz > 0 && self.bw_hz > 0 {
+            let half_px = (self.bw_hz as f32 / 2.0 / self.span_hz as f32 * w).min(w / 2.0);
+            let cx = w / 2.0;
+            frame.fill_rectangle(
+                Point::new(cx - half_px, 0.0),
+                Size::new(half_px * 2.0, spec_h),
+                Color::from_rgba8(0x3D, 0x7E, 0xFF, 0.12),
+            );
+            frame.stroke(
+                &Path::line(Point::new(cx, 0.0), Point::new(cx, spec_h)),
+                Stroke::default()
+                    .with_width(1.0)
+                    .with_color(Color::from_rgba8(0x3D, 0x7E, 0xFF, 0.5)),
             );
         }
 

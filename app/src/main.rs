@@ -3743,6 +3743,12 @@ impl App {
                     }
                     .unwrap_or(0),
                     span_hz: self.ui.radio.pan_span_hz.unwrap_or(0),
+                    bw_hz: if p.is_b() {
+                        self.ui.radio.sub_bandwidth_hz
+                    } else {
+                        self.ui.radio.bandwidth_hz
+                    }
+                    .unwrap_or(0),
                     on_qsy: Message::PaneQsy,
                     on_wheel: Message::PaneWheel,
                 })
