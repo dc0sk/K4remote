@@ -4035,12 +4035,17 @@ impl App {
         // Main-RX controls strip: two-line state buttons (FR-UI-11) in the
         // reference client's grid style, plus mode / band / direct tuning.
         // Labelled MAIN RX because these commands act on the main receiver.
+        // Mode-adaptive: dim controls the active RX mode doesn't use (Phase 1).
+        let rx_class = ui::ModeClass::from_mode(self.active_mode());
+        let rx_dim =
+            |ctl: ui::RxCtl| self.mode_aware_ui && ui::rx_ctl_vis(ctl, rx_class) != ui::Vis::Show;
         let chips = Row::new()
             .spacing(6)
-            .push(two_line_btn(
+            .push(two_line_btn_dim(
                 ui::bandwidth_button(Some(self.bw_hz)),
                 None,
                 Some(Message::CycleBandwidth),
+                rx_dim(ui::RxCtl::Bw),
             ))
             .push(two_line_btn(
                 ui::atten_button(self.rx_atten_on(), self.rx_atten_db()),
@@ -4062,10 +4067,11 @@ impl App {
                 self.rx_nr_on(),
                 Some(Message::ToggleNr),
             ))
-            .push(two_line_btn(
+            .push(two_line_btn_dim(
                 ui::agc_button(self.rx_agc_mode()),
                 None,
                 Some(Message::CycleAgc),
+                rx_dim(ui::RxCtl::Agc),
             ))
             .push(two_line_btn(
                 ui::toggle_button("SUB", self.ui.radio.sub_rx),
@@ -4078,20 +4084,23 @@ impl App {
                 Some(Message::ToggleDiversity),
             ))
             // Notch / APF for the active RX VFO, right of DIV.
-            .push(two_line_btn(
+            .push(two_line_btn_dim(
                 ui::toggle_button("NOTCH", self.rx_notch_on()),
                 self.rx_notch_on(),
                 Some(Message::ToggleManualNotch),
+                rx_dim(ui::RxCtl::ManualNotch),
             ))
-            .push(two_line_btn(
+            .push(two_line_btn_dim(
                 ui::toggle_button("AUTO NCH", self.rx_auto_notch()),
                 self.rx_auto_notch(),
                 Some(Message::ToggleAutoNotch),
+                rx_dim(ui::RxCtl::AutoNotch),
             ))
-            .push(two_line_btn(
+            .push(two_line_btn_dim(
                 ui::toggle_button("APF", self.rx_apf_on()),
                 self.rx_apf_on(),
                 Some(Message::ToggleApf),
+                rx_dim(ui::RxCtl::Apf),
             ))
             .push(small_btn_string(
                 format!(
@@ -5132,6 +5141,8 @@ enum BtnKind {
     Ptt,
     Danger,
     Amber,
+    /// De-emphasised (mode-adaptive UI): recessed, dim text; still clickable.
+    Dim,
 }
 
 /// Button style closure for a [`BtnKind`] over the layered dark palette.
@@ -5158,6 +5169,11 @@ fn btn_style(kind: BtnKind) -> impl Fn(&Theme, button::Status) -> button::Style 
                 role_color(ui::ColorRole::TxActive),
                 Color::BLACK,
                 role_color(ui::ColorRole::TxActive),
+            ),
+            BtnKind::Dim => (
+                shade(ui::Shade::Track),
+                role_color(ui::ColorRole::Inactive),
+                shade(ui::Shade::Panel),
             ),
         };
         match status {
@@ -5263,23 +5279,42 @@ fn two_line_btn(
     on: Option<bool>,
     msg: Option<Message>,
 ) -> Element<'static, Message> {
+    two_line_btn_dim(state, on, msg, false)
+}
+
+/// [`two_line_btn`] with an optional de-emphasis (mode-adaptive UI): when `dim`,
+/// the chip is greyed but stays clickable.
+fn two_line_btn_dim(
+    state: ui::ButtonState,
+    on: Option<bool>,
+    msg: Option<Message>,
+    dim: bool,
+) -> Element<'static, Message> {
     // The pure layer decides engaged vs. inactive (FR-UI-10); the view maps
     // "engaged" to the reference client's blue fill.
     let engaged = on.map(ui::toggle_role) == Some(ui::ColorRole::VfoB);
-    let kind = if engaged {
+    let kind = if dim {
+        BtnKind::Dim
+    } else if engaged {
         BtnKind::Active
     } else {
         BtnKind::Plain
     };
-    let label_color = if engaged {
+    let label_color = if engaged && !dim {
         Color::WHITE
     } else {
         role_color(ui::ColorRole::Inactive)
     };
+    let value = Text::new(state.value).size(13);
+    let value = if dim {
+        value.color(role_color(ui::ColorRole::Inactive))
+    } else {
+        value
+    };
     let content = Column::new()
         .align_x(Alignment::Center)
         .push(Text::new(state.label).size(10).color(label_color))
-        .push(Text::new(state.value).size(13));
+        .push(value);
     let mut b = Button::new(content)
         .style(btn_style(kind))
         .width(Length::Fixed(66.0))
