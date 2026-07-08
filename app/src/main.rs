@@ -574,7 +574,11 @@ impl App {
 
         // Open the main window; the daemon starts with none (FR-DIAG-04).
         let (main_window, open_main) = iced::window::open(iced::window::Settings {
-            size: iced::Size::new(ui::DEFAULT_WINDOW_SIZE.0, ui::DEFAULT_WINDOW_SIZE.1),
+            size: iced::Size::new(
+                ui::DEFAULT_WINDOW_SIZE.0.max(1320.0),
+                ui::DEFAULT_WINDOW_SIZE.1,
+            ),
+            min_size: Some(iced::Size::new(1320.0, 700.0)),
             icon: app_icon(),
             ..Default::default()
         });
@@ -4231,16 +4235,15 @@ impl App {
             .style(btn_style(BtnKind::Danger))
             .padding([6, 10])
             .on_press(Message::EmergencyStop);
-        // Transmit power slider (FR-TX-02) inline with PTT/e-stop — no extra
-        // height. Seeded from the radio, QRO watts.
-        let ptt_row = Row::new()
+        // The three transmit controls: ARM, PTT/UNKEY, EMERGENCY STOP.
+        let transmit_row = Row::new()
             .spacing(8)
             .align_y(Alignment::Center)
+            .push(arm)
             .push(key)
-            .push(estop)
-            .push(horizontal_space())
-            .push(Text::new("PWR").size(11).color(dim));
-        // Power range H (QRO) / L (QRP) / X (mW) selector (FR-TX-02).
+            .push(estop);
+        // PA/PWR controls: power range H (QRO) / L (QRP) / X (mW) + PWR slider
+        // (FR-TX-02). Seeded from the radio.
         let range_btn = |lbl: &'static str, r: char, cur: char| {
             Button::new(Text::new(lbl).size(10))
                 .style(btn_style(if cur == r {
@@ -4257,7 +4260,10 @@ impl App {
             'X' => format!("{:.1} mW", f32::from(self.tx_power) / 10.0),
             _ => format!("{:.1} W", f32::from(self.tx_power) / 10.0),
         };
-        let ptt_row = ptt_row
+        let power_row = Row::new()
+            .spacing(8)
+            .align_y(Alignment::Center)
+            .push(Text::new("PWR").size(11).color(dim))
             .push(range_btn("H", 'H', self.tx_pwr_range))
             .push(range_btn("L", 'L', self.tx_pwr_range))
             .push(range_btn("X", 'X', self.tx_pwr_range))
@@ -4267,13 +4273,14 @@ impl App {
                     .size(11)
                     .color(role_color(ui::ColorRole::RxValue)),
             );
+        // Order: three transmit controls · switches · PA/PWR controls.
         let tx_panel = Container::new(
             Column::new()
                 .spacing(8)
                 .push(Text::new("TRANSMIT").size(11).color(dim))
-                .push(arm)
-                .push(ptt_row)
-                .push(self.tx_switch_grid()),
+                .push(transmit_row)
+                .push(self.tx_switch_grid())
+                .push(power_row),
         )
         .style(panel_style)
         .padding(12)
