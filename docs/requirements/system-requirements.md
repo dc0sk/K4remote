@@ -151,6 +151,7 @@ Programmer's Reference rev. D12 (`PRG`) command mnemonics.
 | `FR-AUD-05` | order/seq-check audio packets using the wrapping sequence byte and drop/conceal as needed. | STK-05 | S | T | Out-of-order/duplicate sequence numbers handled per policy. |
 | `FR-AUD-DEV-01` | let the operator **select the audio devices** Ã¢ÂÂ RX playback (output) and TX microphone (capture) Ã¢ÂÂ from the OS-enumerated device lists via dropdowns in the settings dialog; the choice persists (`FR-CFG-02`) and is applied to the audio streams. | STK-05/06/12 | S | D/T | Available output/input devices are listed; selecting one routes RX playback / TX capture to it and the choice survives restart. |
 | `FR-AUD-LVL-01` | provide a **RX volume** slider (local playback level of the received audio) and a **TX mic-level** slider (local capture gain before encode), each adjustable live; these are client-side levels, distinct from the radio's `AG`/`MG`. | STK-05/06 | S | T/D | Moving the volume slider scales RX playback amplitude; the mic slider scales captured mic amplitude; both take effect without reconnect. |
+| `FR-AUD-MON-01` | optionally **mute the radio TX monitor** (`ML=0`) on connect so a remote session doesn't drive the shack speaker. | STK-11 | C | D | With the option on, connecting sends `ML0000;ML1000;ML2000;`. |
 
 ## J. Panadapter / Waterfall Ã¢ÂÂ `FR-PAN` (Phase 2; control subset in v1)
 

@@ -57,10 +57,18 @@ pub struct Prefs {
     /// Selected UI theme name (`dark`/`light`/`contrast`/`system`).
     #[serde(default)]
     pub theme: Option<String>,
+    /// Mute the radio's TX monitor (`ML=0`) on connect, so a remote session
+    /// doesn't blare the shack speaker. Default on.
+    #[serde(default = "default_true")]
+    pub mute_radio_mon: bool,
 }
 
 fn default_pct() -> u16 {
     100
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for Prefs {
@@ -72,6 +80,7 @@ impl Default for Prefs {
             volume_pct: 100,
             mic_gain_pct: 100,
             theme: None,
+            mute_radio_mon: true,
         }
     }
 }
