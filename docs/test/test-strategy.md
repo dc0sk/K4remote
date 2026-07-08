@@ -1,7 +1,7 @@
 ---
 title: "Test Strategy & Traceability"
 status: Draft
-version: "1.02"
+version: "1.03"
 updated: 2026-07-07
 authors:
   - Simon Keimer (DC0SK)
@@ -301,3 +301,4 @@ FR-SES-MULTI, FR-DIAG-02, etc. — get `TC` IDs when promoted to `Approved`.)*
 | 2026-07-08 | 1.00 | DC0SK | Optimistic ◄►/wheel stepping: parse the radio tuning rate (`VT`/`VT$` → 10^n Hz, seeded) and step the VFO via a shared `step_vfo` helper that sets the optimistic frequency (FA/FB) so the readout moves instantly; falls back to `UP/DN` when the step isn't known yet. Both the ◄► buttons and the pane mouse-wheel use it. 142 tests. |
 | 2026-07-08 | 1.01 | DC0SK | PTT keyboard hotkey (FR-TX-PTT-01): configurable push-to-talk hotkey (default Ctrl+Space) via `keyboard::on_key_press`/`on_key_release` — key-down begins TX / key-up ends it (only while armed); pressing it while disarmed blinks the ARM button ~3×. Settings gains "Set PTT hotkey" (captures the next combo) + shows the current one; persisted in prefs. Key events only fire when no widget consumes them, so it won't trigger while typing. 142 tests. |
 | 2026-07-08 | 1.02 | DC0SK | PTT hotkey toggle mode (FR-TX-PTT-01): add a Toggle/Hold mode option (default Toggle) — toggle mode flips TX on each hotkey press (like the PTT button), hold mode keys on key-down / unkeys on key-up. Settings gains a "Mode: Toggle/Hold" button; persisted (ptt_toggle, default true). 142 tests. |
+| 2026-07-08 | 1.03 | DC0SK | Mode-adaptive UI Phase 0 (FR-UI-24): pure visibility model in ui.rs — `ModeClass::from_mode`, `Vis`, `RxCtl`/`TxCtl`, `rx_ctl_vis`/`tx_ctl_vis` encoding the concept matrix (unit-tested). New pref `mode_aware_ui` (default on) + Settings toggle. Model marked allow(dead_code) until Phase 1 wires it into rendering. Also fixed active/TX-VFO mode adaptation + relabelled the notch slider (prior PR). 143 tests. |

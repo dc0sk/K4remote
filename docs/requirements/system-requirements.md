@@ -195,6 +195,7 @@ Programmer's Reference rev. D12 (`PRG`) command mnemonics.
 | `FR-UI-21` | **start in a landscape window** (wider than tall), matching the horizontal layout. | STK-11 | C | T/D | `DEFAULT_WINDOW_SIZE` has width > height (test); the window opens landscape (demo). |
 | `FR-UI-22` | show a **phase-coloured connection indicator** in the header ÃÂ¢ÃÂÃÂ a dot + label that is green when connected, amber while connecting, and grey when disconnected. | STK-01/11 | C | T/D | `conn_status(phase)` returns the correct (label, colour role) per phase (test); the header dot changes colour across a connect cycle (demo). |
 | `FR-UI-23` | provide an **application settings dialog** (opened from a settings affordance) housing the **connection** settings (host/port/TLS/password/serial), **audio-device** selection (`FR-AUD-DEV-01`), and **audio levels** (`FR-AUD-LVL-01`); the connection form **moves into this dialog** rather than occupying a permanent panel on the main window. | STK-11/12 | S | D | Opening settings shows connection + audio controls; connecting works from the dialog; the main window no longer carries the permanent connection panel. |
+| `FR-UI-24` | offer a **mode-adaptive UI** (toggle in Settings, default on) that shows/dims/hides RX+TX controls by operating-mode class (CW/Voice/Data/AM/FM). | STK-09 | C | T | `rx_ctl_vis`/`tx_ctl_vis` map each control/mode to Show/Dim/Hide per the concept matrix. |
 
 ## L. Configuration ÃÂ¢ÃÂÃÂ `FR-CFG`
 

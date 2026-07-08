@@ -71,6 +71,9 @@ pub struct Prefs {
     /// Default toggle.
     #[serde(default = "default_true")]
     pub ptt_toggle: bool,
+    /// Use the mode-adaptive UI (per-mode control emphasis). Default on.
+    #[serde(default = "default_true")]
+    pub mode_aware_ui: bool,
 }
 
 fn default_ptt_hotkey() -> String {
@@ -98,6 +101,7 @@ impl Default for Prefs {
             diagnostics_window: false,
             ptt_hotkey: default_ptt_hotkey(),
             ptt_toggle: true,
+            mode_aware_ui: true,
         }
     }
 }
