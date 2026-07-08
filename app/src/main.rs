@@ -188,6 +188,9 @@ struct App {
     filter_edge_view: bool,
     // DISPLAY-screen pan target: false = main (A), true = sub (B) (FR-PAN-CTL-01).
     pan_target_b: bool,
+    // Mute the radio's TX monitor (ML=0) once per connect (remote-friendly).
+    mute_mon: bool,
+    mon_muted: bool,
     // Text decode (FR-TXT-01): on/off + a poll-rate divider for the TB reads.
     decode_on: bool,
     decode_tick: u8,
@@ -417,6 +420,7 @@ enum Message {
     SetHiCut(u16),
     SetPanTarget(bool),
     ToggleMiniPan,
+    ToggleMuteMon,
     FilterPreset(u8),
     FilterNormalize,
     ToggleSubRx,
@@ -551,6 +555,7 @@ impl App {
         let _ = cmd_tx.send(WorkerCmd::SetVolume(volume));
         let _ = cmd_tx.send(WorkerCmd::SetMicGain(mic_gain));
         let theme_mode = theme_from_prefs(prefs.theme.as_deref());
+        let mute_mon = prefs.mute_radio_mon;
 
         // Choose a secret store; load the saved password if "remember" is set.
         #[cfg(feature = "keychain")]
@@ -649,6 +654,8 @@ impl App {
             notch_pitch: 1000,
             filter_edge_view: false,
             pan_target_b: false,
+            mute_mon,
+            mon_muted: false,
             decode_on: false,
             decode_tick: 0,
             resync_tick: 0,
@@ -922,6 +929,7 @@ impl App {
                     volume_pct: (self.volume * 100.0).round() as u16,
                     mic_gain_pct: (self.mic_gain * 100.0).round() as u16,
                     theme: Some(theme_to_str(self.theme_mode).to_string()),
+                    mute_radio_mon: self.mute_mon,
                     ..Default::default()
                 },
             };
@@ -1294,6 +1302,17 @@ impl App {
             Message::ToggleFilterEdgeView => self.filter_edge_view = !self.filter_edge_view,
             Message::SetPanTarget(b) => self.pan_target_b = b,
             Message::ToggleMiniPan => self.send(WorkerCmd::Cat("#MP$/;".into())),
+            Message::ToggleMuteMon => {
+                self.mute_mon = !self.mute_mon;
+                self.save_config();
+                // Apply immediately if connected: mute now, or leave as-is.
+                if self.mute_mon && self.ui.phase == ui::ConnPhase::Connected {
+                    for m in 0..=2u8 {
+                        self.send(WorkerCmd::Cat(k4_protocol::cat::set_monitor(m, 0)));
+                    }
+                    self.mon_muted = true;
+                }
+            }
             Message::SetLoCut(lo) => self.set_passband_edge(Some(lo), None),
             Message::SetHiCut(hi) => self.set_passband_edge(None, Some(hi)),
             Message::FilterPreset(n) => self.send(WorkerCmd::Cat(target_rx(
@@ -1646,6 +1665,15 @@ impl App {
                         self.cache_current_peer(); // FR-CFG-04
                         self.peer_cached = true;
                     }
+                    // Mute the radio's TX monitor once, so a remote session never
+                    // blares the shack speaker.
+                    // trace: FR-AUD-MON-01
+                    if self.mute_mon && !self.mon_muted {
+                        for m in 0..=2u8 {
+                            self.send(WorkerCmd::Cat(k4_protocol::cat::set_monitor(m, 0)));
+                        }
+                        self.mon_muted = true;
+                    }
                     // Keep in step with changes made directly at the K4: pull the
                     // radio state into the slider values every ~3 s, and re-query
                     // all settings every ~8 s (in case a change isn't auto-pushed).
@@ -1669,6 +1697,7 @@ impl App {
                     self.seeded = false;
                     self.peer_cached = false;
                     self.power_off_armed = false;
+                    self.mon_muted = false;
                     self.resync_tick = 0;
                 }
                 // Re-sync the TX-VFO highlight only on a genuine split *transition*
@@ -4569,6 +4598,24 @@ impl App {
                     .push(
                         Text::new(format!("{:.0}%", self.mic_gain * 100.0))
                             .size(11)
+                            .color(dim),
+                    ),
+            )
+            .push(
+                Row::new()
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                    .push(small_btn(
+                        if self.mute_mon {
+                            "Mute radio MON on connect: ON"
+                        } else {
+                            "Mute radio MON on connect: OFF"
+                        },
+                        Message::ToggleMuteMon,
+                    ))
+                    .push(
+                        Text::new("keeps the shack speaker quiet during remote TX")
+                            .size(10)
                             .color(dim),
                     ),
             )

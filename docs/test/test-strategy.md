@@ -1,7 +1,7 @@
 ---
 title: "Test Strategy & Traceability"
 status: Draft
-version: "0.83"
+version: "0.84"
 updated: 2026-07-07
 authors:
   - Simon Keimer (DC0SK)
@@ -282,3 +282,4 @@ FR-SES-MULTI, FR-DIAG-02, etc. — get `TC` IDs when promoted to `Approved`.)*
 | 2026-07-08 | 0.81 | DC0SK | Mini-pan placement fix: render the mini-pan as a single full-width overview strip above the whole spectrum band instead of inside the RX A pane (it's one wide-span overview, not per-VFO) — keeps A/B panes symmetric. 142 tests. |
 | 2026-07-08 | 0.82 | DC0SK | Move meters out of the panadapter: remove the in-pane S-meter / TX bar graphs from the spectrum/waterfall frames (now header + plot only). The top VFO panels keep the S-meter on RX; while transmitting, the active RX's VFO panel shows the four TX graphs (RF/ALC/SWR/CMP) in place of its S-meter. 142 tests. |
 | 2026-07-08 | 0.83 | DC0SK | Half-duplex RX-audio suppression on TX: while transmitting, the K4 streams its TX monitor over the RX audio channel; the worker now keeps decoding (Opus state stays in sync) but suppresses PC playback during TX, so an open mic can't form a monitor→speaker→mic→TX feedback loop (FR-AUD-TX-01). Root cause of the reported "audio goes mad" was the radio's own MON (ML) level of 60. 142 tests. |
+| 2026-07-08 | 0.84 | DC0SK | Mute-radio-MON-on-connect option (FR-AUD-MON-01): a Settings/Audio toggle (default ON) sends `ML0000;ML1000;ML2000;` once per connect so a remote session never drives the shack speaker; persisted in prefs (`mute_radio_mon`), applied immediately when toggled on while connected. 142 tests. |
