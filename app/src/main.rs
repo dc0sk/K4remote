@@ -212,6 +212,14 @@ struct App {
     // Mute the radio's TX monitor (ML=0) once per connect (remote-friendly).
     mute_mon: bool,
     mon_muted: bool,
+    // PTT keyboard hotkey (push-to-talk): the configured combo, capture mode,
+    // and press/keyed tracking. `arm_flash` blinks the ARM button when the
+    // hotkey is pressed while disarmed.
+    ptt_hotkey: String,
+    capturing_hotkey: bool,
+    hotkey_down: bool,
+    hotkey_keyed: bool,
+    arm_flash: u8,
     // Text decode (FR-TXT-01): on/off + a poll-rate divider for the TB reads.
     decode_on: bool,
     decode_tick: u8,
@@ -470,6 +478,9 @@ enum Message {
     SetVoxGain(u8),
     SetAntiVox(u8),
     ToggleArm,
+    KeyPressed(iced::keyboard::Key, iced::keyboard::Modifiers),
+    KeyReleased(iced::keyboard::Key, iced::keyboard::Modifiers),
+    StartCaptureHotkey,
     ToggleKey,
     EmergencyStop,
     CatInputChanged(String),
@@ -580,6 +591,7 @@ impl App {
         let _ = cmd_tx.send(WorkerCmd::SetMicGain(mic_gain));
         let theme_mode = theme_from_prefs(prefs.theme.as_deref());
         let mute_mon = prefs.mute_radio_mon;
+        let ptt_hotkey = prefs.ptt_hotkey.clone();
         let diag_enabled = prefs.diagnostics_window;
 
         // Open the main window; the daemon starts with none (FR-DIAG-04).
@@ -706,6 +718,11 @@ impl App {
             pan_target_b: false,
             mute_mon,
             mon_muted: false,
+            ptt_hotkey,
+            capturing_hotkey: false,
+            hotkey_down: false,
+            hotkey_keyed: false,
+            arm_flash: 0,
             decode_on: false,
             decode_tick: 0,
             resync_tick: 0,
@@ -981,6 +998,7 @@ impl App {
                     theme: Some(theme_to_str(self.theme_mode).to_string()),
                     mute_radio_mon: self.mute_mon,
                     diagnostics_window: self.diag_enabled,
+                    ptt_hotkey: self.ptt_hotkey.clone(),
                     ..Default::default()
                 },
             };
@@ -1506,6 +1524,37 @@ impl App {
                 )));
             }
             Message::ToggleArm => self.send(WorkerCmd::ArmTx(!self.ui.tx_armed)),
+            // PTT keyboard hotkey (push-to-talk). trace: FR-TX-PTT-01
+            Message::StartCaptureHotkey => self.capturing_hotkey = true,
+            Message::KeyPressed(key, mods) => {
+                if self.capturing_hotkey {
+                    // Ignore bare modifier presses; the next real key sets the combo.
+                    if !is_modifier_key(&key) {
+                        self.ptt_hotkey = hotkey_string(&key, mods);
+                        self.capturing_hotkey = false;
+                        self.save_config();
+                    }
+                } else if hotkey_string(&key, mods) == self.ptt_hotkey && !self.hotkey_down {
+                    self.hotkey_down = true; // guard against key-repeat
+                    if self.ui.tx_armed {
+                        self.hotkey_keyed = true;
+                        self.send(WorkerCmd::Key(true)); // push-to-talk: key down
+                    } else {
+                        self.arm_flash = 18; // blink ARM ~3× (must arm first)
+                    }
+                }
+            }
+            Message::KeyReleased(key, _mods) => {
+                // Release matches the hotkey's main key (modifiers may lift first).
+                let main = self.ptt_hotkey.rsplit('+').next().unwrap_or("");
+                if self.hotkey_down && key_label(&key) == main {
+                    self.hotkey_down = false;
+                    if self.hotkey_keyed {
+                        self.hotkey_keyed = false;
+                        self.send(WorkerCmd::Key(false)); // push-to-talk: key up
+                    }
+                }
+            }
             Message::ToggleKey => self.send(WorkerCmd::Key(!self.ui.transmitting)),
             Message::EmergencyStop => self.send(WorkerCmd::EmergencyStop),
             Message::CatInputChanged(v) => self.cat_input = v,
@@ -1827,6 +1876,8 @@ impl App {
                         self.switch_flash = None;
                     }
                 }
+                // Blink the ARM button (PTT hotkey pressed while disarmed).
+                self.arm_flash = self.arm_flash.saturating_sub(1);
                 // TUNE ends when transmit stops.
                 if !self.ui.transmitting {
                     self.tune_on = false;
@@ -1864,7 +1915,10 @@ impl App {
             iced::window::resize_events().map(|(id, size)| Message::Resized(id, size.width));
         // Window lifecycle: quit on main-window close; track the diag window.
         let closed = iced::window::close_events().map(Message::WindowClosed);
-        Subscription::batch([tick, resize, closed])
+        // Keyboard: PTT hotkey (push-to-talk) + hotkey capture.
+        let key_down = iced::keyboard::on_key_press(|k, m| Some(Message::KeyPressed(k, m)));
+        let key_up = iced::keyboard::on_key_release(|k, m| Some(Message::KeyReleased(k, m)));
+        Subscription::batch([tick, resize, closed, key_down, key_up])
     }
 
     /// The effective (resolved) theme for this frame (FR-UI-17).
@@ -4347,6 +4401,16 @@ impl App {
 
         // TX safety affordances (FR-UI-04/06, FR-TX-SAFE-*): red-edged arm/PTT
         // that fill amber while engaged; a red emergency stop.
+        // Blink the ARM button (~3×) when the PTT hotkey is pressed while
+        // disarmed, to cue the operator to arm first.
+        let arm_blink = self.arm_flash > 0 && (self.arm_flash / 3) % 2 == 1;
+        let arm_kind = if arm_blink {
+            BtnKind::Danger
+        } else if self.ui.tx_armed {
+            BtnKind::Amber
+        } else {
+            BtnKind::Ptt
+        };
         let arm = Button::new(
             Text::new(if self.ui.tx_armed {
                 "TX ARMED — DISARM"
@@ -4355,11 +4419,7 @@ impl App {
             })
             .size(13),
         )
-        .style(btn_style(if self.ui.tx_armed {
-            BtnKind::Amber
-        } else {
-            BtnKind::Ptt
-        }))
+        .style(btn_style(arm_kind))
         .padding([6, 10])
         .on_press(Message::ToggleArm);
         let key =
@@ -4828,6 +4888,24 @@ impl App {
                             .color(dim),
                     ),
             )
+            .push(
+                Row::new()
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                    .push(small_btn(
+                        if self.capturing_hotkey {
+                            "PTT hotkey: press keys…"
+                        } else {
+                            "Set PTT hotkey"
+                        },
+                        Message::StartCaptureHotkey,
+                    ))
+                    .push(
+                        Text::new(format!("push-to-talk: {}", self.ptt_hotkey))
+                            .size(10)
+                            .color(dim),
+                    ),
+            )
             .into()
     }
 
@@ -5286,6 +5364,42 @@ fn ctcss_hz(index: u8) -> f32 {
         .get(usize::from(index.max(1) - 1))
         .copied()
         .unwrap_or(0.0)
+}
+
+/// Display label for a keyboard key (`Space`, `A`, `F1`, …).
+fn key_label(key: &iced::keyboard::Key) -> String {
+    match key {
+        iced::keyboard::Key::Named(n) => format!("{n:?}"),
+        iced::keyboard::Key::Character(c) => c.to_uppercase(),
+        iced::keyboard::Key::Unidentified => "?".to_string(),
+    }
+}
+
+/// Whether a key is a bare modifier (ignored when capturing a hotkey).
+fn is_modifier_key(key: &iced::keyboard::Key) -> bool {
+    matches!(
+        key_label(key).as_str(),
+        "Control" | "Shift" | "Alt" | "Super" | "Meta" | "Hyper"
+    )
+}
+
+/// Canonical hotkey string, e.g. `Ctrl+Space` / `Ctrl+Shift+A`.
+fn hotkey_string(key: &iced::keyboard::Key, mods: iced::keyboard::Modifiers) -> String {
+    let mut s = String::new();
+    if mods.control() {
+        s.push_str("Ctrl+");
+    }
+    if mods.alt() {
+        s.push_str("Alt+");
+    }
+    if mods.shift() {
+        s.push_str("Shift+");
+    }
+    if mods.logo() {
+        s.push_str("Super+");
+    }
+    s.push_str(&key_label(key));
+    s
 }
 
 /// `MD`/`MD$` digit for a mode.
