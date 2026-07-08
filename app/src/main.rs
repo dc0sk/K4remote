@@ -1807,21 +1807,43 @@ impl App {
                     .color(role_color(role)),
             );
 
-        // Proportional S-meter on the K4's S1..S9+60 face (FR-UI-15).
-        let frac = dbm.map(ui::s_meter_fraction).unwrap_or(0.0);
-        let meter = Row::new()
-            .spacing(8)
-            .align_y(Alignment::Center)
-            .push(
-                ProgressBar::new(0.0..=1.0, frac)
-                    .height(Length::Fixed(10.0))
-                    .style(meter_style(strong)),
-            )
-            .push(
-                Text::new(fmt_dbm(dbm))
-                    .size(12)
-                    .color(role_color(meter_role)),
-            );
+        // The active RX's panel shows the TX bar graphs (RF/ALC/SWR/CMP) while
+        // transmitting (FR-MTR-03); otherwise the proportional S-meter on the
+        // K4's S1..S9+60 face (FR-UI-15).
+        let show_tx = self.ui.transmitting && is_b == self.active_rx_b;
+        let meter: Element<Message> = if show_tx {
+            Canvas::new(meter::Meter {
+                tx: true,
+                s_dbm: None,
+                alc: self.ui.radio.tx_alc.unwrap_or(0),
+                cmp: self.ui.radio.tx_cmp.unwrap_or(0),
+                fwd_w: self.ui.radio.tx_fwd_w.unwrap_or(0),
+                swr_x10: self.ui.radio.tx_swr_x10.unwrap_or(0),
+                show_cmp: matches!(
+                    self.ui.mode_a,
+                    Some("LSB") | Some("USB") | Some("AM") | Some("FM")
+                ),
+            })
+            .width(Length::Fill)
+            .height(Length::Fixed(66.0))
+            .into()
+        } else {
+            let frac = dbm.map(ui::s_meter_fraction).unwrap_or(0.0);
+            Row::new()
+                .spacing(8)
+                .align_y(Alignment::Center)
+                .push(
+                    ProgressBar::new(0.0..=1.0, frac)
+                        .height(Length::Fixed(10.0))
+                        .style(meter_style(strong)),
+                )
+                .push(
+                    Text::new(fmt_dbm(dbm))
+                        .size(12)
+                        .color(role_color(meter_role)),
+                )
+                .into()
+        };
 
         // Fixed height matching the centre box (Fill is not allowed inside the
         // scrollable body), content vertically centred.
@@ -3946,31 +3968,8 @@ impl App {
                         .color(role_color(ui::ColorRole::TxActive)),
                 );
             }
-            // Thin in-panadapter meter: the labelled S-meter on receive, or the
-            // TX bar graphs (RF/ALC/SWR/CMP) on the transmit-VFO pane while
-            // transmitting (FR-UI-10/15, FR-MTR-03).
-            let is_tx_pane = self.ui.transmitting && p.is_b() == self.tx_vfo_b;
-            let s_dbm = if p.is_b() {
-                self.ui.s_meter_dbm_sub
-            } else {
-                self.ui.s_meter_dbm
-            };
-            let meter_h = if is_tx_pane { 66.0 } else { 22.0 };
-            let meter = Canvas::new(meter::Meter {
-                tx: is_tx_pane,
-                s_dbm,
-                alc: self.ui.radio.tx_alc.unwrap_or(0),
-                cmp: self.ui.radio.tx_cmp.unwrap_or(0),
-                fwd_w: self.ui.radio.tx_fwd_w.unwrap_or(0),
-                swr_x10: self.ui.radio.tx_swr_x10.unwrap_or(0),
-                show_cmp: matches!(
-                    self.ui.mode_a,
-                    Some("LSB") | Some("USB") | Some("AM") | Some("FM")
-                ),
-            })
-            .width(Length::Fill)
-            .height(Length::Fixed(meter_h));
-            let pane = Container::new(Column::new().spacing(6).push(header).push(meter).push(plot))
+            // Meters live in the top VFO panels now, not in the panadapter.
+            let pane = Container::new(Column::new().spacing(6).push(header).push(plot))
                 .style(pane_style(selected))
                 .padding(8)
                 .width(Length::Fill)
