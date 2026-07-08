@@ -578,7 +578,7 @@ impl App {
                 ui::DEFAULT_WINDOW_SIZE.0.max(1320.0),
                 ui::DEFAULT_WINDOW_SIZE.1,
             ),
-            min_size: Some(iced::Size::new(1320.0, 700.0)),
+            min_size: Some(iced::Size::new(1320.0, 964.0)),
             icon: app_icon(),
             ..Default::default()
         });
