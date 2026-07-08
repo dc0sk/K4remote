@@ -352,6 +352,21 @@ pub fn set_spot(n: u8) -> String {
     format!("SP{};", n.min(3))
 }
 
+/// Set the FM repeater offset mode + shift (`RP`): `mode` = `S`/`+`/`-`,
+/// `offset_khz` 0–99999.
+///
+/// trace: FR-FM-01
+pub fn set_repeater(mode: char, offset_khz: u32) -> String {
+    format!("RP{}{:05};", mode, offset_khz.min(99999))
+}
+
+/// Set the PL/CTCSS tone (`PL`): table index 1–50, on/off.
+///
+/// trace: FR-FM-01
+pub fn set_pl_tone(index: u8, on: bool) -> String {
+    format!("PL{:02}{};", index.clamp(1, 50), on as u8)
+}
+
 /// Set RIT on/off (`RT`).
 ///
 /// trace: FR-VFO-05

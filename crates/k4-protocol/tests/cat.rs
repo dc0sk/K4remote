@@ -8,12 +8,12 @@ use k4_protocol::cat::{
     set_line_in, set_line_out, set_manual_notch, set_mic_gain, set_mic_input, set_mic_setup,
     set_mode, set_mode_sub, set_monitor, set_nb, set_nb_level, set_nr, set_pan_average,
     set_pan_mode, set_pan_nb, set_pan_nb_level, set_pan_peak, set_pan_ref, set_pan_scale,
-    set_pan_span_hz, set_passband_edges_hz, set_power, set_preamp, set_qsk_delay, set_rf_gain,
-    set_rit, set_rit_offset, set_rx_antenna, set_rx_antenna_sub, set_rx_eq, set_shift_hz,
-    set_split, set_spot, set_squelch, set_sub_rx, set_text_decode, set_transverter_band,
-    set_tx_antenna, set_tx_eq, set_tx_power, set_tx_power_range, set_vfo_a_hz, set_vfo_b_hz,
-    set_vox, set_vox_gain, set_waterfall_height, set_waterfall_palette, set_xit, switch,
-    vfo_copy_swap,
+    set_pan_span_hz, set_passband_edges_hz, set_pl_tone, set_power, set_preamp, set_qsk_delay,
+    set_repeater, set_rf_gain, set_rit, set_rit_offset, set_rx_antenna, set_rx_antenna_sub,
+    set_rx_eq, set_shift_hz, set_split, set_spot, set_squelch, set_sub_rx, set_text_decode,
+    set_transverter_band, set_tx_antenna, set_tx_eq, set_tx_power, set_tx_power_range,
+    set_vfo_a_hz, set_vfo_b_hz, set_vox, set_vox_gain, set_waterfall_height, set_waterfall_palette,
+    set_xit, switch, vfo_copy_swap,
 };
 
 /// trace: FR-VFO-01
@@ -315,4 +315,13 @@ fn fr_pwr_01_power_control() {
     assert_eq!(set_power(0), "PS0;"); // off
     assert_eq!(set_power(8), "PS8;"); // restart
     assert_eq!(set_power(88), "PS88;"); // auto-update + restart
+}
+
+/// trace: FR-FM-01
+#[test]
+fn fr_fm_01_repeater_and_tone() {
+    assert_eq!(set_repeater('+', 600), "RP+00600;");
+    assert_eq!(set_repeater('S', 0), "RPS00000;");
+    assert_eq!(set_pl_tone(13, true), "PL131;"); // 100.0 Hz on
+    assert_eq!(set_pl_tone(99, false), "PL500;"); // clamped to 50
 }
