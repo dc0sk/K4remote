@@ -1,7 +1,7 @@
 ---
 title: "Test Strategy & Traceability"
 status: Draft
-version: "0.85"
+version: "0.86"
 updated: 2026-07-07
 authors:
   - Simon Keimer (DC0SK)
@@ -284,3 +284,4 @@ FR-SES-MULTI, FR-DIAG-02, etc. — get `TC` IDs when promoted to `Approved`.)*
 | 2026-07-08 | 0.83 | DC0SK | Half-duplex RX-audio suppression on TX: while transmitting, the K4 streams its TX monitor over the RX audio channel; the worker now keeps decoding (Opus state stays in sync) but suppresses PC playback during TX, so an open mic can't form a monitor→speaker→mic→TX feedback loop (FR-AUD-TX-01). Root cause of the reported "audio goes mad" was the radio's own MON (ML) level of 60. 142 tests. |
 | 2026-07-08 | 0.84 | DC0SK | Mute-radio-MON-on-connect option (FR-AUD-MON-01): a Settings/Audio toggle (default ON) sends `ML0000;ML1000;ML2000;` once per connect so a remote session never drives the shack speaker; persisted in prefs (`mute_radio_mon`), applied immediately when toggled on while connected. 142 tests. |
 | 2026-07-08 | 0.85 | DC0SK | Power-range fix + freq-input removal: the H/L/X power range is now a sticky user selection — `sync_locals` no longer re-pulls `tx_power_range` (a lagging read-back was snapping the buttons back); the range is still adopted once from the radio on connect. Removed the A/B "MHz" frequency inputs + SET buttons from the MAIN RX frame (tuning is via click-to-QSY, the ◄► steps, and band keys); dropped the now-unused freq fields/messages/`parse_mhz`. 142 tests. |
+| 2026-07-08 | 0.86 | DC0SK | PA/power reflect real TRX state: the connect seed was missing the MAIN `RA/GT/NB/NR/PA` GETs (only the sub `$` variants were queried), so the main atten/AGC/NB/NR/preamp chips (incl. PA level) never re-polled — added them. Power range now uses the genuine-transition pattern (adopt the radio's `PC` range on a real change, so it reflects the TRX incl. changes made there, without a lagging echo snapping a just-clicked button back). 142 tests. |

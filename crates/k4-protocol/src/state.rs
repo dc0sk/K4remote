@@ -727,6 +727,7 @@ pub fn connect_state_seed() -> &'static [&'static str] {
         "PC;", "CP;", "CW;", "SD;", // TX power, compression, CW pitch, QSK delay
         "IS;", "SB;", "DV;", // passband shift, sub-RX, diversity
         "NM;", "NA;", "AP;", // manual notch, auto notch, APF
+        "RA;", "GT;", "NB;", "NR;", "PA;", // main atten/AGC/NB/NR/preamp state
         // Sub-receiver read-back of the same RX controls (RX-B display):
         "BW$;", "AG$;", "RG$;", "SQ$;", "IS$;", "NM$;", "NA$;", "AP$;", //
         "RA$;", "GT$;", "NB$;", "NR$;", "PA$;",

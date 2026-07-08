@@ -159,6 +159,10 @@ struct App {
     // actually changes (a genuine transition), so a static/absent read-back never
     // snaps the optimistic highlight back.
     last_split: Option<bool>,
+    // Same optimistic pattern for the TX power range (H/L/X): adopt the radio's
+    // range only on a genuine change, so a lagging read-back doesn't revert a
+    // just-clicked range button.
+    last_pwr_range: Option<char>,
     // Main-RX levels (seeded from the radio, driven by sliders): AF gain 0–60,
     // RF-gain attenuation 0–60 dB, squelch 0–40 (FR-RX-01, FR-RX-SQL-01).
     af_gain: u8,
@@ -629,6 +633,7 @@ impl App {
             bw_hz: 2800,
             tx_vfo_b: false,
             last_split: None,
+            last_pwr_range: None,
             af_gain: 30,
             rf_gain: 0,
             squelch: 0,
@@ -1678,6 +1683,7 @@ impl App {
                     self.peer_cached = false;
                     self.power_off_armed = false;
                     self.mon_muted = false;
+                    self.last_pwr_range = None;
                     self.resync_tick = 0;
                 }
                 // Re-sync the TX-VFO highlight only on a genuine split *transition*
@@ -1688,6 +1694,15 @@ impl App {
                     self.last_split = self.ui.split;
                     if let Some(s) = self.ui.split {
                         self.tx_vfo_b = s;
+                    }
+                }
+                // Adopt the radio's TX power range on a genuine change only, so it
+                // reflects the real state (incl. changes made at the K4) without a
+                // stale echo snapping a just-clicked range button back.
+                if self.ui.radio.tx_power_range != self.last_pwr_range {
+                    self.last_pwr_range = self.ui.radio.tx_power_range;
+                    if let Some(r) = self.ui.radio.tx_power_range {
+                        self.tx_pwr_range = r;
                     }
                 }
                 // Expire the momentary switch-tap highlight.
@@ -3107,10 +3122,6 @@ impl App {
         }
         if let Some(v) = r.tx_power {
             self.tx_power = v;
-        }
-        // Adopt the radio's power range once on connect (not on every resync).
-        if let Some(rng) = r.tx_power_range {
-            self.tx_pwr_range = rng;
         }
         if let Some(v) = r.compression {
             self.compression = v;
