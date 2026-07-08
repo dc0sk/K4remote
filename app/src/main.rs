@@ -186,6 +186,8 @@ struct App {
     notch_pitch: u16,
     // Filter slider view: false = SHIFT (BW+shift), true = LO/HI edges (FR-FIL-02).
     filter_edge_view: bool,
+    // DISPLAY-screen pan target: false = main (A), true = sub (B) (FR-PAN-CTL-01).
+    pan_target_b: bool,
     // Text decode (FR-TXT-01): on/off + a poll-rate divider for the TB reads.
     decode_on: bool,
     decode_tick: u8,
@@ -413,6 +415,7 @@ enum Message {
     ToggleFilterEdgeView,
     SetLoCut(u16),
     SetHiCut(u16),
+    SetPanTarget(bool),
     FilterPreset(u8),
     FilterNormalize,
     ToggleSubRx,
@@ -643,6 +646,7 @@ impl App {
             shift_hz: 1500,
             notch_pitch: 1000,
             filter_edge_view: false,
+            pan_target_b: false,
             decode_on: false,
             decode_tick: 0,
             resync_tick: 0,
@@ -1286,6 +1290,7 @@ impl App {
                 )));
             }
             Message::ToggleFilterEdgeView => self.filter_edge_view = !self.filter_edge_view,
+            Message::SetPanTarget(b) => self.pan_target_b = b,
             Message::SetLoCut(lo) => self.set_passband_edge(Some(lo), None),
             Message::SetHiCut(hi) => self.set_passband_edge(None, Some(hi)),
             Message::FilterPreset(n) => self.send(WorkerCmd::Cat(target_rx(
@@ -1963,6 +1968,12 @@ impl App {
                 self.display.wf_height = h.min(100);
                 cat::set_waterfall_height(self.display.wf_height)
             }
+        };
+        // Target the chosen pan (A/B), except the global display-mode command.
+        let cmd = if cmd.starts_with("#DPM") {
+            cmd
+        } else {
+            target_pan(cmd, self.pan_target_b)
         };
         self.send(WorkerCmd::Cat(cmd));
     }
@@ -3205,11 +3216,27 @@ impl App {
                     .on_press(Message::Disp(DispMsg::Mode(m))),
             );
         }
+        // Per-pan target for the attribute controls (REF/SPAN/SCALE/… apply to
+        // A or B via the `$` modifier) — most useful in dual view.
+        let tgt_btn = |lbl: &'static str, b: bool, cur: bool| {
+            Button::new(Text::new(lbl).size(11))
+                .style(btn_style(if cur == b {
+                    BtnKind::Active
+                } else {
+                    BtnKind::Plain
+                }))
+                .padding([4, 10])
+                .on_press(Message::SetPanTarget(b))
+        };
         let view_row = Row::new()
             .spacing(10)
             .align_y(Alignment::Center)
             .push(Text::new("PAN").size(11).color(dim))
-            .push(modes);
+            .push(modes)
+            .push(horizontal_space())
+            .push(Text::new("TARGET").size(11).color(dim))
+            .push(tgt_btn("A", false, self.pan_target_b))
+            .push(tgt_btn("B", true, self.pan_target_b));
         let pal = ui::waterfall_palettes()[(d.wf_palette as usize).min(4)];
         let peak = two_line_btn(
             ui::toggle_button("PEAK", Some(d.peak)),
@@ -5018,6 +5045,18 @@ fn next_avail_ant(avail: Option<u8>, cur: Option<u8>) -> Option<u8> {
     (1..=8u8)
         .map(|step| (cur + step) % 8)
         .find(|&v| mask & (1 << v) != 0)
+}
+
+/// Retarget a `#`-panadapter command at the sub pan (VFO B) by inserting the
+/// `$` modifier after the 4-char `#XXX` mnemonic (e.g. `#REF-020;` →
+/// `#REF$-020;`). Unknown-to-a-pan commands are ignored by the K4, so this is
+/// safe for attributes that lack a per-pan variant.
+fn target_pan(cmd: String, sub: bool) -> String {
+    if sub && cmd.starts_with('#') && cmd.len() >= 4 && !cmd[4..].starts_with('$') {
+        format!("{}${}", &cmd[..4], &cmd[4..])
+    } else {
+        cmd
+    }
 }
 
 /// Retarget a 2-letter RX command at the sub receiver by inserting the `$`
