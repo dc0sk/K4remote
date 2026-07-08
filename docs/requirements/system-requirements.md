@@ -94,6 +94,7 @@ Programmer's Reference rev. D12 (`PRG`) command mnemonics.
 | `FR-MODE-03` | select filter presets where applicable (PRG `FP`). | STK-03 | C | T | `FP2;` reflected in state. |
 | `FR-FIL-01` | adjust the passband **shift** / AF center pitch (`IS`; `$`=sub) and offer filter **normalize** (`FP~`). | STK-03 | C | T | `set_shift_hz(1500)` emits `IS0150;`; `filter_normalize()` emits `FP~;`. |
 | `FR-FIL-02` | adjust the passband **hi-cut / lo-cut** edges per receiver, derived from `BW`/`IS` (`HI = IS + BW/2`, `LO = IS − BW/2`; the K4 has no dedicated PRG command — D14 FILTER knob). | STK-03 | C | T | `set_passband_edges_hz(300, 2700)` emits `BW0240;` + `IS0150;`; edges round-trip via `passband_edges`. |
+| `FR-FIL-03` | draw a **passband overlay** (filter width + VFO centre) on the panadapter. | STK-09 | C | D | A translucent BW-wide band + centre line is drawn on each pane. |
 | `FR-MODE-04` | set the data sub-mode for DATA modes (PRG `DT`/`IF` data field). | STK-03 | C | T | Data sub-mode selection reflected in state. |
 
 ## F. Receiver Controls â `FR-RX`
