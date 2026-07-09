@@ -7,23 +7,52 @@ and transmit (voice + CW) — over Ethernet or USB/serial.
 It is developed **requirements-first and test-driven**, with strict traceability from
 stakeholder needs down to individual tests, enforced by a build gate.
 
+![K4 Remote main window](docs/screenshots/main.png)
+
 > **Status:** v1 feature-complete; hardware bring-up pending.
-> 79 hardware-free tests pass · clippy/fmt clean · traceability gate green.
+> 144 hardware-free tests pass · clippy/fmt clean · traceability gate green.
 > The only remaining work is validating audio / PTT / spectrum / serial against a real K4.
+>
+> *(Screenshots show the app driven by the protocol simulator; the panadapter fills in from a
+> live radio's stream.)*
 
 ---
+
+## Mode-adaptive UI
+
+The panel is **operating-mode aware** (on by default, switchable in Settings): controls the
+current mode doesn't use are dimmed or tucked away, and a fixed-height **mode strip** surfaces
+the ones it does — so each mode stays lean without the layout jumping around.
+
+**CW** — an APF / SPOT / DECODE strip appears, and the transmit panel shows keyer WPM, CW pitch
+and QSK delay:
+
+![RX frame in CW](docs/screenshots/rx-cw.png)
+
+**FM** — the passband/filter controls dim (FM's filters are fixed) and a repeater-offset + PL/CTCSS
+strip takes their place:
+
+![RX frame in FM](docs/screenshots/rx-fm.png)
+
+**DATA** — a sub-mode selector (DATA A / AFSK A / FSK D / PSK D) plus text decode:
+
+![RX frame in DATA](docs/screenshots/rx-data.png)
+
+The transmit panel adapts the same way (voice: VOX / compression / mic / DVR; CW: keyer timing),
+and the VFO frames support click-to-tune digits, a clickable mode cycle, and optimistic stepping.
 
 ## Features
 
 | Area | What it does |
 |---|---|
 | **Connect** | Plaintext Ethernet (9205, SHA-384 auth), **TLS-PSK** (9204), or **USB/serial** CAT — selectable in the UI, with auto-reconnect (bounded backoff). |
-| **Control** | VFO A/B, band, mode, bandwidth, AGC, NB/NR, preamp, attenuator, RIT/XIT, split. |
-| **Metering** | S-meter (bar count + dBm) with S-unit mapping. |
-| **Spectrum** | Decodes the K4 dB/bin stream → live spectrum trace + scrolling waterfall (GPU canvas). |
+| **Control** | VFO A/B with **per-digit click tuning** + optimistic stepping, band, clickable **mode cycle**, bandwidth, LO/HI filter edges, AGC, NB/NR, preamp, attenuator, RIT/XIT, split. |
+| **Mode-adaptive UI** | Per-mode control emphasis + mode strips (CW / voice / DATA / AM / FM), switchable in Settings; follows the active RX and the transmit VFO. |
+| **Metering** | S-meter (bar count + dBm) with S-unit mapping; TX RF/ALC/SWR/COMP bars while transmitting. |
+| **Spectrum** | Decodes the K4 dB/bin stream → live spectrum trace + scrolling waterfall + mini-pan (GPU canvas), with click-to-QSY and wheel tuning. |
 | **Audio** | Full-duplex 12 kHz **Opus** — jitter buffer, resampling, cpal device I/O (L=Main, R=Sub). |
-| **Transmit** | PTT, voice, and CW keying (`KZ`) — all behind an explicit **TX arm**, with an emergency stop and link-loss fail-safe. |
-| **Operability** | Persisted connection profiles, **OS-keychain** password storage (secrets never written to config), structured diagnostics + a raw-CAT console. |
+| **Transmit** | PTT, voice, and CW keying — all behind an explicit **TX arm**, with an emergency stop, link-loss fail-safe, and a configurable **PTT keyboard hotkey** (toggle or hold). |
+| **Operability** | Persisted connection profiles, **OS-keychain** password storage (secrets never written to config), **K4 settings export/import** (SHA-256-stamped `.cfg`), an optional separate **diagnostics window**, and a raw-CAT console. |
 
 ## Quick start
 
@@ -55,10 +84,11 @@ logic is unit-tested without a radio or sound card:
 | `k4-sim` | Protocol simulator + loopback servers for hardware-free tests |
 | `k4-config` | Profiles/prefs persistence (secret-free) + `SecretStore` (OS keychain) |
 | `k4-diag` | Structured, levelled, bounded diagnostic log |
-| `app` (`k4remote`) | iced GUI + background I/O worker |
+| `app` (`k4remote`) | iced GUI + background I/O worker; pure `ui.rs` view-model for testable layout logic |
 
 The full requirements + concept baseline lives in [`docs/`](docs/) — the RE process, ID scheme,
-and traceability rules are in [`docs/README.md`](docs/README.md). The K4/0 streaming protocol
+and traceability rules are in [`docs/README.md`](docs/README.md); the mode-adaptive UI concept is
+in [`docs/concept/mode-aware-ui.md`](docs/concept/mode-aware-ui.md). The K4/0 streaming protocol
 was recovered from the GPLv3 [QK4](https://github.com/mikeg-dal/QK4) project and
 **reimplemented clean-room** (interoperability facts only, no source copied); see
 [`docs/references/external-references.md`](docs/references/external-references.md).
@@ -66,7 +96,7 @@ was recovered from the GPLv3 [QK4](https://github.com/mikeg-dal/QK4) project and
 ## Development
 
 ```sh
-cargo test --workspace                       # 79 hardware-free tests
+cargo test --workspace                       # 144 hardware-free tests
 cargo clippy --all-targets -- -D warnings
 cargo fmt --all -- --check
 cargo xtask                                  # requirement → test traceability gate (R3/R4)
@@ -82,7 +112,7 @@ and the **test suite + `cargo audit`** on push. A CI workflow is included but di
 
 - **L4 hardware bring-up** — validate audio, PTT, spectrum, and the serial path against a real K4.
 - App-level keychain/serial polish from real-world use.
-- Possible Phase-2/3: panadapter click-to-tune, an embedded CAT server for WSJT-X / loggers.
+- Possible Phase-2/3: an embedded CAT server for WSJT-X / loggers.
 
 ## License
 
