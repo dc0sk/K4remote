@@ -80,6 +80,9 @@ pub struct RadioState {
     /// VFO tuning step, Hz (`VT`/`VT$`: 10^n for step index n).
     pub tune_step_hz: Option<u32>,
     pub sub_tune_step_hz: Option<u32>,
+    /// DATA sub-mode (`DT`/`DT$`): 0=DATA A, 1=AFSK A, 2=FSK D, 3=PSK D.
+    pub data_submode: Option<u8>,
+    pub sub_data_submode: Option<u8>,
     /// Speech compression, 0–30 (`CP`).
     pub compression: Option<u8>,
     /// CW sidetone pitch, Hz (`CW`).
@@ -611,6 +614,15 @@ impl RadioState {
                     *sub_or(&mut self.tune_step_hz, &mut self.sub_tune_step_hz, sub) = Some(step);
                 }
             }
+        } else if let Some(arg) = cmd.strip_prefix("DT") {
+            // `DT[$]n` — DATA sub-mode (0=DATA A, 1=AFSK A, 2=FSK D, 3=PSK D).
+            let (sub, a) = split_sub(arg);
+            if let Some(nc) = a.bytes().next() {
+                if nc.is_ascii_digit() {
+                    *sub_or(&mut self.data_submode, &mut self.sub_data_submode, sub) =
+                        Some(nc - b'0');
+                }
+            }
         } else if let Some(arg) = cmd.strip_prefix("VG") {
             // `VGmnnn` — VOX gain (m = V/D); surface the level.
             if arg.len() >= 4 {
@@ -750,6 +762,7 @@ pub fn connect_state_seed() -> &'static [&'static str] {
         "ML0;", "ML1;", "ML2;", // monitor levels (CW / AF-data / voice)
         "VGV;", "VI;", // VOX gain (voice) + anti-VOX level
         "VT;", "VT$;", // VFO tuning step (for optimistic ◄► stepping)
+        "DT;", "DT$;", // DATA sub-mode (DATA A / AFSK A / FSK D / PSK D)
         "RP;", "PL;", // FM repeater offset + PL/CTCSS tone
         "UT;", "CC;",   // radio UTC time + remote client count (status strip)
         "#MP$;", // mini-pan on/off
