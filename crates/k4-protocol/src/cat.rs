@@ -106,6 +106,18 @@ pub fn set_mode_sub(digit: u8) -> String {
     format!("MD${digit};")
 }
 
+/// Set the DATA sub-mode (`DT`/`DT$`): 0=DATA A, 1=AFSK A, 2=FSK D, 3=PSK D.
+/// `sub` selects the sub receiver (`DT$`).
+///
+/// trace: FR-DATA-01
+pub fn set_data_submode(sub: bool, n: u8) -> String {
+    if sub {
+        format!("DT${};", n.min(3))
+    } else {
+        format!("DT{};", n.min(3))
+    }
+}
+
 /// Set receive bandwidth in Hz (`BW`; the wire value is ×10 Hz).
 ///
 /// Example: `2700` → `"BW0270;"`.

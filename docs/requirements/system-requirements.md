@@ -91,6 +91,99 @@ Programmer's Reference rev. D12 (`PRG`) command mnemonics.
 | ID | Statement | Up | Pri | Ver | Acceptance criteria |
 |---|---|---|---|---|---|
 | `FR-MODE-01` | select operating mode for main/sub RX via `MD`/`MD$` and reflect RESP (PRG `MD`). | STK-03 | M | T | Selecting CW emits the documented `MD` value; RESP updates mode. |
+| `FR-DATA-01` | select and reflect the **DATA sub-mode** (`DT`/`DT---
+title: "System Requirements Specification"
+status: Draft
+version: "0.14"
+updated: 2026-07-06
+authors:
+  - Simon Keimer (DC0SK)
+owns: [FR, NFR]
+---
+
+# System Requirements Specification (SRS)
+
+**Version:** 0.1 (Draft) ÃÂÃÂ· **Date:** 2026-06-25 ÃÂÃÂ· **Author:** DC0SK
+Trace: owns `FR-`, `NFR-`. Up ÃÂ¢ÃÂÃÂ [stakeholder-requirements.md](stakeholder-requirements.md);
+down ÃÂ¢ÃÂÃÂ [../concept/architecture.md](../concept/architecture.md) (`ARC`) and
+[../test/test-strategy.md](../test/test-strategy.md) (`TC`).
+
+**Legend.** Pri: `M` must (v1) ÃÂÃÂ· `S` should (v1) ÃÂÃÂ· `C` could ÃÂÃÂ· `W2` Phase 2.
+Ver(ification): `T` automated test ÃÂÃÂ· `D` demonstration ÃÂÃÂ· `I` inspection ÃÂÃÂ· `A` analysis.
+Each requirement is written as a single testable "shall". Vendor references cite the K4
+Programmer's Reference rev. D12 (`PRG`) command mnemonics.
+
+> All requirements below are **Status: Proposed** in this draft baseline unless noted.
+
+---
+
+## A. Connection & Transport ÃÂ¢ÃÂÃÂ `FR-CONN`
+
+| ID | Statement (the system shallÃÂ¢ÃÂÃÂ¦) | Up | Pri | Ver | Acceptance criteria |
+|---|---|---|---|---|---|
+| `FR-CONN-01` | connect to a K4 server by opening a direct TCP socket to host:port (default **9205** plaintext, **9204** TLS-PSK) and completing the authentication handshake (`FR-AUTH-*`). NOTE: a software client does **not** use the `RRT` command ÃÂ¢ÃÂÃÂ that is the K4-to-K4 "dial a remote server" form (PRG `RRT`); our client *is* the dialing party. | STK-01 | M | T | Given a simulated server, connect opens the socket and runs the auth+init handshake; on success the session reports `Connected`. |
+| `FR-CONN-02` | disconnect cleanly on operator request by sending `RRN;` (PRG `RRT`) and releasing the socket. | STK-01 | M | T | Disconnect emits `RRN;` and transitions to `Disconnected`; socket closed. |
+| `FR-CONN-03` | report connection state (`Disconnected`, `Connecting`, `Connected`, `Reconnecting`, `Error`) to the UI as it changes. | STK-01 | M | T | Each transition produces exactly one state event with cause. |
+| `FR-CONN-04` | surface connection failures (refused, timeout, auth rejected, host unreachable) with a distinguishable, human-readable reason. | STK-01 | M | T | Each simulated failure maps to its own error variant + message. |
+| `FR-CONN-ABSTRACT` | expose all radio I/O through a transport-agnostic interface so that an alternative transport (USB/serial CAT) can be added without changing CAT/UI layers. | STK-18 | S | I/T | A second mock transport implements the trait and drives the CAT engine unchanged in tests. |
+| `FR-CONN-05` | apply a configurable connect timeout and fail (not hang) if no handshake response arrives within it. | STK-01 | S | T | With a non-responding server, connect fails within timeout ÃÂÃÂ±tolerance. |
+
+## B. CAT Protocol Engine ÃÂ¢ÃÂÃÂ `FR-CAT`
+
+| ID | Statement | Up | Pri | Ver | Acceptance criteria |
+|---|---|---|---|---|---|
+| `FR-CAT-01` | encode SET commands and decode RESP messages for the supported command set, treating `;` as the frame terminator (PRG Syntax). | STK-02/03 | M | T | Round-trip encodeÃÂ¢ÃÂÃÂdecode of each supported command yields the original typed value. |
+| `FR-CAT-02` | parse a continuous byte stream into discrete commands, tolerating commands split across or batched within reads. | STK-02 | M | T | A stream with fragmented/concatenated frames yields the correct ordered command list. |
+| `FR-CAT-03` | recognise the error reply `<cmd>?;` (unparsable/out-of-range) and report it against the originating request (PRG Error Checking). | STK-02 | M | T | Injected `FA?;` is surfaced as an error tied to the pending `FA` request. |
+| `FR-CAT-04` | ignore/round-trip-log unknown or unsupported command frames without crashing or desynchronising the parser. | STK-17 | M | T | An unknown `ZZ9;` frame is logged and the next valid frame still parses. |
+| `FR-CAT-05` | distinguish main vs. sub-receiver (`$`) variants and target the correct VFO/receiver (PRG `$` modifier). | STK-02/03 | M | T | `MD$3;` decodes as mode-set on sub RX; `MD3;` on main RX. |
+| `FR-CAT-AI` | enable an Auto-Info mode (`AI`, target `AI5`/`AI4` immediate) on connect and update internal radio state from unsolicited RESP messages (PRG `AI`, NOTE2 per-client). | STK-04 | M | T | After `AI`, a pushed `FAÃÂ¢ÃÂÃÂ¦;` updates VFO-A state with no GET sent. |
+| `FR-CAT-06` | maintain a coherent in-memory **radio state model** updated by both GET responses and Auto-Info, as the single source of truth for the UI. | STK-02/04 | M | T | Concurrent updates leave state consistent; UI reads reflect last value per field. |
+| `FR-CAT-07` | reconcile state on (re)connect by issuing a defined GET burst (incl. `IF;`) to seed the model (PRG `IF`). | STK-01/02 | M | T | On connect, the seed GET set is sent and responses populate all seeded fields. |
+
+## B2. Binary Frame & Authentication Layer ÃÂ¢ÃÂÃÂ `FR-STREAM`
+
+*Realizes the K4/0 wire protocol documented in [../references/external-references.md](../references/external-references.md)
+(`R-EXT-01`). All facts to be confirmed against a real radio (`ASM-05`). Clean-room per `CON-09`.*
+
+| ID | Statement (the system shallÃÂ¢ÃÂÃÂ¦) | Up | Pri | Ver | Acceptance criteria |
+|---|---|---|---|---|---|
+| `FR-STREAM-01` | frame and de-frame all traffic using the K4 binary envelope: `START(FE FD FC FB)` + big-endian u32 length + payload + `END(FB FC FD FE)`, reassembling across TCP read boundaries. | STK-01/05 | M | T | Byte-exact build; a split/concatenated stream de-frames to the correct payload list; partial-marker tail retained. |
+| `FR-STREAM-02` | dispatch payloads by first-byte type: `0x00` CAT, `0x01` Audio, `0x02` PAN, `0x03` MiniPAN; unknown types logged and skipped without desync. | STK-01 | M | T | Each type routes to its handler; an unknown type is skipped and the next frame parses. |
+| `FR-STREAM-03` | recover from a corrupted frame (bad END marker, oversize length) by resyncing to the next START marker, bounded by a max buffer size. | STK-17 | M | T | Injected corruption resyncs; buffer never grows past the cap. |
+| `FR-AUTH-01` | authenticate on the unencrypted port (default **9205**) by sending `SHA-384(password)` as a lowercase hex string, raw (unframed), immediately after connect. | STK-01/14 | M | T | Auth bytes equal the known-answer SHA-384 hex of the test password. |
+| `FR-AUTH-02` | optionally connect on the **TLS-PSK** port (default **9204**) using the password as PSK key (TLS 1.2+), as a selectable secure transport. | STK-14 | S | T/D | TLS-PSK profile negotiates and authenticates against a PSK-capable test endpoint. |
+| `FR-AUTH-03` | run the post-auth init sequence in order: optional startup macro, `RDY;`, `K41;`, `ER1;`, `EM<n>;`, `SL<n>;`. | STK-01 | M | T | The emitted command order matches the specification exactly. |
+| `FR-SES-PING` | send keep-alive as `PING<unixEpochSeconds>;` at ~1 Hz and derive link latency from the `PONG` reply. | STK-01 | M | T | `PING` carries a monotonic epoch; latency computed from matched `PONG`. |
+
+## C. Session ÃÂ¢ÃÂÃÂ `FR-SES`
+
+| ID | Statement | Up | Pri | Ver | Acceptance criteria |
+|---|---|---|---|---|---|
+| `FR-SES-01` | send a keep-alive at ~1 Hz (format per `FR-SES-PING`) and treat receipt of `PONG` as liveness (PRG PING/PONG; CON-05). | STK-01 | M | T | Timer emits a ping each ~1 s; missing `PONG` flagged. |
+| `FR-SES-02` | detect link loss within ÃÂ¢ÃÂÃÂ¤3 s of the server's 10 s drop threshold being approached (missed PONGs / socket error) and signal it. | STK-01/20 | M | T | Simulated silence ÃÂ¢ÃÂÃÂ link-loss event within bound. |
+| `FR-SES-RECONNECT` | optionally auto-reconnect with bounded backoff after unexpected link loss, re-running the connect handshake and state seed. | STK-20 | S | T | After dropped link, client retries with backoff and restores state on success. |
+| `FR-SES-MULTI` | read and display the remote client count via `CC;` (PRG `CC`) to indicate shared control. | STK-19 | C | T | `CC2;` is reflected as "2 clients" in state. |
+
+## D. VFO / Frequency / Band ÃÂ¢ÃÂÃÂ `FR-VFO`
+
+| ID | Statement | Up | Pri | Ver | Acceptance criteria |
+|---|---|---|---|---|---|
+| `FR-VFO-01` | set VFO A and VFO B frequency in Hz via `FA`/`FB`, accepting the operator's entry and emitting the canonical 11-digit form (PRG `FA`/`FB`). | STK-02 | M | T | Entering 14.074 MHz emits `FA00014074000;`. |
+| `FR-VFO-02` | display VFO A/B frequency from RESP, parsing the 11-digit Hz form. | STK-02 | M | T | `FB00007100000;` shows 7.100000 MHz on VFO B. |
+| `FR-VFO-03` | tune by step increments (configurable step) and by direct numeric entry. | STK-02 | M | T | A +1 step at 100 Hz step changes target freq by exactly 100 Hz. |
+| `FR-VFO-04` | switch bands ÃÂ¢ÃÂÃÂ band up/down, **direct band select** by number, band-stacking recall, and transverter bands (PRG `BN`/`BN$`/`BN^`/`XV`). | STK-02 | M | T | Band-up and direct `BN00`ÃÂ¢ÃÂÃÂ¦`BN10;` encode; band-stack `BN^;` and `XV` encode; RESP updates the band field. |
+| `FR-VFO-05` | control RIT/XIT on/off and offset, and clear them (PRG `RT`/`XT`/`RC`, `IF` flags). | STK-03 | S | T | Enabling RIT and a +50 Hz offset is reflected in state and via `IF`. |
+| `FR-VFO-06` | control split on/off (PRG `FT`). | STK-02 | S | T | `FT1;`/`FT0;` toggles split state. |
+| `FR-VFO-08` | tune by **clicking individual frequency digits** â a digit's upper half increments it, the lower half decrements it, rolling 0–9 within that digit only (no carry). | STK-03 | C | D | Clicking a digit sends `FA`/`FB` with just that place changed. |
+| `FR-VFO-07` | copy/swap the VFOs ÃÂ¢ÃÂÃÂ AÃÂ¢ÃÂÃÂB, BÃÂ¢ÃÂÃÂA, and swap, for frequency or full state (PRG `AB`). | STK-02 | S | T | `AB0`ÃÂ¢ÃÂÃÂ¦`AB5;` encode the copy/swap variants. |
+| `FR-VFO-ID` | set/display the station ID text (PRG `ID`) to support identification. | STK-13 | S | T | Setting ID emits `ID<text>;`; RESP updates displayed ID. |
+
+## E. Mode & Bandwidth ÃÂ¢ÃÂÃÂ `FR-MODE`
+
+| ID | Statement | Up | Pri | Ver | Acceptance criteria |
+|---|---|---|---|---|---|
+: DATA A / AFSK A / FSK D / PSK D) for the active RX; shown in the DATA mode strip. | STK-03 | C | T | `DT2;` parses to sub-mode 2; the selector emits the documented `DT` value. |
 | `FR-MODE-02` | set and display receive bandwidth/filter via `BW`/`BW$` (PRG `BW`). | STK-03 | M | T | Bandwidth set round-trips through state. |
 | `FR-MODE-03` | select filter presets where applicable (PRG `FP`). | STK-03 | C | T | `FP2;` reflected in state. |
 | `FR-FIL-01` | adjust the passband **shift** / AF center pitch (`IS`; `$`=sub) and offer filter **normalize** (`FP~`). | STK-03 | C | T | `set_shift_hz(1500)` emits `IS0150;`; `filter_normalize()` emits `FP~;`. |

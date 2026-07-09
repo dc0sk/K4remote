@@ -441,6 +441,7 @@ enum Message {
     SetAfGain(u8),
     SetRfGain(u8),
     SetSquelch(u8),
+    SetDataSubmode(u8),
     SetTxPower(u16),
     SetCompression(u8),
     SetCwPitch(u16),
@@ -1300,6 +1301,13 @@ impl App {
                 self.send(WorkerCmd::Cat(target_rx(
                     k4_protocol::cat::set_squelch(v),
                     self.active_sub(),
+                )));
+            }
+            // DATA sub-mode selector (DT/DT$). trace: FR-DATA-01
+            Message::SetDataSubmode(n) => {
+                self.send(WorkerCmd::Cat(k4_protocol::cat::set_data_submode(
+                    self.active_sub(),
+                    n,
                 )));
             }
             Message::SetTxPower(v) => {
@@ -2666,7 +2674,23 @@ impl App {
                         .push(small_btn("SPOT", Message::Switch(42)))
                         .push(decode());
                 }
-                ui::ModeClass::Data => row = row.push(decode()),
+                ui::ModeClass::Data => {
+                    // DATA sub-mode selector (DT): DATA A / AFSK A / FSK D / PSK D.
+                    let cur = self.rx_data_submode();
+                    for (n, label) in [(0, "DATA A"), (1, "AFSK A"), (2, "FSK D"), (3, "PSK D")] {
+                        row = row.push(
+                            Button::new(Text::new(label).size(11))
+                                .style(btn_style(if cur == Some(n) {
+                                    BtnKind::Active
+                                } else {
+                                    BtnKind::Plain
+                                }))
+                                .padding([4, 8])
+                                .on_press(Message::SetDataSubmode(n)),
+                        );
+                    }
+                    row = row.push(decode());
+                }
                 _ => {}
             }
         }
@@ -3225,6 +3249,15 @@ impl App {
             self.ui.radio.sub_apf_width
         } else {
             self.ui.radio.apf_width
+        }
+    }
+
+    /// Active RX's DATA sub-mode (0=DATA A, 1=AFSK A, 2=FSK D, 3=PSK D).
+    fn rx_data_submode(&self) -> Option<u8> {
+        if self.active_sub() {
+            self.ui.radio.sub_data_submode
+        } else {
+            self.ui.radio.data_submode
         }
     }
 

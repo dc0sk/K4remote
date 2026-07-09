@@ -298,3 +298,18 @@ fn fr_cfg_07_menu_value_capture() {
     s.apply_cat("MEDF0030;");
     assert_eq!(s.menu_values.len(), 1);
 }
+
+/// DATA sub-mode (`DT`/`DT$`) responses parse for main and sub receivers.
+///
+/// trace: FR-DATA-01
+#[test]
+fn fr_data_submode_parses() {
+    let mut s = RadioState::new();
+    s.apply_cat("DT2;"); // FSK D on main
+    s.apply_cat("DT$1;"); // AFSK A on sub
+    assert_eq!(s.data_submode, Some(2));
+    assert_eq!(s.sub_data_submode, Some(1));
+    // Setter round-trips the wire form.
+    assert_eq!(k4_protocol::cat::set_data_submode(false, 0), "DT0;");
+    assert_eq!(k4_protocol::cat::set_data_submode(true, 3), "DT$3;");
+}
