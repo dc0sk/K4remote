@@ -1,7 +1,7 @@
 ---
 title: "Test Strategy & Traceability"
 status: Draft
-version: "1.13"
+version: "1.14"
 updated: 2026-07-07
 authors:
   - Simon Keimer (DC0SK)
@@ -312,3 +312,4 @@ FR-SES-MULTI, FR-DIAG-02, etc. — get `TC` IDs when promoted to `Approved`.)*
 | 2026-07-11 | 1.11 | DC0SK | Audit fixes #1/#6: (1) worker now applies the TX fail-safe immediately on a `session.pump()` I/O error via new `Session::note_io_error` (was swallowed → unkey waited for the 5 s timeout) — new test `nfr_rel_failsafe_io_error_unkeys_immediately` traces NFR-REL-FAILSAFE; (2) `ConnectConfig.connect_timeout` (default 10 s) + `connect_timeout()` helper used by both TCP + TLS connect — new test `fr_conn_05_connect_respects_timeout` traces FR-CONN-05. 146 tests. |
 | 2026-07-11 | 1.12 | DC0SK | Audit fixes #4/#7/#9: implement FR-CAT-03 (`<cmd>?;` error reply → `RadioState.last_error`) + tests for FR-CAT-03/04; add a deterministic no-panic fuzz (`nfr_rel_01_random_input_never_panics`) that **found and fixed 3 real parser underflow panics** (`AP`/`NB`/`PA` width/level did `b - b'0'` without an `is_ascii_digit` guard → panic on non-digit); trace the existing EM3 init assertion to FR-AUD-ENC. 149 tests. |
 | 2026-07-11 | 1.13 | DC0SK | Audit fixes #5/#11: replace the `unreachable!()` in apply_rx with a defensive `return` (RxMsg::Tab is handled earlier); zeroize MasterKey on drop via the `zeroize` crate (a plain `=0` loop is elidable); un-wrap the session-test trace list + add FR-TX-01/NFR-TEST-02 traces so the gate credits the already-passing tests; update the FR-UI-08 acceptance to the segmented A/B/A+B selector (the ViewMode::next cycle was removed). 149 tests. |
+| 2026-07-11 | 1.14 | DC0SK | Audit fix #8: extract the optimistic-UI reconciliation out of the untested app tick into pure, testable `ui.rs` — `OptVfo` (set/display/reconcile with staleness expiry, FR-VFO-03/08) and `adopt_on_change` (the genuine-transition pattern for split / TX-power-range). main.rs migrated to them; new unit tests cover confirm, staleness expiry, and transition-only adoption. 151 tests. |

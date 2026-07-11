@@ -174,10 +174,8 @@ struct App {
     last_split: Option<bool>,
     // Optimistic VFO frequency after a digit click, so the readout updates
     // instantly instead of waiting for the radio's echo (FR-VFO-08). Cleared
-    // once the radio confirms, or after a short staleness timeout.
-    opt_vfo_a: Option<u64>,
-    opt_vfo_b: Option<u64>,
-    opt_vfo_age: u8,
+    // once the radio confirms, or after a short staleness timeout (see ui::OptVfo).
+    opt_vfo: ui::OptVfo,
     // Same optimistic pattern for the TX power range (H/L/X): adopt the radio's
     // range only on a genuine change, so a lagging read-back doesn't revert a
     // just-clicked range button.
@@ -703,9 +701,7 @@ impl App {
             bw_hz: 2800,
             tx_vfo_b: false,
             last_split: None,
-            opt_vfo_a: None,
-            opt_vfo_b: None,
-            opt_vfo_age: 0,
+            opt_vfo: ui::OptVfo::default(),
             last_pwr_range: None,
             af_gain: 30,
             rf_gain: 0,
@@ -1211,9 +1207,9 @@ impl App {
                 // Base on the optimistic value so rapid clicks accumulate without
                 // waiting for the radio's echo.
                 let cur = if is_b {
-                    self.opt_vfo_b.or(self.ui.vfo_b_hz)
+                    self.opt_vfo.b_or(self.ui.vfo_b_hz)
                 } else {
-                    self.opt_vfo_a.or(self.ui.vfo_a_hz)
+                    self.opt_vfo.a_or(self.ui.vfo_a_hz)
                 };
                 if let Some(freq) = cur {
                     // Roll the clicked digit 0–9 within its own place (no carry).
@@ -1221,12 +1217,11 @@ impl App {
                     let new_d = if up { (d + 1) % 10 } else { (d + 9) % 10 };
                     let delta = new_d as i64 * place as i64 - d as i64 * place as i64;
                     let new_freq = (freq as i64 + delta).max(0) as u64;
-                    self.opt_vfo_age = 0;
                     if is_b {
-                        self.opt_vfo_b = Some(new_freq);
+                        self.opt_vfo.set_b(new_freq);
                         self.send(WorkerCmd::SetFreqB(new_freq));
                     } else {
-                        self.opt_vfo_a = Some(new_freq);
+                        self.opt_vfo.set_a(new_freq);
                         self.send(WorkerCmd::SetFreqA(new_freq));
                     }
                 }
@@ -1272,12 +1267,11 @@ impl App {
             Message::PaneQsy(is_b, hz) => {
                 // Click-to-QSY: tune the pane's VFO to the clicked frequency.
                 // (In dual view a wrapping mouse_area also selects the TX VFO.)
-                self.opt_vfo_age = 0;
                 if is_b {
-                    self.opt_vfo_b = Some(hz);
+                    self.opt_vfo.set_b(hz);
                     self.send(WorkerCmd::SetFreqB(hz));
                 } else {
-                    self.opt_vfo_a = Some(hz);
+                    self.opt_vfo.set_a(hz);
                     self.send(WorkerCmd::SetFreqA(hz));
                 }
             }
@@ -1867,39 +1861,21 @@ impl App {
                 // (incl. the radio's echo of our own change or an external one). A
                 // static or absent read-back leaves the optimistic value alone, so
                 // it never snaps back.
-                if self.ui.split != self.last_split {
-                    self.last_split = self.ui.split;
-                    if let Some(s) = self.ui.split {
-                        self.tx_vfo_b = s;
-                    }
+                if let Some(s) = ui::adopt_on_change(&mut self.last_split, self.ui.split) {
+                    self.tx_vfo_b = s;
                 }
                 // Adopt the radio's TX power range on a genuine change only, so it
                 // reflects the real state (incl. changes made at the K4) without a
                 // stale echo snapping a just-clicked range button back.
-                if self.ui.radio.tx_power_range != self.last_pwr_range {
-                    self.last_pwr_range = self.ui.radio.tx_power_range;
-                    if let Some(r) = self.ui.radio.tx_power_range {
-                        self.tx_pwr_range = r;
-                    }
+                if let Some(r) =
+                    ui::adopt_on_change(&mut self.last_pwr_range, self.ui.radio.tx_power_range)
+                {
+                    self.tx_pwr_range = r;
                 }
                 // Reconcile the optimistic VFO freq: drop it once the radio
                 // confirms our value, or after a staleness timeout (~2 s) so a
                 // clamped/rejected set falls back to the radio's real value.
-                if self.opt_vfo_a == self.ui.vfo_a_hz {
-                    self.opt_vfo_a = None;
-                }
-                if self.opt_vfo_b == self.ui.vfo_b_hz {
-                    self.opt_vfo_b = None;
-                }
-                if self.opt_vfo_a.is_some() || self.opt_vfo_b.is_some() {
-                    self.opt_vfo_age = self.opt_vfo_age.saturating_add(1);
-                    if self.opt_vfo_age > 15 {
-                        self.opt_vfo_a = None;
-                        self.opt_vfo_b = None;
-                    }
-                } else {
-                    self.opt_vfo_age = 0;
-                }
+                self.opt_vfo.reconcile(self.ui.vfo_a_hz, self.ui.vfo_b_hz);
                 // Expire the momentary switch-tap highlight.
                 if self.switch_flash_ticks > 0 {
                     self.switch_flash_ticks -= 1;
@@ -1988,9 +1964,9 @@ impl App {
             self.ui.radio.tune_step_hz
         };
         let cur = if is_b {
-            self.opt_vfo_b.or(self.ui.vfo_b_hz)
+            self.opt_vfo.b_or(self.ui.vfo_b_hz)
         } else {
-            self.opt_vfo_a.or(self.ui.vfo_a_hz)
+            self.opt_vfo.a_or(self.ui.vfo_a_hz)
         };
         match (step, cur) {
             (Some(step), Some(cur)) => {
@@ -2000,12 +1976,11 @@ impl App {
                 } else {
                     cur.saturating_sub(step)
                 };
-                self.opt_vfo_age = 0;
                 if is_b {
-                    self.opt_vfo_b = Some(new);
+                    self.opt_vfo.set_b(new);
                     self.send(WorkerCmd::SetFreqB(new));
                 } else {
-                    self.opt_vfo_a = Some(new);
+                    self.opt_vfo.set_a(new);
                     self.send(WorkerCmd::SetFreqA(new));
                 }
             }
@@ -2062,9 +2037,9 @@ impl App {
         // Prefer the optimistic freq (instant digit-click feedback) over the
         // radio snapshot until the radio confirms it (FR-VFO-08).
         let hz = if is_b {
-            self.opt_vfo_b.or(self.ui.vfo_b_hz)
+            self.opt_vfo.b_or(self.ui.vfo_b_hz)
         } else {
-            self.opt_vfo_a.or(self.ui.vfo_a_hz)
+            self.opt_vfo.a_or(self.ui.vfo_a_hz)
         };
         let mode = if is_b { self.ui.mode_b } else { self.ui.mode_a };
         let dbm = if is_b {
