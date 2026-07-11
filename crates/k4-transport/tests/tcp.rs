@@ -77,3 +77,26 @@ fn l2_disconnect_sends_rrn() {
     }
     assert!(saw_rrn, "server should have received RRN;");
 }
+
+/// A connect to an unreachable (blackhole) address fails within the configured
+/// connect timeout rather than blocking on the OS default.
+///
+/// trace: FR-CONN-05
+#[test]
+fn fr_conn_05_connect_respects_timeout() {
+    use std::time::{Duration, Instant};
+    // 192.0.2.1 is TEST-NET-1 (RFC 5737) — guaranteed non-routable, so the
+    // connect either drops (times out) or is refused; both must be prompt.
+    let cfg = ConnectConfig {
+        connect_timeout: Duration::from_millis(300),
+        ..Default::default()
+    };
+    let start = Instant::now();
+    let r = TcpRemoteTransport::connect("192.0.2.1:9205", &cfg);
+    assert!(r.is_err(), "connect to a blackhole must fail");
+    assert!(
+        start.elapsed() < Duration::from_secs(3),
+        "must honour the connect timeout, not the multi-minute OS default (took {:?})",
+        start.elapsed()
+    );
+}

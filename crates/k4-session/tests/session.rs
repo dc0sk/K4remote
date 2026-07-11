@@ -19,6 +19,8 @@ struct LinkState {
     sent: Vec<String>,
     /// Each entry is one `poll_frames` batch of raw frame payloads.
     inbound: VecDeque<Vec<Vec<u8>>>,
+    /// When set, `poll_frames` returns an I/O error (simulates a dead socket).
+    fail: bool,
 }
 
 /// Cloneable handle: a clone given to the `Session`, a clone kept by the test.
@@ -34,6 +36,10 @@ impl MockLink {
     /// Queue a batch of arbitrary raw frame payloads.
     fn queue_payloads(&self, payloads: Vec<Vec<u8>>) {
         self.0.borrow_mut().inbound.push_back(payloads);
+    }
+    /// Make the next `poll_frames` return an I/O error.
+    fn fail(&self) {
+        self.0.borrow_mut().fail = true;
     }
     fn sent(&self) -> Vec<String> {
         self.0.borrow().sent.clone()
@@ -52,6 +58,12 @@ impl CatLink for MockLink {
         Ok(())
     }
     fn poll_frames(&mut self) -> io::Result<Vec<Vec<u8>>> {
+        if self.0.borrow().fail {
+            return Err(io::Error::new(
+                io::ErrorKind::ConnectionReset,
+                "socket reset",
+            ));
+        }
         Ok(self.0.borrow_mut().inbound.pop_front().unwrap_or_default())
     }
 }
@@ -112,6 +124,32 @@ fn fr_cat_07_seed_sends_get_burst() {
     let expected: Vec<String> = connect_state_seed().iter().map(|s| s.to_string()).collect();
     assert_eq!(link.sent(), expected);
     assert_eq!(link.sent().first().map(String::as_str), Some("IF;"));
+}
+
+/// A hard I/O error on the link while transmitting reaches the safe state
+/// immediately — without advancing the clock past the keep-alive timeout —
+/// via `note_io_error` (what the worker calls when `pump()` errors).
+///
+/// trace: NFR-REL-FAILSAFE
+#[test]
+fn nfr_rel_failsafe_io_error_unkeys_immediately() {
+    let (link, _clock, mut s) = build();
+    s.arm_tx();
+    assert!(s.begin_tx().unwrap());
+    assert!(s.is_transmitting());
+
+    link.fail(); // next poll_frames errors (dead socket)
+    assert!(s.pump().is_err(), "pump must surface the I/O error");
+    s.note_io_error(); // worker's response — no clock advance
+
+    assert!(!s.is_connected(), "I/O error marks the link lost");
+    assert!(!s.is_transmitting(), "fail-safe must unkey immediately");
+    assert!(!s.is_tx_armed(), "fail-safe must disarm");
+    assert_eq!(
+        link.last_sent().as_deref(),
+        Some("RX;"),
+        "must send RX; to unkey"
+    );
 }
 
 /// Keep-alive fires once per interval as `PING<secs>;` (FR-SES-01, FR-SES-PING).
