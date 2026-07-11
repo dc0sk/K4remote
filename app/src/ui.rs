@@ -907,6 +907,78 @@ pub fn band_layout(window_w: f32, mode: ViewMode) -> BandLayout {
     }
 }
 
+// --- Optimistic-UI reconciliation (pure, testable) --------------------------
+
+/// Optimistic VFO frequency override (FR-VFO-03/08): a local value shown
+/// instantly when the operator sets/steps a VFO, then dropped once the radio
+/// confirms it — or after a staleness timeout, so a value the radio clamps or
+/// rejects falls back to the real read-back instead of sticking forever.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct OptVfo {
+    a: Option<u64>,
+    b: Option<u64>,
+    age: u8,
+}
+
+impl OptVfo {
+    /// Ticks to hold an unconfirmed optimistic value (~2 s at 150 ms/tick).
+    pub const STALE_TICKS: u8 = 15;
+
+    /// Set an optimistic value for VFO A / B, resetting the staleness clock.
+    pub fn set_a(&mut self, hz: u64) {
+        self.a = Some(hz);
+        self.age = 0;
+    }
+    pub fn set_b(&mut self, hz: u64) {
+        self.b = Some(hz);
+        self.age = 0;
+    }
+
+    /// Displayed VFO A / B: the pending optimistic value, else the snapshot.
+    pub fn a_or(&self, snapshot: Option<u64>) -> Option<u64> {
+        self.a.or(snapshot)
+    }
+    pub fn b_or(&self, snapshot: Option<u64>) -> Option<u64> {
+        self.b.or(snapshot)
+    }
+
+    /// Reconcile one tick against the latest radio snapshot: drop a value the
+    /// radio has confirmed (snapshot matches), and expire everything once the
+    /// unconfirmed value has been held longer than [`OptVfo::STALE_TICKS`].
+    ///
+    /// trace: FR-VFO-08
+    pub fn reconcile(&mut self, snap_a: Option<u64>, snap_b: Option<u64>) {
+        if self.a == snap_a {
+            self.a = None;
+        }
+        if self.b == snap_b {
+            self.b = None;
+        }
+        if self.a.is_some() || self.b.is_some() {
+            self.age = self.age.saturating_add(1);
+            if self.age > Self::STALE_TICKS {
+                self.a = None;
+                self.b = None;
+            }
+        } else {
+            self.age = 0;
+        }
+    }
+}
+
+/// "Adopt on genuine change" reconciler (the `last_split` / `last_pwr_range`
+/// pattern): update `last` and return the value to adopt only when the snapshot
+/// has genuinely changed. A static or absent read-back returns `None`, so a
+/// just-clicked optimistic local value is never snapped back by a lagging echo.
+pub fn adopt_on_change<T: Copy + PartialEq>(last: &mut Option<T>, current: Option<T>) -> Option<T> {
+    if current != *last {
+        *last = current;
+        current
+    } else {
+        None
+    }
+}
+
 // --- Mode-adaptive UI (docs/concept/mode-aware-ui.md) -----------------------
 
 /// Presentation class derived from the operating mode. Drives which controls
@@ -1005,6 +1077,46 @@ pub fn tx_ctl_vis(c: TxCtl, m: ModeClass) -> Vis {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Optimistic VFO: shows the local value, drops it on confirm, and expires
+    /// a never-confirmed value after the staleness window.
+    ///
+    /// trace: FR-VFO-08, FR-VFO-03
+    #[test]
+    fn fr_vfo_08_optimistic_reconcile() {
+        let mut o = OptVfo::default();
+        // No override → shows the snapshot.
+        assert_eq!(o.a_or(Some(100)), Some(100));
+        // Set → shows the optimistic value over a stale snapshot.
+        o.set_a(14_000_000);
+        assert_eq!(o.a_or(Some(100)), Some(14_000_000));
+        // Radio confirms → optimistic value is dropped, age resets.
+        o.reconcile(Some(14_000_000), None);
+        assert_eq!(o.a_or(Some(14_000_000)), Some(14_000_000));
+        assert_eq!(o, OptVfo::default());
+
+        // A value the radio never confirms expires after STALE_TICKS.
+        o.set_b(7_000_000);
+        for _ in 0..=OptVfo::STALE_TICKS {
+            o.reconcile(Some(0), Some(0)); // snapshot never matches 7 MHz
+        }
+        assert_eq!(
+            o.b_or(Some(0)),
+            Some(0),
+            "stale optimistic value must expire"
+        );
+    }
+
+    /// adopt_on_change adopts only on a genuine snapshot transition.
+    #[test]
+    fn adopt_on_change_only_on_transition() {
+        let mut last = None;
+        assert_eq!(adopt_on_change(&mut last, Some(true)), Some(true)); // first read
+        assert_eq!(adopt_on_change(&mut last, Some(true)), None); // unchanged echo
+        assert_eq!(adopt_on_change(&mut last, Some(false)), Some(false)); // genuine change
+        assert_eq!(adopt_on_change(&mut last, None), None); // cleared read-back adopts nothing
+        assert_eq!(last, None); // ...but `last` still tracks it
+    }
 
     /// trace: FR-UI-24
     #[test]
