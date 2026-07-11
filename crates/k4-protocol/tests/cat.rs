@@ -253,7 +253,8 @@ fn fr_vox_and_text_message() {
     assert_eq!(send_text(&long).len(), "KY ".len() + 60 + 1);
 }
 
-/// trace: FR-PAN-CTL-01
+/// The waterfall palette (`#WFC`) and height (`#WFH`) round-trip (FR-PAN-CTL-02).
+/// trace: FR-PAN-CTL-01, FR-PAN-CTL-02
 #[test]
 fn fr_pan_ctl_01_display_family() {
     assert_eq!(set_pan_mode(2), "#DPM2;"); // dual

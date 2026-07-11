@@ -461,11 +461,15 @@ fn open_link(target: ConnectTarget) -> ConnectOutcome {
 
     match result {
         Ok(link) => Ok((link, session_cfg)),
-        // Defensively redact any secret in case an error echoes it (NFR-SEC-01).
-        Err(e) => Err(k4_config::redact(
-            &format!("connect to {desc} failed: {e}"),
-            &secret,
-        )),
+        // Distinguish the failure kind (FR-CONN-04) and redact any secret the
+        // error might echo (NFR-SEC-01).
+        Err(e) => {
+            let reason = crate::ui::connect_error_reason(e.kind());
+            Err(k4_config::redact(
+                &format!("connect to {desc} failed: {reason}"),
+                &secret,
+            ))
+        }
     }
 }
 
