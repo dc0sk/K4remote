@@ -83,6 +83,9 @@ pub struct RadioState {
     /// DATA sub-mode (`DT`/`DT$`): 0=DATA A, 1=AFSK A, 2=FSK D, 3=PSK D.
     pub data_submode: Option<u8>,
     pub sub_data_submode: Option<u8>,
+    /// Mnemonic of the most recent command the K4 rejected with `<cmd>?;`
+    /// (PRG Error Checking, FR-CAT-03). `None` = no error since the last clear.
+    pub last_error: Option<String>,
     /// Speech compression, 0–30 (`CP`).
     pub compression: Option<u8>,
     /// CW sidetone pitch, Hz (`CW`).
@@ -254,6 +257,15 @@ impl RadioState {
         let before = self.clone();
         let cmd = text.strip_suffix(';').unwrap_or(text);
 
+        // Error reply `<cmd>?;` (PRG Error Checking): the K4 echoes the offending
+        // command mnemonic followed by `?`. Record it so the UI can surface which
+        // request was rejected — the reply is self-identifying, so no separate
+        // pending-request map is needed (FR-CAT-03).
+        if let Some(mnemonic) = cmd.strip_suffix('?') {
+            self.last_error = Some(mnemonic.to_string());
+            return *self != before;
+        }
+
         // Longest-prefix-first so `MD$` is matched before `MD` (the `$` sub-RX
         // convention; see external-references R-EXT-01).
         if let Some(arg) = cmd.strip_prefix("FA") {
@@ -372,7 +384,7 @@ impl RadioState {
             let b = a.as_bytes();
             if !b.is_empty() {
                 *sub_or(&mut self.apf_on, &mut self.sub_apf_on, sub) = Some(b[0] == b'1');
-                if b.len() >= 2 {
+                if b.len() >= 2 && b[1].is_ascii_digit() {
                     *sub_or(&mut self.apf_width, &mut self.sub_apf_width, sub) =
                         Some((b[1] - b'0').min(2));
                 }
@@ -432,7 +444,7 @@ impl RadioState {
                 if let Ok(level) = std::str::from_utf8(&b[0..2]).unwrap_or("x").parse::<u8>() {
                     *sub_or(&mut self.nb_level, &mut self.sub_nb_level, sub) = Some(level);
                     *sub_or(&mut self.nb_on, &mut self.sub_nb_on, sub) = Some(b[2] == b'1');
-                    if b.len() >= 4 {
+                    if b.len() >= 4 && b[3].is_ascii_digit() {
                         self.nb_filter = Some((b[3] - b'0').min(2));
                     }
                 }
@@ -453,7 +465,7 @@ impl RadioState {
             let b = a.as_bytes();
             if b.len() >= 2 {
                 *sub_or(&mut self.preamp_on, &mut self.sub_preamp_on, sub) = Some(b[1] == b'1');
-                if !sub {
+                if !sub && b[0].is_ascii_digit() {
                     self.preamp_level = Some((b[0] - b'0').min(3));
                 }
             }

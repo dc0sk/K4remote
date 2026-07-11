@@ -1,7 +1,7 @@
 ---
 title: "Test Strategy & Traceability"
 status: Draft
-version: "1.11"
+version: "1.12"
 updated: 2026-07-07
 authors:
   - Simon Keimer (DC0SK)
@@ -310,3 +310,4 @@ FR-SES-MULTI, FR-DIAG-02, etc. — get `TC` IDs when promoted to `Approved`.)*
 | 2026-07-08 | 1.09 | DC0SK | Mode-adaptive UI Phase 5a (TX config tabs): dim the TX screen tabs the transmit mode doesn't use (KEYER↔CW, MIC↔voice, LINE↔data, TEXT↔CW/data; EQ/ANT always). Still clickable. The "SHOW ALL" escape hatch is the existing mode_aware_ui toggle (off = classic, everything shown). 143 tests. |
 | 2026-07-09 | 1.10 | DC0SK | Mode-adaptive UI Phase 5b (DATA sub-mode, FR-DATA-01): new `DT`/`DT$` CAT support — RadioState.data_submode/sub_data_submode + parse + seed; `cat::set_data_submode`; a 4-way selector (DATA A / AFSK A / FSK D / PSK D) in the DATA mode strip highlighting the active sub-mode. Completes the mode-adaptive UI phases. 144 tests. |
 | 2026-07-11 | 1.11 | DC0SK | Audit fixes #1/#6: (1) worker now applies the TX fail-safe immediately on a `session.pump()` I/O error via new `Session::note_io_error` (was swallowed → unkey waited for the 5 s timeout) — new test `nfr_rel_failsafe_io_error_unkeys_immediately` traces NFR-REL-FAILSAFE; (2) `ConnectConfig.connect_timeout` (default 10 s) + `connect_timeout()` helper used by both TCP + TLS connect — new test `fr_conn_05_connect_respects_timeout` traces FR-CONN-05. 146 tests. |
+| 2026-07-11 | 1.12 | DC0SK | Audit fixes #4/#7/#9: implement FR-CAT-03 (`<cmd>?;` error reply → `RadioState.last_error`) + tests for FR-CAT-03/04; add a deterministic no-panic fuzz (`nfr_rel_01_random_input_never_panics`) that **found and fixed 3 real parser underflow panics** (`AP`/`NB`/`PA` width/level did `b - b'0'` without an `is_ascii_digit` guard → panic on non-digit); trace the existing EM3 init assertion to FR-AUD-ENC. 149 tests. |
