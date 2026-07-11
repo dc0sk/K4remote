@@ -591,7 +591,16 @@ fn service(ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnapshot>>) {
         return;
     };
 
-    if let Ok(inbound) = session.pump() {
+    let pumped = session.pump();
+    if let Err(e) = &pumped {
+        // A hard socket error must reach the safe state immediately — not after
+        // the keep-alive timeout — so an error mid-TX unkeys now (NFR-REL-FAILSAFE).
+        ws.diag
+            .log(Level::Warn, "net", &format!("link I/O error: {e}"));
+        session.note_io_error();
+        set_status(snapshot, "link lost");
+    }
+    if let Ok(inbound) = pumped {
         // RX audio → jitter buffer (reorder) → Opus decode to PCM → speaker.
         for payload in &inbound.audio {
             if let Some(pkt) = AudioPacket::decode(payload) {

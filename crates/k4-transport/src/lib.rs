@@ -74,6 +74,27 @@ pub struct ConnectConfig {
     pub startup_macro: Option<String>,
     /// Socket read timeout.
     pub read_timeout: Duration,
+    /// TCP connect timeout — how long to wait for the socket to establish
+    /// before failing, instead of the OS default (which can be minutes).
+    pub connect_timeout: Duration,
+}
+
+/// Open a TCP connection with an explicit connect timeout (FR-CONN-05): resolve
+/// the address and try each candidate with [`TcpStream::connect_timeout`], so a
+/// dead or filtered host fails within the timeout rather than blocking on the
+/// OS default.
+///
+/// trace: FR-CONN-05
+fn connect_timeout<A: ToSocketAddrs>(addr: A, timeout: Duration) -> io::Result<TcpStream> {
+    let mut last_err = None;
+    for sa in addr.to_socket_addrs()? {
+        match TcpStream::connect_timeout(&sa, timeout) {
+            Ok(s) => return Ok(s),
+            Err(e) => last_err = Some(e),
+        }
+    }
+    Err(last_err
+        .unwrap_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "no address to connect to")))
 }
 
 impl Default for ConnectConfig {
@@ -85,6 +106,7 @@ impl Default for ConnectConfig {
             streaming_latency: 2,
             startup_macro: None,
             read_timeout: Duration::from_secs(2),
+            connect_timeout: Duration::from_secs(10),
         }
     }
 }
@@ -105,7 +127,7 @@ impl TcpRemoteTransport {
     ///
     /// trace: FR-CONN-01, FR-AUTH-01, FR-AUTH-03
     pub fn connect<A: ToSocketAddrs>(addr: A, cfg: &ConnectConfig) -> io::Result<Self> {
-        let stream = TcpStream::connect(addr)?;
+        let stream = connect_timeout(addr, cfg.connect_timeout)?;
         stream.set_read_timeout(Some(cfg.read_timeout))?;
         let mut t = Self {
             stream: Box::new(stream),
@@ -132,7 +154,7 @@ impl TcpRemoteTransport {
 
         // Do NOT set a short read timeout before the handshake — the multi-round
         // TLS-PSK handshake would time out mid-way. It is applied afterwards.
-        let tcp = TcpStream::connect(addr)?;
+        let tcp = connect_timeout(addr, cfg.connect_timeout)?;
 
         let map = |e: openssl::error::ErrorStack| io::Error::other(e.to_string());
         let mut ctx = SslContext::builder(SslMethod::tls_client()).map_err(map)?;

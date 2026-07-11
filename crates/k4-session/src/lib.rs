@@ -225,6 +225,19 @@ impl<L: CatLink, C: Clock> Session<L, C> {
         Ok(SessionEvent::Idle)
     }
 
+    /// Treat an I/O error on the link as immediate link loss: mark the session
+    /// disconnected and apply the TX fail-safe *now* (unkey + disarm), instead
+    /// of waiting for the keep-alive timeout in [`Session::tick`]. The worker
+    /// calls this when [`Session::pump`] returns an error, so a hard socket
+    /// error mid-transmit reaches the safe state within one service loop rather
+    /// than after the link-timeout window.
+    ///
+    /// trace: NFR-REL-FAILSAFE, FR-TX-SAFE-01
+    pub fn note_io_error(&mut self) {
+        self.connected = false;
+        self.fail_safe();
+    }
+
     /// Arm transmit. Transmit is impossible while disarmed (FR-TX-SAFE-03).
     pub fn arm_tx(&mut self) {
         self.tx_armed = true;
