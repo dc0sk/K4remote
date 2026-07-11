@@ -106,17 +106,24 @@ STK (need)  ──►  FR / NFR (system req)  ──►  ARC / ADR (design)  ─
                         └──────── every FR/NFR traces down to ≥1 TC ───────┘
 ```
 
-Tracing rules (enforced, see [test/test-strategy.md](test/test-strategy.md) §Coverage gate):
+Tracing rules (see [test/test-strategy.md](test/test-strategy.md) §Coverage gate):
 
-- **R1** Every `STK` is satisfied by ≥1 `FR`/`NFR`. (no orphan needs)
-- **R2** Every `FR`/`NFR` traces up to ≥1 `STK`. (no gold-plating)
-- **R3** Every `M`/`S` `FR`/`NFR` is covered by ≥1 `TC`. (no untested requirement)
-- **R4** Every `TC` names the requirement ID(s) it verifies in its test name/annotation.
-- **R5** Every implemented `FR` is realized by ≥1 named `ARC` element.
+- **R1** Every `STK` is satisfied by ≥1 `FR`/`NFR`. (no orphan needs) — *manual review*
+- **R2** Every `FR`/`NFR` traces up to ≥1 `STK`. (no gold-plating) — *manual review*
+- **R3** Every `M`/`S` `FR`/`NFR` whose verification includes **Test** is covered by ≥1
+  trace **in a test context**, or is waived with a reason in
+  [test/r3-waivers.md](test/r3-waivers.md). — **enforced by `cargo xtask`**
+- **R4** Every `trace:` ID names a declared requirement (no dangling traces). —
+  **enforced by `cargo xtask`**
+- **R5** Every implemented `FR` is realized by ≥1 named `ARC` element. — *manual review*
 
-A CI **coverage gate** (planned, `xtask trace`) parses requirement tables and test
-annotations and fails the build if R1–R5 are violated. This makes traceability a
-build-breaking invariant, not a manual spreadsheet.
+`cargo xtask` (the **coverage gate**) parses the SRS requirement table (priority +
+verification method), collects `trace:` annotations, and **fails the build** on: an
+unwaived R3 gap, a dangling trace (R4), a duplicate declared ID, or a waiver for an
+unknown requirement. It also writes [test/coverage.generated.md](test/coverage.generated.md).
+Source-comment `trace:` annotations document intent but do **not** satisfy R3 — only
+traces inside `tests/` files or `#[cfg(test)]` modules count. R1/R2/R5 remain review
+rules (not yet automated).
 
 ## 5. TDD workflow per requirement
 

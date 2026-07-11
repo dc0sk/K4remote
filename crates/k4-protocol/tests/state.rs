@@ -412,3 +412,27 @@ fn nfr_rel_01_random_input_never_panics() {
     assert!(radio.apply_cat("FA00014074000;"));
     assert_eq!(radio.vfo_a_hz, Some(14_074_000));
 }
+
+/// The state model absorbs a sustained AI-update burst without unbounded growth:
+/// the only growable field (`menu_values`, from `ME`) stays bounded by its key
+/// space no matter how many updates arrive.
+///
+/// trace: NFR-PERF-AI
+#[test]
+fn nfr_perf_ai_burst_bounded_memory() {
+    let mut s = RadioState::new();
+    for i in 0..50_000u32 {
+        s.apply_cat(&format!("FA{:011};", 14_000_000 + i % 1000));
+        s.apply_cat(&format!("SM{:02};", i % 30));
+        s.apply_cat(&format!("ME{}.{};", i % 50, i % 10)); // menu ids 0..50 only
+    }
+    assert!(
+        !s.menu_values.is_empty(),
+        "ME burst should populate menu_values"
+    );
+    assert!(
+        s.menu_values.len() <= 50,
+        "AI burst must not grow state unboundedly (got {})",
+        s.menu_values.len()
+    );
+}

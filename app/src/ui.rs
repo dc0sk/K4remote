@@ -298,6 +298,27 @@ pub fn conn_status(phase: ConnPhase) -> (&'static str, ColorRole) {
     }
 }
 
+/// Human-readable, distinguishable reason for a connection failure, keyed by the
+/// I/O error kind (FR-CONN-04) — refused / timed-out / unreachable / auth. Pure
+/// so the mapping is unit-testable; the worker uses it for the `Error` status.
+/// trace: FR-CONN-04
+pub fn connect_error_reason(kind: std::io::ErrorKind) -> &'static str {
+    use std::io::ErrorKind;
+    match kind {
+        ErrorKind::ConnectionRefused => "connection refused — no server on that host/port",
+        ErrorKind::TimedOut => "connection timed out — host unreachable or filtered",
+        ErrorKind::PermissionDenied => "authentication rejected — wrong password",
+        ErrorKind::ConnectionReset | ErrorKind::ConnectionAborted => {
+            "connection dropped by the radio"
+        }
+        ErrorKind::HostUnreachable | ErrorKind::NetworkUnreachable => {
+            "host unreachable — check the network"
+        }
+        ErrorKind::AddrNotAvailable | ErrorKind::NotFound => "host address not found",
+        _ => "connection failed",
+    }
+}
+
 /// Default window size at launch (FR-UI-21) — landscape (wider than tall). The
 /// height fits the fixed-height content (VFO band + screen slot + panels) so the
 /// window opens without a scrollbar.
@@ -1077,6 +1098,41 @@ pub fn tx_ctl_vis(c: TxCtl, m: ModeClass) -> Vis {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Each connection phase reports a distinct status label to the UI, and each
+    /// failure kind maps to a distinguishable human-readable reason.
+    ///
+    /// trace: FR-CONN-03, FR-CONN-04
+    #[test]
+    fn fr_conn_03_04_states_and_failure_reasons_are_distinct() {
+        use std::io::ErrorKind;
+        // FR-CONN-03: every phase yields its own status label.
+        let labels: Vec<&str> = [
+            ConnPhase::Disconnected,
+            ConnPhase::Connecting,
+            ConnPhase::Connected,
+        ]
+        .iter()
+        .map(|p| conn_status(*p).0)
+        .collect();
+        let unique: std::collections::BTreeSet<&&str> = labels.iter().collect();
+        assert_eq!(unique.len(), labels.len(), "each phase → distinct label");
+        // FR-CONN-04: the named failure kinds each map to their own reason.
+        let kinds = [
+            ErrorKind::ConnectionRefused,
+            ErrorKind::TimedOut,
+            ErrorKind::PermissionDenied,
+            ErrorKind::HostUnreachable,
+        ];
+        let reasons: std::collections::BTreeSet<&str> =
+            kinds.iter().map(|k| connect_error_reason(*k)).collect();
+        assert_eq!(
+            reasons.len(),
+            kinds.len(),
+            "each failure kind → distinct reason"
+        );
+        assert!(connect_error_reason(ErrorKind::PermissionDenied).contains("auth"));
+    }
 
     /// Optimistic VFO: shows the local value, drops it on confirm, and expires
     /// a never-confirmed value after the staleness window.
