@@ -2415,7 +2415,9 @@ impl App {
                     c.lo_gang = b;
                     cat::set_line_out(c.lo_left, c.lo_right, c.lo_gang)
                 }
-                RxMsg::Tab(_) => unreachable!(),
+                // Tab is handled by the early return above; this arm only exists
+                // for exhaustiveness — no-op rather than panic (audit G9).
+                RxMsg::Tab(_) => return,
             }
         };
         self.send(WorkerCmd::Cat(cmd));

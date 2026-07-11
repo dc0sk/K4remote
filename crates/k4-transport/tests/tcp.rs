@@ -1,5 +1,6 @@
 //! L2 live integration: real TCP transport against the `k4-sim` loopback server.
-//! No hardware (NFR-TEST-02). trace: FR-CONN-01, FR-CONN-02, FR-AUTH-03, FR-SES-PING
+//! Demonstrates the hardware-free integration strategy (NFR-TEST-02).
+//! trace: NFR-TEST-02, FR-CONN-01, FR-CONN-02, FR-AUTH-03, FR-SES-PING
 use k4_sim::SimServer;
 use k4_transport::{ConnectConfig, TcpRemoteTransport};
 
