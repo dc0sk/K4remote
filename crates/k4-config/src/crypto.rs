@@ -54,7 +54,10 @@ pub struct MasterKey([u8; 32]);
 
 impl Drop for MasterKey {
     fn drop(&mut self) {
-        self.0.iter_mut().for_each(|b| *b = 0);
+        // Volatile wipe — a plain `= 0` loop can be elided by the optimiser
+        // since the bytes are never read again (audit #11).
+        use zeroize::Zeroize;
+        self.0.zeroize();
     }
 }
 

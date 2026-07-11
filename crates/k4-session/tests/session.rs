@@ -1,5 +1,6 @@
-//! Session tests. trace: FR-SES-01, FR-SES-02, FR-SES-PING, FR-CAT-06, FR-CAT-07,
-//! FR-TX-SAFE-01, FR-TX-SAFE-03, FR-TX-SAFE-04
+//! Session tests.
+//! trace: FR-SES-01, FR-SES-02, FR-SES-PING, FR-CAT-06, FR-CAT-07
+//! trace: FR-TX-01, FR-TX-SAFE-01, FR-TX-SAFE-03, FR-TX-SAFE-04
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::io;
