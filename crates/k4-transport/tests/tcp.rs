@@ -20,7 +20,9 @@ fn read_until(t: &mut TcpRemoteTransport, prefix: &str) -> Option<String> {
 /// keep-alive round-trip, plus verification that the server received the init
 /// commands in the documented order.
 ///
-/// trace: FR-CONN-01, FR-AUTH-03, FR-SES-PING
+/// The init burst includes `EM3;` (default Opus-float encode mode, FR-AUD-ENC).
+///
+/// trace: FR-CONN-01, FR-AUTH-03, FR-SES-PING, FR-AUD-ENC
 #[test]
 fn l2_live_connect_handshake_get_and_ping_roundtrip() {
     let server = SimServer::start("secret", 14_074_000).unwrap();

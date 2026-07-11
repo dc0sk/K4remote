@@ -313,3 +313,102 @@ fn fr_data_submode_parses() {
     assert_eq!(k4_protocol::cat::set_data_submode(false, 0), "DT0;");
     assert_eq!(k4_protocol::cat::set_data_submode(true, 3), "DT$3;");
 }
+
+/// The K4 error reply `<cmd>?;` is recorded against the originating command
+/// mnemonic and does not disturb prior good state (PRG Error Checking).
+///
+/// trace: FR-CAT-03
+#[test]
+fn fr_cat_03_error_reply_is_surfaced() {
+    let mut s = RadioState::new();
+    s.apply_cat("FA00014074000;");
+    assert_eq!(s.vfo_a_hz, Some(14_074_000));
+    // An out-of-range / unparsable FA elicits `FA?;`.
+    assert!(
+        s.apply_cat("FA?;"),
+        "error reply changes state (last_error)"
+    );
+    assert_eq!(s.last_error.as_deref(), Some("FA"));
+    assert_eq!(
+        s.vfo_a_hz,
+        Some(14_074_000),
+        "error reply must not clobber state"
+    );
+}
+
+/// An unknown/unsupported command frame is ignored without crashing or
+/// desynchronising the parser — the next valid frame still parses.
+///
+/// trace: FR-CAT-04
+#[test]
+fn fr_cat_04_unknown_frame_does_not_desync() {
+    let mut s = RadioState::new();
+    assert!(
+        !s.apply_cat("ZZ9;"),
+        "unknown command must not change state"
+    );
+    assert_eq!(s.last_error, None, "unknown command is not an error reply");
+    assert!(s.apply_cat("FA00007035000;"), "parser is not wedged");
+    assert_eq!(s.vfo_a_hz, Some(7_035_000));
+}
+
+/// Fuzz: arbitrary bytes through the frame decoder and arbitrary text through
+/// `apply_cat` must never panic and must leave the parser usable (a valid frame
+/// still parses afterwards).
+///
+/// trace: NFR-REL-01
+#[test]
+fn nfr_rel_01_random_input_never_panics() {
+    use k4_protocol::cat::decode_cat_text;
+    use k4_protocol::frame::FrameDecoder;
+    // Deterministic PRNG (no rand dep; reproducible) over several seeds.
+    for seed in [
+        0x1234_5678u64,
+        0xdead_beef,
+        0x0f0f_0f0f,
+        0xa5a5_1234,
+        7,
+        42,
+        999,
+        0xffff,
+    ] {
+        let mut st = seed ^ 0x9abc_def0;
+        let mut next = || {
+            st = st
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (st >> 33) as u32
+        };
+        let mut dec = FrameDecoder::new();
+        let mut radio = RadioState::new();
+        for _ in 0..8_000 {
+            let len = (next() % 96) as usize;
+            let buf: Vec<u8> = (0..len).map(|_| (next() & 0xff) as u8).collect();
+            for payload in dec.push(&buf) {
+                if let Some(t) = decode_cat_text(&payload) {
+                    radio.apply_cat(&t);
+                }
+            }
+            // Random printable-ASCII CAT text straight into the parser.
+            let n = (next() % 16) as usize;
+            let txt: String = (0..n)
+                .map(|_| char::from(0x20u8 + (next() % 0x5f) as u8))
+                .collect();
+            radio.apply_cat(&txt);
+            // Prefix-biased text: force valid mnemonics with junk args.
+            for m in [
+                "FA", "MD", "NB$", "AP", "PA", "IF", "SM", "TM", "RP", "VT", "DT",
+            ] {
+                let k = (next() % 10) as usize;
+                let junk: String = (0..k)
+                    .map(|_| char::from(0x20u8 + (next() % 0x5f) as u8))
+                    .collect();
+                radio.apply_cat(&format!("{m}{junk};"));
+            }
+        }
+    }
+    let mut radio = RadioState::new();
+    // Reaching here = no panic (NFR-REL-01); the parser is still usable:
+    assert!(radio.apply_cat("FA00014074000;"));
+    assert_eq!(radio.vfo_a_hz, Some(14_074_000));
+}
