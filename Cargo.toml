@@ -13,6 +13,7 @@ members = [
     "crates/k4-sim",
     "crates/k4-config",
     "crates/k4-diag",
+    "crates/k4-kpod",
     "app",
     "xtask",
 ]

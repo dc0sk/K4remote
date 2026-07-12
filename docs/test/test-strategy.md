@@ -1,7 +1,7 @@
 ---
 title: "Test Strategy & Traceability"
 status: Draft
-version: "1.15"
+version: "1.16"
 updated: 2026-07-07
 authors:
   - Simon Keimer (DC0SK)
@@ -314,3 +314,4 @@ FR-SES-MULTI, FR-DIAG-02, etc. — get `TC` IDs when promoted to `Approved`.)*
 | 2026-07-11 | 1.13 | DC0SK | Audit fixes #5/#11: replace the `unreachable!()` in apply_rx with a defensive `return` (RxMsg::Tab is handled earlier); zeroize MasterKey on drop via the `zeroize` crate (a plain `=0` loop is elidable); un-wrap the session-test trace list + add FR-TX-01/NFR-TEST-02 traces so the gate credits the already-passing tests; update the FR-UI-08 acceptance to the segmented A/B/A+B selector (the ViewMode::next cycle was removed). 149 tests. |
 | 2026-07-11 | 1.14 | DC0SK | Audit fix #8: extract the optimistic-UI reconciliation out of the untested app tick into pure, testable `ui.rs` — `OptVfo` (set/display/reconcile with staleness expiry, FR-VFO-03/08) and `adopt_on_change` (the genuine-transition pattern for split / TX-power-range). main.rs migrated to them; new unit tests cover confirm, staleness expiry, and transition-only adoption. 151 tests. |
 | 2026-07-11 | 1.15 | DC0SK | Audit fix #3/#10: harden the traceability gate — parse the SRS Priority/Verification columns and **fail** on any unwaived Must/Should+Test requirement lacking a *test-context* trace (`tests/` or `#[cfg(test)]`; source comments no longer count), on duplicate declared IDs, and on stale waivers; emit `coverage.generated.md`. Add `r3-waivers.md` (FR-UI-07, NFR-PERF-01/CW, FR-VFO-ID) and tests for FR-CONN-03/04, FR-PAN-CTL-02, NFR-PERF-AI. Add `docs/test/hil-runs/` for L4 recording; reconcile the README gate description. 153 tests, 0 R3 gaps. |
+| 2026-07-12 | 1.16 | DC0SK | New feature: Elecraft K-Pod support (FR-KPOD-01/02/03/04). New `k4-kpod` crate — pure, dependency-free protocol per the K-Pod USB spec v1.03 (8-byte HID packets, VID 0x04D8/PID 0xF12D): `Report::parse`, `action_for` (rocker → VFO A/B/RIT-XIT, encoder ticks × step), `Tuner` (accumulates rapid ticks), command builders + `selection_leds`; unit-tested. HID device I/O behind the `hidapi` feature; worker integration behind the app's `kpod` feature polls the K-Pod and applies events. Hardware I/O (FR-KPOD-04, Ver D) validated in the HIL run. Also fixed a leftover FR-VFO-08 dash mojibake. 156 tests. |

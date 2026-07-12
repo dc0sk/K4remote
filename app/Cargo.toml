@@ -63,9 +63,12 @@ tls = ["k4-transport/tls"]
 # TLS with OpenSSL built from source (Windows/macOS packaging convenience).
 vendored-tls = ["k4-transport/vendored-tls"]
 keychain = ["k4-config/keychain"]
+# Elecraft K-Pod USB HID control surface (needs a physical K-Pod; pulls hidapi).
+kpod = ["dep:k4-kpod", "k4-kpod/hidapi"]
 
 [dependencies]
 k4-protocol = { path = "../crates/k4-protocol" }
+k4-kpod = { path = "../crates/k4-kpod", optional = true }
 # `serial` always enabled for the app (USB/serial transport selectable in the UI).
 k4-transport = { path = "../crates/k4-transport", features = ["serial"] }
 k4-session = { path = "../crates/k4-session" }
