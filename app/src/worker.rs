@@ -286,6 +286,9 @@ struct WorkerState {
     in_device: Option<String>,
     volume: f32,
     mic_gain: f32,
+    // Elecraft K-Pod USB control surface (FR-KPOD-*), when the feature is built.
+    #[cfg(feature = "kpod")]
+    kpod: kpod::KpodState,
 }
 
 /// Result handed back from the connect thread: the opened link + its session
@@ -295,6 +298,8 @@ type ConnectOutcome = Result<(AnyLink, SessionConfig), String>;
 impl WorkerState {
     fn new() -> Self {
         Self {
+            #[cfg(feature = "kpod")]
+            kpod: kpod::KpodState::new(),
             session: None,
             rx_audio: JitterBuffer::new(8),
             rx_decoder: None,
@@ -679,6 +684,10 @@ fn service(ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnapshot>>) {
         set_status(snapshot, "link lost");
     }
 
+    // Poll the K-Pod (if attached) and apply its encoder/rocker events.
+    #[cfg(feature = "kpod")]
+    ws.kpod.service(session, &mut ws.diag);
+
     let connected = session.is_connected();
     publish(snapshot, ws);
     if !connected {
@@ -859,6 +868,86 @@ fn handle_cmd(cmd: WorkerCmd, ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnaps
             if let Some(inp) = ws.audio_in.as_mut() {
                 inp.set_mic_gain(g);
             }
+        }
+    }
+}
+
+/// Elecraft K-Pod USB control-surface integration (FR-KPOD-04). Feature-gated
+/// (`kpod`): polls the HID device each service loop and applies encoder-tick /
+/// rocker events to the connected session — the rocker selects VFO A / VFO B /
+/// RIT-XIT, the encoder tunes it, and the indicator LEDs track the selection.
+/// The pure protocol + mapping (`k4_kpod`) is unit-tested; the HID I/O here is
+/// L4 hardware (see docs/test/hil-runs/).
+#[cfg(feature = "kpod")]
+mod kpod {
+    use super::Link;
+    use k4_diag::{DiagLog, Level};
+    use k4_kpod::{action_for, led_aux_packet, selection_leds, Action, Rocker, Tuner};
+
+    pub(super) struct KpodState {
+        dev: Option<k4_kpod::device::Kpod>,
+        tuner: [Tuner; 2], // [VFO A, VFO B] running tune targets
+        last_rocker: Option<Rocker>,
+        announced: bool,
+    }
+
+    impl KpodState {
+        pub(super) fn new() -> Self {
+            Self {
+                dev: k4_kpod::device::Kpod::open().ok(),
+                tuner: [Tuner::default(); 2],
+                last_rocker: None,
+                announced: false,
+            }
+        }
+
+        /// Poll once and apply one event to the connected session.
+        /// trace: FR-KPOD-04
+        pub(super) fn service(&mut self, session: &mut Link, diag: &mut DiagLog) {
+            let Some(dev) = self.dev.as_ref() else {
+                return;
+            };
+            if !self.announced {
+                self.announced = true;
+                diag.log(Level::Info, "kpod", "K-Pod connected");
+            }
+            let Ok(report) = dev.poll() else {
+                return;
+            };
+            // Reflect the current selection on the indicator LEDs when it changes.
+            if self.last_rocker != Some(report.rocker) {
+                self.last_rocker = Some(report.rocker);
+                let _ = dev.command(led_aux_packet(selection_leds(report.rocker)));
+            }
+            let step = session.state().tune_step_hz.unwrap_or(10);
+            match action_for(&report, step) {
+                Action::Tune { vfo_b, delta_hz } => {
+                    let idx = usize::from(vfo_b);
+                    let radio = if vfo_b {
+                        session.state().vfo_b_hz
+                    } else {
+                        session.state().vfo_a_hz
+                    };
+                    if let Some(new) = self.tuner[idx].tune(radio, delta_hz) {
+                        let cmd = if vfo_b {
+                            k4_protocol::cat::set_vfo_b_hz(new)
+                        } else {
+                            k4_protocol::cat::set_vfo_a_hz(new)
+                        };
+                        let _ = session.send(&cmd);
+                    }
+                }
+                Action::RitXit { delta_hz } => {
+                    let cur = i64::from(session.state().rit_offset.unwrap_or(0));
+                    let off =
+                        (cur + delta_hz).clamp(i64::from(i16::MIN), i64::from(i16::MAX)) as i16;
+                    let _ = session.send(&k4_protocol::cat::set_rit_offset(off));
+                }
+                Action::None => {}
+            }
+            // Hand back to the radio's real value once it confirms our target.
+            self.tuner[0].sync(session.state().vfo_a_hz);
+            self.tuner[1].sync(session.state().vfo_b_hz);
         }
     }
 }

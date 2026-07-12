@@ -82,9 +82,21 @@ Programmer's Reference rev. D12 (`PRG`) command mnemonics.
 | `FR-VFO-04` | switch bands — band up/down, **direct band select** by number, band-stacking recall, and transverter bands (PRG `BN`/`BN$`/`BN^`/`XV`). | STK-02 | M | T | Band-up and direct `BN00`…`BN10;` encode; band-stack `BN^;` and `XV` encode; RESP updates the band field. |
 | `FR-VFO-05` | control RIT/XIT on/off and offset, and clear them (PRG `RT`/`XT`/`RC`, `IF` flags). | STK-03 | S | T | Enabling RIT and a +50 Hz offset is reflected in state and via `IF`. |
 | `FR-VFO-06` | control split on/off (PRG `FT`). | STK-02 | S | T | `FT1;`/`FT0;` toggles split state. |
-| `FR-VFO-08` | tune by **clicking individual frequency digits** â a digit's upper half increments it, the lower half decrements it, rolling 0–9 within that digit only (no carry). | STK-03 | C | D | Clicking a digit sends `FA`/`FB` with just that place changed. |
+| `FR-VFO-08` | tune by **clicking individual frequency digits** — a digit's upper half increments it, the lower half decrements it, rolling 0–9 within that digit only (no carry). | STK-03 | C | D | Clicking a digit sends `FA`/`FB` with just that place changed. |
 | `FR-VFO-07` | copy/swap the VFOs — A→B, B→A, and swap, for frequency or full state (PRG `AB`). | STK-02 | S | T | `AB0`…`AB5;` encode the copy/swap variants. |
 | `FR-VFO-ID` | set/display the station ID text (PRG `ID`) to support identification. | STK-13 | S | T | Setting ID emits `ID<text>;`; RESP updates displayed ID. |
+
+## D2. K-Pod Accessory Control — `FR-KPOD`
+
+Support the Elecraft **K-Pod** USB control surface (K-Pod USB Application
+Interface Spec v1.03; Owner's Manual Rev F) for hands-on VFO selection + tuning.
+
+| ID | Statement | Up | Pri | Ver | Acceptance criteria |
+|---|---|---|---|---|---|
+| `FR-KPOD-01` | let the K-Pod **rocker** select which control the knob drives — left = VFO A, center = VFO B, right = RIT/XIT — mirroring the K4's behaviour. | STK-11 | S | T | `action_for` maps each rocker position to the matching VFO A / VFO B / RIT-XIT target. |
+| `FR-KPOD-02` | tune the selected control from the K-Pod **encoder**, one tuning step per tick (sign = direction), accumulating rapid ticks so none are lost to echo latency. | STK-11 | S | T | Ticks × step give the signed delta; the running `Tuner` accumulates and hands back on radio confirm. |
+| `FR-KPOD-03` | decode the 8-byte K-Pod report (encoder ticks, buttons, tap/hold, rocker) and drive the selection indicator LEDs (D1/D2/D3). | STK-11 | S | T | `Report::parse` decodes the documented fields; `selection_leds` lights D1/D2/D3 per the rocker. |
+| `FR-KPOD-04` | discover, open, and poll the physical K-Pod HID device (USB VID 0x04D8 / PID 0xF12D) and apply its events to the radio. | STK-11 | S | D | Demonstrated live: a connected K-Pod tunes the selected VFO and RIT/XIT. |
 
 ## E. Mode & Bandwidth — `FR-MODE`
 

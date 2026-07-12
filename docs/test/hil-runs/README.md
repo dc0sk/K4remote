@@ -32,6 +32,10 @@ unit-tested where possible; the wire/behaviour contract is unverified on iron).
   - `NFR-PERF-CW` CW keying jitter ≤10 ms.
   - `FR-UI-07` UI stays responsive under network/audio load.
 - **D-verified UI** — the `FR-UI-*` items whose method is Demonstration.
+- **K-Pod** (`FR-KPOD-04`, built with `--features kpod`) — enumerate the HID
+  device (VID `0x04D8` / PID `0xF12D`), confirm the report framing (feature-report
+  vs interrupt read on EP0), rocker → VFO A/B/RIT-XIT selection, encoder tuning in
+  both directions, and the indicator LEDs D1/D2/D3.
 
 ## Template
 
@@ -57,6 +61,11 @@ unit-tested where possible; the wire/behaviour contract is unverified on iron).
 | NFR-PERF-01 round-trip (ms) | <measured> | ≤150 ms budget |
 | NFR-PERF-CW keying jitter (ms) | <measured> | ≤10 ms budget |
 | FR-UI-07 responsiveness under load | pass/fail | |
+| K-Pod enumerate (VID/PID) | pass/fail | `--features kpod` |
+| K-Pod report framing | pass/fail | feature-report vs interrupt |
+| K-Pod rocker → VFO A/B/RIT | pass/fail | |
+| K-Pod encoder tuning | pass/fail | both directions |
+| K-Pod indicator LEDs | pass/fail | D1/D2/D3 |
 
 Issues found / follow-ups:
 ```
