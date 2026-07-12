@@ -168,3 +168,26 @@ fn fr_aud_dev_lvl_settings_persist() {
     assert_eq!(back.prefs.mic_gain_pct, 80);
     assert_eq!(back.prefs.theme.as_deref(), Some("contrast"));
 }
+
+/// The K-Pod control surface is an opt-in: it defaults off and round-trips
+/// through the config file (FR-KPOD-05). The runtime behaviour when no K-Pod is
+/// attached is demonstration-verified (the worker retries discovery and never
+/// blocks/panics).
+///
+/// trace: FR-KPOD-05
+#[test]
+fn fr_kpod_05_enable_is_opt_in_and_persists() {
+    assert!(
+        !Prefs::default().kpod_enabled,
+        "K-Pod must be off by default"
+    );
+    let cfg = Config {
+        prefs: Prefs {
+            kpod_enabled: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let back = Config::from_toml(&cfg.to_toml().unwrap()).unwrap();
+    assert!(back.prefs.kpod_enabled, "enabling K-Pod must persist");
+}

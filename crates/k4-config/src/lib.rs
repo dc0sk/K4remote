@@ -74,6 +74,10 @@ pub struct Prefs {
     /// Use the mode-adaptive UI (per-mode control emphasis). Default on.
     #[serde(default = "default_true")]
     pub mode_aware_ui: bool,
+    /// Enable the Elecraft K-Pod USB control surface. Default off (opt-in); the
+    /// app runs normally whether or not a K-Pod is attached.
+    #[serde(default)]
+    pub kpod_enabled: bool,
 }
 
 fn default_ptt_hotkey() -> String {
@@ -102,6 +106,7 @@ impl Default for Prefs {
             ptt_hotkey: default_ptt_hotkey(),
             ptt_toggle: true,
             mode_aware_ui: true,
+            kpod_enabled: false,
         }
     }
 }

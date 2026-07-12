@@ -217,6 +217,8 @@ struct App {
     ptt_toggle: bool,
     // Mode-adaptive UI: per-mode control emphasis (docs/concept/mode-aware-ui.md).
     mode_aware_ui: bool,
+    // Elecraft K-Pod USB control surface enabled (runtime opt-in, FR-KPOD-04).
+    kpod_enabled: bool,
     capturing_hotkey: bool,
     hotkey_down: bool,
     hotkey_keyed: bool,
@@ -482,6 +484,7 @@ enum Message {
     ToggleArm,
     TogglePttMode,
     ToggleModeAwareUi,
+    ToggleKpod,
     KeyPressed(iced::keyboard::Key, iced::keyboard::Modifiers),
     KeyReleased(iced::keyboard::Key, iced::keyboard::Modifiers),
     StartCaptureHotkey,
@@ -593,6 +596,8 @@ impl App {
         let _ = cmd_tx.send(WorkerCmd::SetInputDevice(selected_input.clone()));
         let _ = cmd_tx.send(WorkerCmd::SetVolume(volume));
         let _ = cmd_tx.send(WorkerCmd::SetMicGain(mic_gain));
+        let kpod_enabled = prefs.kpod_enabled;
+        let _ = cmd_tx.send(WorkerCmd::SetKpodEnabled(kpod_enabled));
         let theme_mode = theme_from_prefs(prefs.theme.as_deref());
         let mute_mon = prefs.mute_radio_mon;
         let ptt_hotkey = prefs.ptt_hotkey.clone();
@@ -725,6 +730,7 @@ impl App {
             ptt_hotkey,
             ptt_toggle,
             mode_aware_ui,
+            kpod_enabled,
             capturing_hotkey: false,
             hotkey_down: false,
             hotkey_keyed: false,
@@ -1007,6 +1013,7 @@ impl App {
                     ptt_hotkey: self.ptt_hotkey.clone(),
                     ptt_toggle: self.ptt_toggle,
                     mode_aware_ui: self.mode_aware_ui,
+                    kpod_enabled: self.kpod_enabled,
                     ..Default::default()
                 },
             };
@@ -1545,6 +1552,11 @@ impl App {
             }
             Message::ToggleModeAwareUi => {
                 self.mode_aware_ui = !self.mode_aware_ui;
+                self.save_config();
+            }
+            Message::ToggleKpod => {
+                self.kpod_enabled = !self.kpod_enabled;
+                self.send(WorkerCmd::SetKpodEnabled(self.kpod_enabled));
                 self.save_config();
             }
             Message::KeyPressed(key, mods) => {
@@ -5269,6 +5281,27 @@ impl App {
                         Text::new("dim/hide controls that don't apply to the current mode")
                             .size(10)
                             .color(dim),
+                    ),
+            )
+            .push(
+                Row::new()
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                    .push(small_btn(
+                        if self.kpod_enabled {
+                            "K-Pod: ON"
+                        } else {
+                            "K-Pod: OFF"
+                        },
+                        Message::ToggleKpod,
+                    ))
+                    .push(
+                        Text::new(
+                            "Elecraft K-Pod USB tuning knob — rocker picks VFO A/B/RIT, \
+                             knob tunes (safe if not connected)",
+                        )
+                        .size(10)
+                        .color(dim),
                     ),
             )
             .into()

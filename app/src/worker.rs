@@ -112,6 +112,8 @@ pub enum WorkerCmd {
     SetVolume(f32),
     /// TX mic capture gain (FR-AUD-LVL-01), 0.0–3.0.
     SetMicGain(f32),
+    /// Enable/disable the K-Pod control surface at runtime (FR-KPOD-04).
+    SetKpodEnabled(bool),
 }
 
 /// Snapshot the UI renders from (FR-UI-02/03/06). Written by the worker.
@@ -869,6 +871,12 @@ fn handle_cmd(cmd: WorkerCmd, ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnaps
                 inp.set_mic_gain(g);
             }
         }
+        WorkerCmd::SetKpodEnabled(on) => {
+            #[cfg(feature = "kpod")]
+            ws.kpod.set_enabled(on, &mut ws.diag);
+            #[cfg(not(feature = "kpod"))]
+            let _ = on;
+        }
     }
 }
 
@@ -882,39 +890,101 @@ fn handle_cmd(cmd: WorkerCmd, ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnaps
 mod kpod {
     use super::Link;
     use k4_diag::{DiagLog, Level};
-    use k4_kpod::{action_for, led_aux_packet, selection_leds, Action, Rocker, Tuner};
+    use k4_kpod::device::Kpod;
+    use k4_kpod::{action_for, led_aux_packet, selection_leds, Action, Report, Rocker, Tuner};
+
+    /// Service loops (~150 ms each) between re-open attempts when enabled but no
+    /// K-Pod is attached — so plugging one in later is picked up (~3 s).
+    const REOPEN_TICKS: u16 = 20;
 
     pub(super) struct KpodState {
-        dev: Option<k4_kpod::device::Kpod>,
+        /// Runtime opt-in from the config menu; nothing happens while `false`.
+        enabled: bool,
+        dev: Option<Kpod>,
+        /// Countdown to the next open attempt while enabled but disconnected.
+        retry: u16,
         tuner: [Tuner; 2], // [VFO A, VFO B] running tune targets
         last_rocker: Option<Rocker>,
         announced: bool,
     }
 
     impl KpodState {
+        /// Created disabled and closed; the device is opened lazily only after
+        /// the operator enables it, so a build/run with no K-Pod costs nothing.
         pub(super) fn new() -> Self {
             Self {
-                dev: k4_kpod::device::Kpod::open().ok(),
+                enabled: false,
+                dev: None,
+                retry: 0,
                 tuner: [Tuner::default(); 2],
                 last_rocker: None,
                 announced: false,
             }
         }
 
-        /// Poll once and apply one event to the connected session.
+        /// Enable/disable at runtime (config toggle). Disabling closes the device.
+        pub(super) fn set_enabled(&mut self, on: bool, diag: &mut DiagLog) {
+            if on == self.enabled {
+                return;
+            }
+            self.enabled = on;
+            self.retry = 0;
+            if on {
+                diag.log(Level::Info, "kpod", "K-Pod enabled — searching for device");
+            } else {
+                self.dev = None;
+                self.announced = false;
+                diag.log(Level::Info, "kpod", "K-Pod disabled");
+            }
+        }
+
+        /// Poll once and apply one event to the connected session. Safe to call
+        /// with no K-Pod attached: it retries opening periodically and drops the
+        /// handle on any I/O error (unplug), so the app never blocks or panics.
+        ///
         /// trace: FR-KPOD-04
         pub(super) fn service(&mut self, session: &mut Link, diag: &mut DiagLog) {
-            let Some(dev) = self.dev.as_ref() else {
+            if !self.enabled {
+                return;
+            }
+            // (Re-)open lazily; back off between attempts when none is present.
+            if self.dev.is_none() {
+                if self.retry > 0 {
+                    self.retry -= 1;
+                    return;
+                }
+                self.retry = REOPEN_TICKS;
+                self.dev = Kpod::open().ok();
+                if self.dev.is_none() {
+                    return; // still absent — try again in REOPEN_TICKS
+                }
+                self.announced = false;
+            }
+            // Take the handle out so `apply` can borrow `&mut self` freely; put it
+            // back on success, drop it on error (treat as unplug → re-open later).
+            let Some(dev) = self.dev.take() else {
                 return;
             };
             if !self.announced {
                 self.announced = true;
                 diag.log(Level::Info, "kpod", "K-Pod connected");
             }
-            let Ok(report) = dev.poll() else {
-                return;
-            };
-            // Reflect the current selection on the indicator LEDs when it changes.
+            match dev.poll() {
+                Ok(report) => {
+                    self.apply(&dev, report, session);
+                    self.dev = Some(dev);
+                }
+                Err(_) => {
+                    diag.log(Level::Warn, "kpod", "K-Pod I/O error — reconnecting");
+                    self.announced = false;
+                    self.retry = REOPEN_TICKS;
+                    // `dev` dropped here → handle closed, will re-open.
+                }
+            }
+        }
+
+        /// Apply one decoded report to the session (LEDs + tuning).
+        fn apply(&mut self, dev: &Kpod, report: Report, session: &mut Link) {
             if self.last_rocker != Some(report.rocker) {
                 self.last_rocker = Some(report.rocker);
                 let _ = dev.command(led_aux_packet(selection_leds(report.rocker)));

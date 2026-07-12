@@ -57,7 +57,7 @@ icon = [
 # Real audio capture/playback (cpal) and TLS-PSK (OpenSSL). On by default (the
 # app is a real remote panel); require libasound + libssl to build. Disable with
 # --no-default-features for a minimal build.
-default = ["audio-device", "tls", "keychain"]
+default = ["audio-device", "tls", "keychain", "kpod"]
 audio-device = ["k4-audio/device"]
 tls = ["k4-transport/tls"]
 # TLS with OpenSSL built from source (Windows/macOS packaging convenience).

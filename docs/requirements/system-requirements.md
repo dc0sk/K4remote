@@ -97,6 +97,7 @@ Interface Spec v1.03; Owner's Manual Rev F) for hands-on VFO selection + tuning.
 | `FR-KPOD-02` | tune the selected control from the K-Pod **encoder**, one tuning step per tick (sign = direction), accumulating rapid ticks so none are lost to echo latency. | STK-11 | S | T | Ticks × step give the signed delta; the running `Tuner` accumulates and hands back on radio confirm. |
 | `FR-KPOD-03` | decode the 8-byte K-Pod report (encoder ticks, buttons, tap/hold, rocker) and drive the selection indicator LEDs (D1/D2/D3). | STK-11 | S | T | `Report::parse` decodes the documented fields; `selection_leds` lights D1/D2/D3 per the rocker. |
 | `FR-KPOD-04` | discover, open, and poll the physical K-Pod HID device (USB VID 0x04D8 / PID 0xF12D) and apply its events to the radio. | STK-11 | S | D | Demonstrated live: a connected K-Pod tunes the selected VFO and RIT/XIT. |
+| `FR-KPOD-05` | expose K-Pod support as a **runtime opt-in** in the config menu (default off, persisted); the app runs normally — no crash or malfunction — whether or not a K-Pod is attached, retrying discovery while enabled and surviving unplug/replug. | STK-11 | S | T | The `kpod_enabled` pref defaults off and round-trips; enabling with no device attached leaves the app fully functional (demonstrated). |
 
 ## E. Mode & Bandwidth — `FR-MODE`
 
