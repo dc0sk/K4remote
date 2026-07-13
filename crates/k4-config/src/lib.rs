@@ -138,6 +138,13 @@ pub struct KpodPreset {
     pub desc: &'static str,
 }
 
+impl std::fmt::Display for KpodPreset {
+    /// Rendered in the editor's pick-list as `label — desc`.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} — {}", self.label, self.desc)
+    }
+}
+
 /// Built-in K-Pod macro presets shown in the config editor's pick-list
 /// (FR-KPOD-06). K4-native quick actions first, then the Elecraft sample macros.
 pub const KPOD_PRESETS: &[KpodPreset] = &[
@@ -202,11 +209,6 @@ pub const KPOD_PRESETS: &[KpodPreset] = &[
         label: "B>A",
         cat: "SWT11;SWT13;SWT11;",
         desc: "Copy VFO B to A",
-    },
-    KpodPreset {
-        label: "B=A",
-        cat: "SWT11;SWT13;SWT11;",
-        desc: "VFO B = A",
     },
     KpodPreset {
         label: "SPLIT+2",
