@@ -1,7 +1,7 @@
 ---
 title: "K4 Remote — User Manual"
 status: Draft
-version: "0.2.0"
+version: "0.2.1"
 updated: 2026-07-13
 authors:
   - Simon Keimer (DC0SK)
