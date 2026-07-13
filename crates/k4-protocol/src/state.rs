@@ -679,10 +679,13 @@ impl RadioState {
         if let Ok(hz) = arg[0..11].parse::<u64>() {
             self.vfo_a_hz = Some(hz);
         }
-        // RIT/XIT offset: sign at byte 16, magnitude (Hz) at bytes 17..21.
+        // RIT/XIT offset: sign at byte 16, magnitude (Hz) at bytes 17..21, then
+        // the RIT-on (21) and XIT-on (22) flags.
         if let Ok(mag) = arg[17..21].parse::<i16>() {
             self.rit_offset = Some(if b[16] == b'-' { -mag } else { mag });
         }
+        self.rit_on = Some(b[21] == b'1');
+        self.xit_on = Some(b[22] == b'1');
         self.transmitting = Some(b[26] == b'1');
         self.mode_a = Mode::from_md_digit(b[27]);
         self.scanning = Some(b[29] == b'1'); // `s` scan-in-progress flag

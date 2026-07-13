@@ -1027,9 +1027,17 @@ mod kpod {
                     }
                 }
                 Action::RitXit { delta_hz } => {
+                    // The offset only shifts the frequency with RIT (or XIT) on,
+                    // so enable RIT if neither is — otherwise turning the knob
+                    // silently changes a stored value with no audible effect,
+                    // which reads as "out of sync" against the radio.
+                    if session.state().rit_on != Some(true) && session.state().xit_on != Some(true)
+                    {
+                        let _ = session.send("RT1;");
+                        session.apply_local("RT1;");
+                    }
                     let cur = i64::from(session.state().rit_offset.unwrap_or(0));
-                    let off =
-                        (cur + delta_hz).clamp(i64::from(i16::MIN), i64::from(i16::MAX)) as i16;
+                    let off = (cur + delta_hz).clamp(-9999, 9999) as i16;
                     let cmd = k4_protocol::cat::set_rit_offset(off);
                     let _ = session.send(&cmd);
                     session.apply_local(&cmd);
