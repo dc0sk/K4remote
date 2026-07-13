@@ -2,13 +2,16 @@
 # binaries per platform and publish a GitHub Release with:
 #   - Debian .deb  (x86_64 + arm64/Raspberry Pi OS)  via cargo-deb
 #   - .tar.gz binaries (Linux x86_64/arm64, macOS)
-#   - .zip binary (Windows x86_64)
+#   - .zip binary + setup.exe installer (Windows x86_64, via Inno Setup)
 # The Arch PKGBUILD (packaging/PKGBUILD) is published separately to the AUR.
 name: Release
 
 on:
   push:
     tags: ["v*"]
+  # Manual dry-run: builds the artifacts (incl. the Windows installer) and
+  # uploads them as workflow artifacts, but does not publish a Release.
+  workflow_dispatch:
 
 permissions:
   contents: write # create the release + upload assets
@@ -57,12 +60,33 @@ jobs:
       - name: Archive binary (Windows)
         if: runner.os == 'Windows'
         run: Compress-Archive -Path target/release/k4remote.exe -DestinationPath "k4remote-${{ matrix.name }}.zip"
+      - name: Installer (Windows / Inno Setup)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          $ver = "${{ github.ref_name }}" -replace '^v', ''
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$ver" packaging\windows\k4remote.iss
+          if (-not (Test-Path "k4remote-windows-x86_64-setup.exe")) { throw "installer not produced" }
 
       - name: Publish to the release
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: |
             k4remote-${{ matrix.name }}.deb
             k4remote-${{ matrix.name }}.tar.gz
             k4remote-${{ matrix.name }}.zip
+            k4remote-windows-x86_64-setup.exe
           fail_on_unmatched_files: false
+      - name: Upload artifacts (dry-run)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: k4remote-${{ matrix.name }}
+          path: |
+            k4remote-${{ matrix.name }}.deb
+            k4remote-${{ matrix.name }}.tar.gz
+            k4remote-${{ matrix.name }}.zip
+            k4remote-windows-x86_64-setup.exe
+          if-no-files-found: ignore
