@@ -54,6 +54,14 @@ fn fr_cfg_03_no_secret_in_serialized_config() {
             use_tls: true,
             remember: false,
         }),
+        // Empty the K-Pod macro table for this check: macro text is operator
+        // content that can legitimately contain e.g. the "PSK" mode name, which
+        // would trip the `psk` substring guard below — this test is about the
+        // connection profile never carrying secret material, not user macros.
+        prefs: Prefs {
+            kpod_buttons: Vec::new(),
+            ..Default::default()
+        },
         ..Default::default()
     };
     let toml = cfg.to_toml().unwrap().to_lowercase();
@@ -190,4 +198,52 @@ fn fr_kpod_05_enable_is_opt_in_and_persists() {
     };
     let back = Config::from_toml(&cfg.to_toml().unwrap()).unwrap();
     assert!(back.prefs.kpod_enabled, "enabling K-Pod must persist");
+}
+
+/// The K-Pod function-switch table has 16 slots seeded from the Elecraft sample
+/// macros, and a customized table round-trips through the config file
+/// (FR-KPOD-06).
+///
+/// trace: FR-KPOD-06
+#[test]
+fn fr_kpod_06_button_macros_seed_and_persist() {
+    use k4_config::{default_kpod_buttons, KpodButton, KPOD_SLOT_COUNT};
+
+    // Seed defaults are the full 16 slots, with the leading ones populated from
+    // the Elecraft samples (non-empty CAT).
+    let seed = default_kpod_buttons();
+    assert_eq!(seed.len(), KPOD_SLOT_COUNT, "16 slots");
+    assert!(
+        seed.iter().any(|b| !b.cat.is_empty()),
+        "seed must carry sample macros"
+    );
+    assert!(
+        seed.iter()
+            .all(|b| b.cat.is_empty() || b.cat.ends_with(';')),
+        "every assigned macro is a `;`-terminated CAT string"
+    );
+    assert_eq!(
+        Prefs::default().kpod_buttons,
+        seed,
+        "default Prefs uses the seed"
+    );
+
+    // A user edit to a slot survives a serialize/parse round-trip.
+    let mut buttons = seed.clone();
+    buttons[3] = KpodButton {
+        label: "My CW".into(),
+        cat: "MD3;BW0040;".into(),
+    };
+    let cfg = Config {
+        prefs: Prefs {
+            kpod_buttons: buttons.clone(),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let back = Config::from_toml(&cfg.to_toml().unwrap()).unwrap();
+    assert_eq!(
+        back.prefs.kpod_buttons, buttons,
+        "edited table must persist"
+    );
 }

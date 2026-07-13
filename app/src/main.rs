@@ -19,7 +19,7 @@ use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use k4_config::{Config, Profile, SecretStore};
+use k4_config::{Config, KpodButton, Profile, SecretStore};
 
 use std::cell::Cell;
 
@@ -231,6 +231,10 @@ struct App {
     mode_aware_ui: bool,
     // Elecraft K-Pod USB control surface enabled (runtime opt-in, FR-KPOD-04).
     kpod_enabled: bool,
+    // K-Pod function-switch macro table: 16 slots (F1–F8 × tap/hold), each a CAT
+    // string sent to the K4 on press. Edited in Settings, seeded from Elecraft
+    // samples (FR-KPOD-06).
+    kpod_buttons: Vec<KpodButton>,
     capturing_hotkey: bool,
     hotkey_down: bool,
     hotkey_keyed: bool,
@@ -497,6 +501,12 @@ enum Message {
     TogglePttMode,
     ToggleModeAwareUi,
     ToggleKpod,
+    /// Edit a K-Pod slot's free-form CAT macro string (slot index, text).
+    KpodButtonCatChanged(usize, String),
+    /// Apply a preset (by label) to a K-Pod slot, filling its label + CAT.
+    KpodButtonPreset(usize, String),
+    /// Reset the whole K-Pod macro table to the Elecraft sample seed.
+    KpodButtonsReset,
     KeyPressed(iced::keyboard::Key, iced::keyboard::Modifiers),
     KeyReleased(iced::keyboard::Key, iced::keyboard::Modifiers),
     StartCaptureHotkey,
@@ -611,6 +621,10 @@ impl App {
         let _ = cmd_tx.send(WorkerCmd::SetMicGain(mic_gain));
         let kpod_enabled = prefs.kpod_enabled;
         let _ = cmd_tx.send(WorkerCmd::SetKpodEnabled(kpod_enabled));
+        let kpod_buttons = prefs.kpod_buttons.clone();
+        let _ = cmd_tx.send(WorkerCmd::SetKpodButtons(
+            kpod_buttons.iter().map(|b| b.cat.clone()).collect(),
+        ));
         let theme_mode = theme_from_prefs(prefs.theme.as_deref());
         let mute_mon = prefs.mute_radio_mon;
         let ptt_hotkey = prefs.ptt_hotkey.clone();
@@ -749,6 +763,7 @@ impl App {
             ptt_toggle,
             mode_aware_ui,
             kpod_enabled,
+            kpod_buttons,
             capturing_hotkey: false,
             hotkey_down: false,
             hotkey_keyed: false,
@@ -1007,6 +1022,15 @@ impl App {
         }
     }
 
+    /// Persist the K-Pod macro table and push the CAT strings to the worker
+    /// (FR-KPOD-06), so edits take effect on the next switch press immediately.
+    fn push_kpod_buttons(&mut self) {
+        self.send(WorkerCmd::SetKpodButtons(
+            self.kpod_buttons.iter().map(|b| b.cat.clone()).collect(),
+        ));
+        self.save_config();
+    }
+
     fn save_config(&self) {
         let Ok(port) = self.port.parse::<u16>() else {
             return;
@@ -1032,6 +1056,7 @@ impl App {
                     ptt_toggle: self.ptt_toggle,
                     mode_aware_ui: self.mode_aware_ui,
                     kpod_enabled: self.kpod_enabled,
+                    kpod_buttons: self.kpod_buttons.clone(),
                     ..Default::default()
                 },
             };
@@ -1594,6 +1619,26 @@ impl App {
                 self.kpod_enabled = !self.kpod_enabled;
                 self.send(WorkerCmd::SetKpodEnabled(self.kpod_enabled));
                 self.save_config();
+            }
+            Message::KpodButtonCatChanged(idx, cat) => {
+                if let Some(slot) = self.kpod_buttons.get_mut(idx) {
+                    slot.cat = cat;
+                    self.push_kpod_buttons();
+                }
+            }
+            Message::KpodButtonPreset(idx, label) => {
+                if let (Some(slot), Some(preset)) = (
+                    self.kpod_buttons.get_mut(idx),
+                    k4_config::KPOD_PRESETS.iter().find(|p| p.label == label),
+                ) {
+                    slot.label = preset.label.to_string();
+                    slot.cat = preset.cat.to_string();
+                    self.push_kpod_buttons();
+                }
+            }
+            Message::KpodButtonsReset => {
+                self.kpod_buttons = k4_config::default_kpod_buttons();
+                self.push_kpod_buttons();
             }
             Message::KeyPressed(key, mods) => {
                 if self.capturing_hotkey {
@@ -5038,6 +5083,8 @@ impl App {
             .push(self.audio_section_view())
             .push(Text::new("K4 settings backup").size(12).color(dim))
             .push(self.backup_section_view())
+            .push(Text::new("K-Pod function switches").size(12).color(dim))
+            .push(self.kpod_buttons_view())
             .push(
                 Container::new(
                     Row::new()
@@ -5419,6 +5466,57 @@ impl App {
                     ),
             )
             .into()
+    }
+
+    /// Settings → K-Pod function-switch macros (FR-KPOD-06): 16 rows (F1–F8 ×
+    /// tap/hold), each a preset picker that fills the slot plus a free-form CAT
+    /// field, with a reset-to-Elecraft-samples action. The app sends the slot's
+    /// CAT string to the K4 when that switch is pressed.
+    fn kpod_buttons_view(&self) -> Element<'_, Message> {
+        let dim = role_color(ui::ColorRole::Inactive);
+        let preset_labels: Vec<String> = k4_config::KPOD_PRESETS
+            .iter()
+            .map(|p| p.label.to_string())
+            .collect();
+        let mut col = Column::new().spacing(4).push(
+            Row::new()
+                .spacing(8)
+                .align_y(Alignment::Center)
+                .push(
+                    Text::new("Tap/hold F1–F8 send a CAT macro to the K4")
+                        .size(10)
+                        .color(dim),
+                )
+                .push(horizontal_space())
+                .push(small_btn("Reset to samples", Message::KpodButtonsReset)),
+        );
+        for (idx, slot) in self.kpod_buttons.iter().enumerate() {
+            let row = Row::new()
+                .spacing(6)
+                .align_y(Alignment::Center)
+                .push(
+                    Text::new(k4_config::kpod_slot_name(idx))
+                        .size(11)
+                        .color(dim)
+                        .width(Length::Fixed(52.0)),
+                )
+                .push(
+                    pick_list(preset_labels.clone(), None::<String>, move |label| {
+                        Message::KpodButtonPreset(idx, label)
+                    })
+                    .placeholder("preset")
+                    .text_size(11)
+                    .width(Length::Fixed(90.0)),
+                )
+                .push(
+                    TextInput::new("CAT e.g. MD3;BW0040;", &slot.cat)
+                        .on_input(move |t| Message::KpodButtonCatChanged(idx, t))
+                        .size(11)
+                        .width(Length::Fill),
+                );
+            col = col.push(row);
+        }
+        col.into()
     }
 
     /// The About overlay (FR-UI-18): author, license, and project URL, each on
