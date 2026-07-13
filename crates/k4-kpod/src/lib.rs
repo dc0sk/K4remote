@@ -138,6 +138,25 @@ pub fn selection_leds(rocker: Rocker) -> u8 {
     }
 }
 
+/// Number of assignable function-switch slots: F1–F8 each with a tap and a hold
+/// action.
+pub const SLOT_COUNT: usize = 16;
+
+/// Map a pressed function switch (`button` 1–8, `hold` = held ≥ ½ s) to its
+/// assignment slot index (0–15), or `None` for button 0 (no switch). The order
+/// is `(button-1)*2 + hold` — F1 tap, F1 hold, F2 tap, …, F8 hold — the same
+/// order the config editor and `Prefs::kpod_buttons` use, so the worker can
+/// index the macro table directly (FR-KPOD-06).
+///
+/// trace: FR-KPOD-06
+pub fn slot_index(button: u8, hold: bool) -> Option<usize> {
+    if (1..=8).contains(&button) {
+        Some((button as usize - 1) * 2 + hold as usize)
+    } else {
+        None
+    }
+}
+
 /// What a K-Pod event should do to the radio, given the tuning step per tick.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
@@ -288,6 +307,30 @@ mod tests {
         assert_eq!(selection_leds(Rocker::VfoA), 1 << 3);
         assert_eq!(selection_leds(Rocker::VfoB), 1 << 4);
         assert_eq!(selection_leds(Rocker::RitXit), 1 << 5);
+    }
+
+    /// The 16 function-switch slots map from (button, tap/hold) in the canonical
+    /// order F1 tap, F1 hold, … F8 hold; button 0 (no switch) has no slot.
+    ///
+    /// trace: FR-KPOD-06
+    #[test]
+    fn fr_kpod_slot_index() {
+        assert_eq!(slot_index(0, false), None); // no switch pressed
+        assert_eq!(slot_index(1, false), Some(0)); // F1 tap
+        assert_eq!(slot_index(1, true), Some(1)); // F1 hold
+        assert_eq!(slot_index(2, false), Some(2)); // F2 tap
+        assert_eq!(slot_index(8, true), Some(SLOT_COUNT - 1)); // F8 hold
+        assert_eq!(slot_index(9, false), None); // out of range
+                                                // Every valid switch maps to a distinct in-range slot.
+        let mut seen = std::collections::HashSet::new();
+        for b in 1..=8u8 {
+            for hold in [false, true] {
+                let i = slot_index(b, hold).unwrap();
+                assert!(i < SLOT_COUNT);
+                assert!(seen.insert(i), "slots must be unique");
+            }
+        }
+        assert_eq!(seen.len(), SLOT_COUNT);
     }
 
     /// The running tuner accumulates rapid ticks and hands back on confirm.

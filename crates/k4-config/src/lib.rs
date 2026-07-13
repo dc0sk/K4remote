@@ -78,6 +78,209 @@ pub struct Prefs {
     /// app runs normally whether or not a K-Pod is attached.
     #[serde(default)]
     pub kpod_enabled: bool,
+    /// K-Pod function-switch assignments: 16 slots, F1–F8 each with a tap and a
+    /// hold action (index = `(button-1)*2 + hold`; see `k4_kpod::slot_index`).
+    /// Each slot's `cat` is sent to the K4 on that switch press. Seeded from the
+    /// built-in Elecraft sample macros (FR-KPOD-06).
+    #[serde(default = "default_kpod_buttons")]
+    pub kpod_buttons: Vec<KpodButton>,
+}
+
+/// One K-Pod function-switch assignment (FR-KPOD-06): a short display `label`
+/// (K4 convention ≤ 7 chars) and the `cat` macro — a semicolon-separated K4 CAT
+/// command string sent to the radio when the switch is pressed. An empty `cat`
+/// means the slot is unassigned (no-op).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KpodButton {
+    /// Short display label (≤ 7 chars by K4 convention).
+    #[serde(default)]
+    pub label: String,
+    /// CAT macro string sent on press (empty = unassigned).
+    #[serde(default)]
+    pub cat: String,
+}
+
+impl KpodButton {
+    /// An empty (unassigned) slot.
+    pub fn empty() -> Self {
+        Self {
+            label: String::new(),
+            cat: String::new(),
+        }
+    }
+}
+
+/// Number of assignable K-Pod slots: F1–F8 × {tap, hold}. The slot **order**
+/// (index `(button-1)*2 + hold` — F1 tap, F1 hold, F2 tap, …) is defined by
+/// `k4_kpod::slot_index`, which the worker uses to look up the pressed switch;
+/// [`Prefs::kpod_buttons`] is stored in that same order.
+pub const KPOD_SLOT_COUNT: usize = 16;
+
+/// Human name for slot `index` (0–15), e.g. `"F1 tap"`, `"F8 hold"`.
+pub fn kpod_slot_name(index: usize) -> String {
+    let f = index / 2 + 1;
+    let action = if index.is_multiple_of(2) {
+        "tap"
+    } else {
+        "hold"
+    };
+    format!("F{f} {action}")
+}
+
+/// A selectable K-Pod macro preset for the config editor's pick-list: a short
+/// `label`, the `cat` command string, and a one-line `desc`. Mix of confident
+/// K4-native quick actions and the Elecraft Owner's-Manual sample macros
+/// (K3-compatible `SWT`/`SWH` codes the K4 accepts).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KpodPreset {
+    pub label: &'static str,
+    pub cat: &'static str,
+    pub desc: &'static str,
+}
+
+/// Built-in K-Pod macro presets shown in the config editor's pick-list
+/// (FR-KPOD-06). K4-native quick actions first, then the Elecraft sample macros.
+pub const KPOD_PRESETS: &[KpodPreset] = &[
+    // --- K4-native quick actions (confident CAT) ---
+    KpodPreset {
+        label: "RIT Clr",
+        cat: "RC;",
+        desc: "Clear RIT/XIT offset",
+    },
+    KpodPreset {
+        label: "Split+",
+        cat: "FT1;",
+        desc: "Split on (TX on VFO B)",
+    },
+    KpodPreset {
+        label: "Split-",
+        cat: "FT0;",
+        desc: "Split off (TX on VFO A)",
+    },
+    KpodPreset {
+        label: "RIT On",
+        cat: "RT1;",
+        desc: "RIT on",
+    },
+    KpodPreset {
+        label: "RIT Off",
+        cat: "RT0;",
+        desc: "RIT off",
+    },
+    KpodPreset {
+        label: "XIT On",
+        cat: "XT1;",
+        desc: "XIT on",
+    },
+    KpodPreset {
+        label: "XIT Off",
+        cat: "XT0;",
+        desc: "XIT off",
+    },
+    KpodPreset {
+        label: "CW",
+        cat: "MD3;",
+        desc: "Mode CW",
+    },
+    KpodPreset {
+        label: "LSB",
+        cat: "MD1;",
+        desc: "Mode LSB",
+    },
+    KpodPreset {
+        label: "USB",
+        cat: "MD2;",
+        desc: "Mode USB",
+    },
+    KpodPreset {
+        label: "DATA",
+        cat: "MD6;",
+        desc: "Mode DATA A",
+    },
+    // --- Elecraft Owner's-Manual sample macros ---
+    KpodPreset {
+        label: "B>A",
+        cat: "SWT11;SWT13;SWT11;",
+        desc: "Copy VFO B to A",
+    },
+    KpodPreset {
+        label: "B=A",
+        cat: "SWT11;SWT13;SWT11;",
+        desc: "VFO B = A",
+    },
+    KpodPreset {
+        label: "SPLIT+2",
+        cat: "SWT13;SWT13;FT1;UPB5;RT0;XT0;LK1;",
+        desc: "Split, TX +2 kHz",
+    },
+    KpodPreset {
+        label: "RUN",
+        cat: "SWT13;SWT13;FT0;RT1;XT0;RC;SWH58;",
+        desc: "Run: simplex, RIT on, clear",
+    },
+    KpodPreset {
+        label: "CW UP2",
+        cat: "MD3;SWT13;SWT13;FT1;UPB5;RT0;XT0;LK1;SWT58;",
+        desc: "CW split TX +2 kHz",
+    },
+    KpodPreset {
+        label: "CW UP5",
+        cat: "MD3;SWT13;SWT13;FT1;UPB7;RT0;XT0;LK1;SWT58;",
+        desc: "CW split TX +5 kHz",
+    },
+    KpodPreset {
+        label: "SSB UP5",
+        cat: "SWT13;SWT13;FT1;UPB7;RT0;XT0;LK1;SWT58;BW0210;",
+        desc: "SSB split TX +5 kHz",
+    },
+    KpodPreset {
+        label: "RX UP2",
+        cat: "SWT13;SWT13;FT1;UP5;RT0;XT0;LK$1;",
+        desc: "Sub-RX split +2 kHz",
+    },
+    KpodPreset {
+        label: "RX UP5",
+        cat: "SWT13;SWT13;FT1;UP7;RT0;XT0;LK$1;",
+        desc: "Sub-RX split +5 kHz",
+    },
+    KpodPreset {
+        label: "RTTY",
+        cat: "MD6;DT1;SWH29;",
+        desc: "DATA A, RTTY, dual passband",
+    },
+    KpodPreset {
+        label: "PSK",
+        cat: "MD6;DT3;IS 0600;BW0025;SWT49;RT1;",
+        desc: "DATA A, PSK D, 250 Hz",
+    },
+    KpodPreset {
+        label: "Cleanup",
+        cat: "FT0;RT0;XT0;LN0;SQ000;SWT13;SWT13;SWH58;NB0;NB$0;SB0;",
+        desc: "Reset TX/RX state",
+    },
+    KpodPreset {
+        label: "Divrsty",
+        cat: "FT0;LK0;LK$0;SB1;DV1;RC;",
+        desc: "Diversity RX on",
+    },
+];
+
+/// The default 16-slot K-Pod assignment table, seeded from the Elecraft sample
+/// macros (FR-KPOD-06). The first slots get the manual's samples in order; the
+/// rest start empty (editable in the config menu).
+pub fn default_kpod_buttons() -> Vec<KpodButton> {
+    // Seed from the Elecraft sample macros (skip the K4-native quick-actions,
+    // which start at the head of KPOD_PRESETS) so the table matches the manual.
+    let samples = KPOD_PRESETS.iter().skip(11);
+    let mut slots: Vec<KpodButton> = samples
+        .take(KPOD_SLOT_COUNT)
+        .map(|p| KpodButton {
+            label: p.label.to_string(),
+            cat: p.cat.to_string(),
+        })
+        .collect();
+    slots.resize(KPOD_SLOT_COUNT, KpodButton::empty());
+    slots
 }
 
 fn default_ptt_hotkey() -> String {
@@ -107,6 +310,7 @@ impl Default for Prefs {
             ptt_toggle: true,
             mode_aware_ui: true,
             kpod_enabled: false,
+            kpod_buttons: default_kpod_buttons(),
         }
     }
 }

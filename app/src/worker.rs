@@ -118,6 +118,9 @@ pub enum WorkerCmd {
     SetMicGain(f32),
     /// Enable/disable the K-Pod control surface at runtime (FR-KPOD-04).
     SetKpodEnabled(bool),
+    /// Replace the K-Pod function-switch macro table (16 slots, CAT strings;
+    /// FR-KPOD-06).
+    SetKpodButtons(Vec<String>),
 }
 
 /// Snapshot the UI renders from (FR-UI-02/03/06). Written by the worker.
@@ -889,6 +892,12 @@ fn handle_cmd(cmd: WorkerCmd, ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnaps
             #[cfg(not(feature = "kpod"))]
             let _ = on;
         }
+        WorkerCmd::SetKpodButtons(cats) => {
+            #[cfg(feature = "kpod")]
+            ws.kpod.set_buttons(cats);
+            #[cfg(not(feature = "kpod"))]
+            let _ = cats;
+        }
     }
 }
 
@@ -926,6 +935,14 @@ mod kpod {
         tuner: [Tuner; 2], // [VFO A, VFO B] running tune targets
         /// Last TX-VFO we commanded from the rocker (via split): Some(true)=B.
         tx_vfo: Option<bool>,
+        /// Per-slot CAT macro strings (F1–F8 × tap/hold; see `k4_kpod::slot_index`)
+        /// sent to the K4 on a switch press (FR-KPOD-06). Empty = unassigned.
+        buttons: Vec<String>,
+        /// Last (button, hold) we saw, to fire each switch press once. The K-Pod
+        /// reports discrete resolved events (`cmd == 'u'`), so a change here marks
+        /// a new press; repeated identical reports (e.g. a held switch while the
+        /// knob turns) don't re-fire.
+        last_press: (u8, bool),
         _handle: thread::JoinHandle<()>,
     }
 
@@ -944,8 +961,17 @@ mod kpod {
                 rx,
                 tuner: [Tuner::default(); 2],
                 tx_vfo: None,
+                buttons: vec![String::new(); k4_kpod::SLOT_COUNT],
+                last_press: (0, false),
                 _handle: handle,
             }
+        }
+
+        /// Replace the function-switch macro table (from the config editor,
+        /// FR-KPOD-06). Length is normalized to `SLOT_COUNT`.
+        pub(super) fn set_buttons(&mut self, mut cats: Vec<String>) {
+            cats.resize(k4_kpod::SLOT_COUNT, String::new());
+            self.buttons = cats;
         }
 
         /// Enable/disable at runtime (config toggle); the poll thread reacts.
@@ -991,10 +1017,51 @@ mod kpod {
                                     s.apply_local(cmd);
                                 }
                             }
+                            self.fire_button(&report, s, diag);
                             self.apply(report, s);
                         }
                         // No session → ignore (nothing to tune/switch yet).
                     }
+                }
+            }
+        }
+
+        /// Run a function-switch macro when a switch is pressed (FR-KPOD-06):
+        /// look up the (button, tap/hold) slot's CAT string and send it to the
+        /// K4. Fires once per press — the K-Pod reports discrete resolved events,
+        /// so we only act when `(button, hold)` changes (a held switch reported
+        /// repeatedly, e.g. while the knob turns, does not re-fire).
+        fn fire_button(&mut self, report: &Report, session: &mut Link, diag: &mut DiagLog) {
+            let press = (report.button, report.hold);
+            let changed = press != self.last_press;
+            self.last_press = press;
+            if report.button == 0 || !changed {
+                return;
+            }
+            let Some(idx) = k4_kpod::slot_index(report.button, report.hold) else {
+                return;
+            };
+            let cat = match self.buttons.get(idx) {
+                Some(c) if !c.is_empty() => c.clone(),
+                _ => return,
+            };
+            diag.log(
+                Level::Info,
+                "kpod",
+                &format!(
+                    "F{} {} → {cat}",
+                    report.button,
+                    if report.hold { "hold" } else { "tap" }
+                ),
+            );
+            // The K4 parses concatenated `;`-terminated commands, so send the
+            // whole macro in one shot; fold each command into local state
+            // (apply_cat handles one at a time) for optimistic display.
+            let _ = session.send(&cat);
+            for part in cat.split_inclusive(';') {
+                let cmd = part.trim();
+                if !cmd.is_empty() {
+                    session.apply_local(cmd);
                 }
             }
         }
