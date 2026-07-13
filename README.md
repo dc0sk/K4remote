@@ -9,13 +9,14 @@ stakeholder needs down to individual tests, enforced by a build gate.
 
 ![K4 Remote main window](docs/screenshots/main.png)
 
-> **Status:** v0.2.0 — feature-complete; hardware bring-up in progress.
+> **Status:** v0.2.1 — feature-complete; hardware bring-up in progress.
 > 161 hardware-free tests pass · clippy/fmt clean · traceability gate green · CI green on Linux/macOS/Windows.
-> VFO tuning, RIT/XIT, split, and the K-Pod are validated against a real K4; audio / PTT / spectrum / serial
-> bring-up is ongoing.
+> VFO tuning, RIT/XIT, split, and the K-Pod (incl. F1–F8 tap/hold macros) are validated against a real K4;
+> audio / PTT / spectrum / serial bring-up is ongoing.
 >
-> **New in 0.2.0:** Elecraft K-Pod support (rocker + encoder tuning, and configurable F1–F8 tap/hold
-> macros), a filterable diagnostics console, and RIT/XIT sync fixes.
+> **In 0.2.x:** Elecraft K-Pod support (rocker + encoder tuning, and configurable F1–F8 tap/hold
+> macros), a filterable + selectable diagnostics console, and RIT/XIT sync fixes. 0.2.1 fixes K-Pod
+> tap/hold discrimination and a macro re-fire while tuning with a switch held.
 >
 > 📖 **New here? Start with the [User Manual](docs/user-manual.md).**
 >
