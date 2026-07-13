@@ -3,7 +3,8 @@
 # (Linux x86_64, Linux arm64 / Raspberry Pi OS, macOS, Windows).
 #
 # System libraries needed by the default features: libopus (audio codec),
-# ALSA (Linux audio), OpenSSL (TLS-PSK), libudev (serial), libsecret (keychain).
+# ALSA (Linux audio), OpenSSL (TLS-PSK), libudev (serial), libsecret + libdbus
+# (keychain — the keyring sync-secret-service backend links libdbus via pkg-config).
 # macOS/Windows build OpenSSL from source via the `vendored-tls` feature.
 name: CI
 
@@ -31,7 +32,7 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - name: System libraries
-        run: sudo apt-get update && sudo apt-get install -y libopus-dev libasound2-dev libssl-dev libudev-dev libsecret-1-dev pkg-config
+        run: sudo apt-get update && sudo apt-get install -y libopus-dev libasound2-dev libssl-dev libudev-dev libsecret-1-dev libdbus-1-dev pkg-config
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
@@ -52,7 +53,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: System libraries (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libopus-dev libasound2-dev libssl-dev libudev-dev libsecret-1-dev pkg-config
+        run: sudo apt-get update && sudo apt-get install -y libopus-dev libasound2-dev libssl-dev libudev-dev libsecret-1-dev libdbus-1-dev pkg-config
       - name: System libraries (macOS)
         if: runner.os == 'macOS'
         run: brew install opus pkg-config
