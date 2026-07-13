@@ -172,6 +172,9 @@ struct App {
     // actually changes (a genuine transition), so a static/absent read-back never
     // snaps the optimistic highlight back.
     last_split: Option<bool>,
+    // Last K4 panadapter mode seen (#DPM), so the A/B/A+B view follows it on a
+    // genuine change without fighting a manual selection.
+    last_pan_mode: Option<u8>,
     // Optimistic VFO frequency after a digit click, so the readout updates
     // instantly instead of waiting for the radio's echo (FR-VFO-08). Cleared
     // once the radio confirms, or after a short staleness timeout (see ui::OptVfo).
@@ -706,6 +709,7 @@ impl App {
             bw_hz: 2800,
             tx_vfo_b: false,
             last_split: None,
+            last_pan_mode: None,
             opt_vfo: ui::OptVfo::default(),
             last_pwr_range: None,
             af_gain: 30,
@@ -1230,6 +1234,24 @@ impl App {
                     } else {
                         self.opt_vfo.set_a(new_freq);
                         self.send(WorkerCmd::SetFreqA(new_freq));
+                    }
+                }
+                // Make the clicked digit the tuning cursor: set the K4 tune rate
+                // (VT) to its place value (1 Hz…100 kHz), keeping the K4, the
+                // K-Pod step, and the underline indicator in sync (FR-VFO-03).
+                let index = place.ilog10();
+                if index <= 5 {
+                    let mode = if is_b {
+                        self.ui.radio.mode_b
+                    } else {
+                        self.ui.radio.mode_a
+                    };
+                    if let Some(m) = mode.map(md_digit) {
+                        self.send(WorkerCmd::CatLocal(k4_protocol::cat::set_tune_step(
+                            is_b,
+                            index as u8,
+                            m,
+                        )));
                     }
                 }
             }
@@ -1876,6 +1898,22 @@ impl App {
                 if let Some(s) = ui::adopt_on_change(&mut self.last_split, self.ui.split) {
                     self.tx_vfo_b = s;
                 }
+                // Keep the A / B / A+B view in sync with the K4's panadapter mode
+                // (#DPM) on a genuine change — including the initial read-back after
+                // connect (which lands after the one-shot seed), so the app shows
+                // the receiver(s) the radio is actually streaming.
+                if let Some(pm) =
+                    ui::adopt_on_change(&mut self.last_pan_mode, self.ui.radio.pan_mode)
+                {
+                    self.view_mode = match pm {
+                        1 => ui::ViewMode::SingleB,
+                        2 => ui::ViewMode::Dual,
+                        _ => ui::ViewMode::SingleA,
+                    };
+                    if self.view_mode != ui::ViewMode::Dual {
+                        self.active_rx_b = self.view_mode == ui::ViewMode::SingleB;
+                    }
+                }
                 // Adopt the radio's TX power range on a genuine change only, so it
                 // reflects the real state (incl. changes made at the K4) without a
                 // stale echo snapping a just-clicked range button back.
@@ -2018,6 +2056,13 @@ impl App {
                 .color(color)
                 .into();
         };
+        // The active tuning digit = the K4's tune step (VT) for this VFO. Its
+        // place value gets an underline cursor, kept in sync with the radio.
+        let step = if is_b {
+            self.ui.radio.sub_tune_step_hz
+        } else {
+            self.ui.radio.tune_step_hz
+        };
         let digits = hz.to_string();
         let n = digits.len();
         let lead = n % 3;
@@ -2027,8 +2072,31 @@ impl App {
                 row = row.push(Text::new(".").size(38).color(color));
             }
             let place = 10u64.pow((n - 1 - i) as u32);
+            // Fixed-width cell so the underline (below) reliably spans the digit
+            // without a Fill-in-shrink collapse; tuned to the size-38 glyph advance.
+            const DIGIT_W: f32 = 21.0;
+            // Underline the digit whose place value is the current tune step.
+            let underline: Element<'_, Message> = if step.map(u64::from) == Some(place) {
+                Container::new(Space::new(Length::Fill, Length::Fixed(3.0)))
+                    .width(Length::Fixed(DIGIT_W - 4.0))
+                    .style(move |_: &Theme| container::Style {
+                        background: Some(Background::Color(color)),
+                        border: iced::Border {
+                            radius: 1.5.into(),
+                            ..Default::default()
+                        },
+                        ..container::Style::default()
+                    })
+                    .into()
+            } else {
+                Space::new(Length::Fixed(1.0), Length::Fixed(3.0)).into()
+            };
             let cell = stack![
-                Text::new(ch.to_string()).size(38).color(color),
+                Column::new()
+                    .width(Length::Fixed(DIGIT_W))
+                    .align_x(Alignment::Center)
+                    .push(Text::new(ch.to_string()).size(38).color(color))
+                    .push(underline),
                 Column::new()
                     .push(
                         mouse_area(Space::new(Length::Fill, Length::Fill))

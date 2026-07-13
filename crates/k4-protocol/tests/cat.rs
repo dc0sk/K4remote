@@ -336,3 +336,16 @@ fn fr_dvr_01_playback() {
     assert_eq!(set_dvr(0), "PB0;"); // cancel
     assert_eq!(set_dvr(99), "PB8;"); // clamped
 }
+
+/// The VFO tuning-step (VT) setter encodes the rate index + mode, per receiver.
+///
+/// trace: FR-VFO-03
+#[test]
+fn fr_vfo_03_set_tune_step() {
+    // index 2 = 100 Hz, mode 3 (CW), main VFO.
+    assert_eq!(k4_protocol::cat::set_tune_step(false, 2, 3), "VT23;");
+    // sub VFO, index 1 (10 Hz), mode 1 (LSB).
+    assert_eq!(k4_protocol::cat::set_tune_step(true, 1, 1), "VT$11;");
+    // index clamps to 5 (100 kHz max).
+    assert_eq!(k4_protocol::cat::set_tune_step(false, 9, 2), "VT52;");
+}
