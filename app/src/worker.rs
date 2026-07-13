@@ -916,7 +916,7 @@ mod kpod {
     use std::sync::mpsc::{self, Receiver, Sender};
     use std::sync::Arc;
     use std::thread;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use super::Link;
     use k4_diag::{DiagLog, Level};
@@ -940,11 +940,15 @@ mod kpod {
         /// Per-slot CAT macro strings (F1–F8 × tap/hold; see `k4_kpod::slot_index`)
         /// sent to the K4 on a switch press (FR-KPOD-06). Empty = unassigned.
         buttons: Vec<String>,
-        /// Last (button, hold) we saw, to fire each switch press once. The K-Pod
-        /// reports discrete resolved events (`cmd == 'u'`), so a change here marks
-        /// a new press; repeated identical reports (e.g. a held switch while the
-        /// knob turns) don't re-fire.
+        /// Last (button, hold) seen — used only for the raw-event trace (to log
+        /// the release that follows a press).
         last_press: (u8, bool),
+        /// Last macro we fired and when, to collapse a burst of identical reports
+        /// into one press. The K-Pod emits **one** resolved `'u'` event per gesture
+        /// (tap = hold-bit 0, hold = 1; confirmed live — a 1–2 s hold yields a
+        /// single report), so each gesture fires once; a short window guards
+        /// against any repeated report without dropping deliberate repeats.
+        last_fire: Option<((u8, bool), Instant)>,
         _handle: thread::JoinHandle<()>,
     }
 
@@ -965,6 +969,7 @@ mod kpod {
                 tx_vfo: None,
                 buttons: vec![String::new(); k4_kpod::SLOT_COUNT],
                 last_press: (0, false),
+                last_fire: None,
                 _handle: handle,
             }
         }
@@ -1030,9 +1035,12 @@ mod kpod {
 
         /// Run a function-switch macro when a switch is pressed (FR-KPOD-06):
         /// look up the (button, tap/hold) slot's CAT string and send it to the
-        /// K4. Fires once per press — the K-Pod reports discrete resolved events,
-        /// so we only act when `(button, hold)` changes (a held switch reported
-        /// repeatedly, e.g. while the knob turns, does not re-fire).
+        /// K4. The K-Pod emits one resolved `'u'` event per gesture (tap → hold=0,
+        /// hold → hold=1; confirmed live), so we fire once per button event —
+        /// collapsing only a burst of the identical `(button, hold)` within a short
+        /// window. Firing merely on a `(button, hold)` *change* (the previous
+        /// approach) dropped a repeat of the same gesture, since there is no
+        /// release event to reset between presses, and made tap/hold feel swapped.
         fn fire_button(&mut self, report: &Report, session: &mut Link, diag: &mut DiagLog) {
             let press = (report.button, report.hold);
             // Raw-event trace (kpod-raw) for tap/hold diagnosis: log every
@@ -1054,11 +1062,24 @@ mod kpod {
                     ),
                 );
             }
-            let changed = press != self.last_press;
             self.last_press = press;
-            if report.button == 0 || !changed {
+            if report.button == 0 {
                 return;
             }
+            // The K-Pod emits one resolved event per gesture (tap → hold=0, hold →
+            // hold=1), with no release/idle event to reset between presses. Fire on
+            // every button event so repeated identical gestures (tap, tap) each
+            // count — collapsing only a burst of the *same* (button, hold) within a
+            // short window, in case a report is ever repeated. (The old
+            // "fire only when (button,hold) changed" logic dropped a repeat of the
+            // same gesture and made tap/hold feel swapped.)
+            let now = Instant::now();
+            if let Some((last, at)) = self.last_fire {
+                if last == press && now.duration_since(at) < Duration::from_millis(150) {
+                    return;
+                }
+            }
+            self.last_fire = Some((press, now));
             let Some(idx) = k4_kpod::slot_index(report.button, report.hold) else {
                 return;
             };
