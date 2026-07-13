@@ -9,9 +9,15 @@ stakeholder needs down to individual tests, enforced by a build gate.
 
 ![K4 Remote main window](docs/screenshots/main.png)
 
-> **Status:** v1 feature-complete; hardware bring-up pending.
-> 144 hardware-free tests pass · clippy/fmt clean · traceability gate green.
-> The only remaining work is validating audio / PTT / spectrum / serial against a real K4.
+> **Status:** v0.2.0 — feature-complete; hardware bring-up in progress.
+> 161 hardware-free tests pass · clippy/fmt clean · traceability gate green · CI green on Linux/macOS/Windows.
+> VFO tuning, RIT/XIT, split, and the K-Pod are validated against a real K4; audio / PTT / spectrum / serial
+> bring-up is ongoing.
+>
+> **New in 0.2.0:** Elecraft K-Pod support (rocker + encoder tuning, and configurable F1–F8 tap/hold
+> macros), a filterable diagnostics console, and RIT/XIT sync fixes.
+>
+> 📖 **New here? Start with the [User Manual](docs/user-manual.md).**
 >
 > *(Screenshots show the app driven by the protocol simulator; the panadapter fills in from a
 > live radio's stream.)*
@@ -53,22 +59,24 @@ and the VFO frames support click-to-tune digits, a clickable mode cycle, and opt
 | **Audio** | Full-duplex 12 kHz **Opus** — jitter buffer, resampling, cpal device I/O (L=Main, R=Sub). |
 | **Transmit** | PTT, voice, and CW keying — all behind an explicit **TX arm**, with an emergency stop, link-loss fail-safe, and a configurable **PTT keyboard hotkey** (toggle or hold). |
 | **K-Pod** | Optional Elecraft **K-Pod** USB control surface (`--features kpod`): the rocker assigns the knob to VFO A / VFO B / RIT-XIT (with indicator LEDs) and the encoder tunes it. The **F1–F8 switches** (tap + hold) run configurable CAT macros — set them in Settings → *K-Pod function switches* from a preset list or a free-form command string, seeded from the Elecraft sample macros. |
-| **Operability** | Persisted connection profiles, **OS-keychain** password storage (secrets never written to config), **K4 settings export/import** (SHA-256-stamped `.cfg`), an optional separate **diagnostics window**, and a raw-CAT console. |
+| **Operability** | Persisted connection profiles, **OS-keychain** password storage (secrets never written to config), **K4 settings export/import** (SHA-256-stamped `.cfg`), an optional separate **diagnostics window** with a **filterable** log + raw-CAT console, and **ESC** to close dialogs. |
 
 ## Quick start
 
 Requires **Rust 1.90+** and, for the default build, these system libraries:
-**libopus**, **ALSA** (libasound), **OpenSSL**, **libudev**.
+**libopus**, **ALSA** (libasound), **OpenSSL**, **libudev**, and — for keychain password storage —
+**libsecret** + **libdbus**.
 
 ```sh
 # Debian / Ubuntu
-sudo apt-get install -y libopus-dev libasound2-dev libssl-dev libudev-dev pkg-config
+sudo apt-get install -y libopus-dev libasound2-dev libssl-dev libudev-dev \
+                        libsecret-1-dev libdbus-1-dev pkg-config
 
 cargo run -p k4remote
 ```
 
-Default app features: `audio-device`, `tls`, `keychain` (serial is always on). A minimal build
-without TLS/keychain: `cargo run -p k4remote --no-default-features --features audio-device`.
+Default app features: `audio-device`, `tls`, `keychain`, `kpod` (serial is always on). A minimal
+build without TLS/keychain/K-Pod: `cargo run -p k4remote --no-default-features --features audio-device`.
 
 ## How it's built
 
@@ -97,7 +105,7 @@ was recovered from the GPLv3 [QK4](https://github.com/mikeg-dal/QK4) project and
 ## Development
 
 ```sh
-cargo test --workspace                       # 144 hardware-free tests
+cargo test --workspace                       # 161 hardware-free tests
 cargo clippy --all-targets -- -D warnings
 cargo fmt --all -- --check
 cargo xtask                                  # requirement → test traceability gate (R3/R4)
@@ -106,8 +114,9 @@ cargo xtask                                  # requirement → test traceability
 Feature-gated tests need their feature, e.g. `cargo test -p k4-transport --features tls`.
 
 Git hooks (enable once: `git config core.hooksPath .githooks`) run **fmt + clippy** on commit
-and the **test suite + `cargo audit`** on push. A CI workflow is included but disabled
-(`.github/workflows/ci.yml.disabled` — rename to enable).
+and the **test suite + `cargo audit`** on push. **CI** (`.github/workflows/ci.yml`) runs fmt,
+clippy, the test suite, and the traceability gate across Linux (x86_64 + arm64), macOS, and
+Windows on every push and pull request; **release** builds are in `release.yml`.
 
 ## Roadmap
 

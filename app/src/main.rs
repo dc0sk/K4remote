@@ -1648,6 +1648,25 @@ impl App {
                 self.push_kpod_buttons();
             }
             Message::KeyPressed(key, mods) => {
+                // ESC dismisses an open modal (Settings / About, FR-UI-23) or
+                // cancels an in-progress hotkey capture, before other key handling.
+                if matches!(
+                    key,
+                    iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape)
+                ) {
+                    if self.capturing_hotkey {
+                        self.capturing_hotkey = false;
+                        return Task::none();
+                    }
+                    if self.settings_open {
+                        self.settings_open = false;
+                        return Task::none();
+                    }
+                    if self.about_open {
+                        self.about_open = false;
+                        return Task::none();
+                    }
+                }
                 if self.capturing_hotkey {
                     // Ignore bare modifier presses; the next real key sets the combo.
                     if !is_modifier_key(&key) {
