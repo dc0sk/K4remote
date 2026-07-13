@@ -232,9 +232,6 @@ struct App {
     // Which RX (VFO A/B) the frame controls target. Set by the header A/B and by
     // clicking a spectrum pane (needed in the A+B view where both are shown).
     active_rx_b: bool,
-    // Last K-Pod rocker selection seen, so the UI follows it only on a genuine
-    // change (rocker A/B switches the shown VFO; FR-KPOD-01).
-    last_kpod_vfo: Option<bool>,
     // Brief tap feedback for momentary switch buttons: the last SW code tapped
     // and a countdown of ticks to keep it highlighted.
     switch_flash: Option<u16>,
@@ -742,7 +739,6 @@ impl App {
             decode_tick: 0,
             resync_tick: 0,
             active_rx_b: false,
-            last_kpod_vfo: None,
             switch_flash: None,
             switch_flash_ticks: 0,
             tune_on: false,
@@ -1826,19 +1822,6 @@ impl App {
             Message::Tick => {
                 if let Ok(snap) = self.snapshot.lock() {
                     self.ui = snap.clone();
-                }
-                // K-Pod rocker → follow the selected VFO in the UI (on a genuine
-                // change, so it doesn't fight a manual A/B selection).
-                if let Some(vfo_b) = ui::adopt_on_change(&mut self.last_kpod_vfo, self.ui.kpod_vfo)
-                {
-                    self.active_rx_b = vfo_b;
-                    if self.view_mode != ui::ViewMode::Dual {
-                        self.view_mode = if vfo_b {
-                            ui::ViewMode::SingleB
-                        } else {
-                            ui::ViewMode::SingleA
-                        };
-                    }
                 }
                 // Seed the config screens from the radio's reported values once
                 // per connection, as the connect GET burst lands (FR-UI-19).

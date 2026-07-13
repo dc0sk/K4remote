@@ -93,7 +93,7 @@ Interface Spec v1.03; Owner's Manual Rev F) for hands-on VFO selection + tuning.
 
 | ID | Statement | Up | Pri | Ver | Acceptance criteria |
 |---|---|---|---|---|---|
-| `FR-KPOD-01` | let the K-Pod **rocker** select which control the knob drives — left = VFO A, center = VFO B, right = RIT/XIT — mirroring the K4's behaviour. | STK-11 | S | T | `action_for` maps each rocker position to the matching VFO A / VFO B / RIT-XIT target. |
+| `FR-KPOD-01` | let the K-Pod **rocker** select which control the knob drives (left = VFO A, center = VFO B, right = RIT/XIT), and switch the **K4 transmit VFO** to match — VFO A = split off (TX on A), VFO B = split on (TX on B) — which the app reflects. | STK-11 | S | T | `action_for` maps each rocker position to the matching target; selecting VFO A/B commands `FT0`/`FT1` so the app's TX-VFO indicator follows. |
 | `FR-KPOD-02` | tune the selected control from the K-Pod **encoder**, one tuning step per tick (sign = direction), accumulating rapid ticks so none are lost to echo latency. | STK-11 | S | T | Ticks × step give the signed delta; the running `Tuner` accumulates and hands back on radio confirm. |
 | `FR-KPOD-03` | decode the 8-byte K-Pod report (encoder ticks, buttons, tap/hold, rocker) and drive the selection indicator LEDs (D1/D2/D3). | STK-11 | S | T | `Report::parse` decodes the documented fields; `selection_leds` lights D1/D2/D3 per the rocker. |
 | `FR-KPOD-04` | discover, open, and poll the physical K-Pod HID device (USB VID 0x04D8 / PID 0xF12D) and apply its events to the radio. | STK-11 | S | D | Demonstrated live: a connected K-Pod tunes the selected VFO and RIT/XIT. |

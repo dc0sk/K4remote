@@ -1,7 +1,7 @@
 ---
 title: "Test Strategy & Traceability"
 status: Draft
-version: "1.19"
+version: "1.20"
 updated: 2026-07-07
 authors:
   - Simon Keimer (DC0SK)
@@ -318,3 +318,4 @@ FR-SES-MULTI, FR-DIAG-02, etc. — get `TC` IDs when promoted to `Approved`.)*
 | 2026-07-12 | 1.17 | DC0SK | K-Pod runtime opt-in (FR-KPOD-05): move the K-Pod from a compile-only feature to a **config-menu toggle** (`kpod_enabled` pref, default off, persisted; new Settings control + WorkerCmd::SetKpodEnabled). The `kpod` feature is now default-built. The worker opens the device lazily only when enabled, retries discovery every ~3 s while absent, and drops the handle on any I/O error (unplug) — so the app never blocks or panics whether or not a K-Pod is attached. New config round-trip test. 157 tests. |
 | 2026-07-13 | 1.18 | DC0SK | K-Pod HID fix (FR-KPOD-04): the K-Pod does NOT support HID feature reports (`SET/GET_REPORT` → "Broken pipe"), so the app never recognised it. Switch `device.rs` to `write()`/`read_timeout()` (interrupt endpoints) — validated live on real hardware (182 polls, 0 errors, live encoder/rocker events; see hil-runs/2026-07-13-kpod-framing.md). Move the K-Pod polling to a dedicated thread so its blocking USB read can't stall the audio/CAT loop, and make recognition independent of the radio connection. 157 tests. |
 | 2026-07-13 | 1.19 | DC0SK | K-Pod display fixes: (1) K-Pod tuning now updates the app's VFO readout immediately — `WorkerCmd::SetFreqA/B` and the K-Pod path only *sent* the CAT SET, which the K4 doesn't auto-echo, so the readout only refreshed on the ~8 s resync; new `Session::apply_local` folds the SET into local state so the snapshot reflects it at once (FR-KPOD-02). (2) The K-Pod rocker now switches the app's shown VFO A/B — the rocker selection is published in the snapshot and the UI adopts it on a genuine change (FR-KPOD-01). 157 tests. |
+| 2026-07-13 | 1.20 | DC0SK | K-Pod rocker switches the K4 TX VFO (FR-KPOD-01): the rocker now commands split — VFO A = FT0 (TX on A), VFO B = FT1 (TX on B) — on a genuine change, applied locally so the app's TX-VFO indicator (driven by the split state) follows immediately. Replaces the prior app-only RX-view switch (removed the kpod_vfo snapshot field + app-side follow). Knob still tunes the rocker-selected VFO. 157 tests. |
