@@ -1033,6 +1033,25 @@ mod kpod {
         /// repeatedly, e.g. while the knob turns, does not re-fire).
         fn fire_button(&mut self, report: &Report, session: &mut Link, diag: &mut DiagLog) {
             let press = (report.button, report.hold);
+            // Raw-event trace (kpod-raw) for tap/hold diagnosis: log every
+            // button-bearing report and the release that follows one, with all
+            // fields — so the true press→hold→release sequence is visible in the
+            // diagnostics console (filter "kpod"). Pure encoder/rocker idle is
+            // skipped to avoid flooding.
+            if report.button != 0 || self.last_press.0 != 0 {
+                diag.log(
+                    Level::Debug,
+                    "kpod-raw",
+                    &format!(
+                        "cmd={} btn={} hold={} ticks={} rocker={:?}",
+                        report.cmd as char,
+                        report.button,
+                        u8::from(report.hold),
+                        report.ticks,
+                        report.rocker,
+                    ),
+                );
+            }
             let changed = press != self.last_press;
             self.last_press = press;
             if report.button == 0 || !changed {
