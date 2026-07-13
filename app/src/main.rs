@@ -1622,6 +1622,13 @@ impl App {
             }
             Message::KpodButtonCatChanged(idx, cat) => {
                 if let Some(slot) = self.kpod_buttons.get_mut(idx) {
+                    // Keep the shown label honest: adopt a matching preset's name,
+                    // else blank it — a hand-typed macro has no canonical label.
+                    slot.label = k4_config::KPOD_PRESETS
+                        .iter()
+                        .find(|p| p.cat == cat)
+                        .map(|p| p.label.to_string())
+                        .unwrap_or_default();
                     slot.cat = cat;
                     self.push_kpod_buttons();
                 }
@@ -5474,10 +5481,8 @@ impl App {
     /// CAT string to the K4 when that switch is pressed.
     fn kpod_buttons_view(&self) -> Element<'_, Message> {
         let dim = role_color(ui::ColorRole::Inactive);
-        let preset_labels: Vec<String> = k4_config::KPOD_PRESETS
-            .iter()
-            .map(|p| p.label.to_string())
-            .collect();
+        let accent = role_color(ui::ColorRole::VfoA);
+        let presets: Vec<k4_config::KpodPreset> = k4_config::KPOD_PRESETS.to_vec();
         let mut col = Column::new().spacing(4).push(
             Row::new()
                 .spacing(8)
@@ -5491,6 +5496,14 @@ impl App {
                 .push(small_btn("Reset to samples", Message::KpodButtonsReset)),
         );
         for (idx, slot) in self.kpod_buttons.iter().enumerate() {
+            // The picker fills the slot from a preset (shown as "label — desc");
+            // the CAT field is always free-form. The label tag names the current
+            // assignment at a glance (blank for a hand-typed macro).
+            let label_tag = if slot.label.is_empty() {
+                Text::new("—").size(11).color(dim)
+            } else {
+                Text::new(slot.label.clone()).size(11).color(accent)
+            };
             let row = Row::new()
                 .spacing(6)
                 .align_y(Alignment::Center)
@@ -5501,13 +5514,14 @@ impl App {
                         .width(Length::Fixed(52.0)),
                 )
                 .push(
-                    pick_list(preset_labels.clone(), None::<String>, move |label| {
-                        Message::KpodButtonPreset(idx, label)
+                    pick_list(presets.clone(), None::<k4_config::KpodPreset>, move |p| {
+                        Message::KpodButtonPreset(idx, p.label.to_string())
                     })
                     .placeholder("preset")
                     .text_size(11)
-                    .width(Length::Fixed(90.0)),
+                    .width(Length::Fixed(84.0)),
                 )
+                .push(label_tag.width(Length::Fixed(56.0)))
                 .push(
                     TextInput::new("CAT e.g. MD3;BW0040;", &slot.cat)
                         .on_input(move |t| Message::KpodButtonCatChanged(idx, t))
