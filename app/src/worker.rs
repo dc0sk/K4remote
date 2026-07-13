@@ -991,7 +991,10 @@ mod kpod {
         /// Apply one decoded event to the connected session (tuning).
         fn apply(&mut self, report: Report, session: &mut Link) {
             let step = session.state().tune_step_hz.unwrap_or(10);
-            match action_for(&report, step) {
+            // RIT/XIT is a fine ±9999 Hz offset — tune it at 10 Hz/tick regardless
+            // of the (possibly coarse) VFO rate, so it doesn't slam to the clamp.
+            const RIT_STEP_HZ: u32 = 10;
+            match action_for(&report, step, RIT_STEP_HZ) {
                 Action::Tune { vfo_b, delta_hz } => {
                     let idx = usize::from(vfo_b);
                     let radio = if vfo_b {
