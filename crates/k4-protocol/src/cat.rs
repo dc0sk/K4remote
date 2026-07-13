@@ -92,6 +92,15 @@ pub fn set_tune_step(sub: bool, index: u8, mode: u8) -> String {
     format!("VT{}{}{};", if sub { "$" } else { "" }, index.min(5), mode)
 }
 
+/// Query the tuning step for a specific `mode` (the K4 stores it per mode, so
+/// the bare `VT;`/`VT$;` GET can report the wrong receiver's/mode's rate). Uses
+/// the documented ALT-GET form `VT[$]Xm;`, which returns `VT[$]nm;`.
+///
+/// trace: FR-VFO-03
+pub fn query_tune_step(sub: bool, mode: u8) -> String {
+    format!("VT{}X{};", if sub { "$" } else { "" }, mode)
+}
+
 /// Set the operating mode for main RX (`MD`, digit 1–9; see [`crate::Mode`]).
 ///
 /// trace: FR-MODE-01

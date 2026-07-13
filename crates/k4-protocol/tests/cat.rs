@@ -349,3 +349,12 @@ fn fr_vfo_03_set_tune_step() {
     // index clamps to 5 (100 kHz max).
     assert_eq!(k4_protocol::cat::set_tune_step(false, 9, 2), "VT52;");
 }
+
+/// The per-mode tune-step ALT GET encodes the receiver + mode (`VT[$]Xm`).
+///
+/// trace: FR-VFO-03
+#[test]
+fn fr_vfo_03_query_tune_step_per_mode() {
+    assert_eq!(k4_protocol::cat::query_tune_step(false, 3), "VTX3;");
+    assert_eq!(k4_protocol::cat::query_tune_step(true, 2), "VT$X2;");
+}
