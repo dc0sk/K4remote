@@ -439,8 +439,10 @@ pub fn clear_rit_xit() -> &'static str {
 /// trace: FR-VFO-05
 pub fn set_rit_offset(hz: i16) -> String {
     let hz = hz.clamp(-9999, 9999);
+    // The K4 command is `RO$` (the `$` is part of the mnemonic, not a sub-RX
+    // selector); a bare `RO` is ignored, so the offset would never actually change.
     format!(
-        "RO{}{:04};",
+        "RO${}{:04};",
         if hz < 0 { '-' } else { '+' },
         hz.unsigned_abs()
     )

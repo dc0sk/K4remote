@@ -186,10 +186,10 @@ fn fr_vfo_05_rit_xit() {
     assert_eq!(set_rit(true), "RT1;");
     assert_eq!(set_xit(false), "XT0;");
     assert_eq!(clear_rit_xit(), "RC;");
-    assert_eq!(set_rit_offset(0), "RO+0000;");
-    assert_eq!(set_rit_offset(250), "RO+0250;");
-    assert_eq!(set_rit_offset(-1500), "RO-1500;");
-    assert_eq!(set_rit_offset(30000), "RO+9999;"); // clamped
+    assert_eq!(set_rit_offset(0), "RO$+0000;");
+    assert_eq!(set_rit_offset(250), "RO$+0250;");
+    assert_eq!(set_rit_offset(-1500), "RO$-1500;");
+    assert_eq!(set_rit_offset(30000), "RO$+9999;"); // clamped
 }
 
 // --- Phase-0 configuration-screen commands (FR-UI-19) ----------------------
