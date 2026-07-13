@@ -26,7 +26,7 @@ use std::cell::Cell;
 use iced::widget::canvas::Canvas;
 use iced::widget::{
     button, container, horizontal_space, mouse_area, pick_list, progress_bar, scrollable, slider,
-    stack, vertical_slider,
+    stack, text_editor, vertical_slider,
 };
 use iced::widget::{Button, Column, Container, ProgressBar, Row, Space, Text, TextInput};
 use iced::{Alignment, Background, Border, Color, Element, Length, Subscription, Task, Theme};
@@ -161,8 +161,12 @@ struct App {
     // Diagnostics log: show/hide + follow-newest (auto-scroll).
     show_log: bool,
     log_autoscroll: bool,
-    log_id: scrollable::Id,
-    log_len: usize,
+    // The log is rendered in a read-only `text_editor` so lines can be selected
+    // and copied natively (Ctrl+C). `log_content` holds the editor buffer;
+    // `log_text` is the text it was built from, so it's only rebuilt when the
+    // visible text actually changes (preserving selection while frozen).
+    log_content: text_editor::Content,
+    log_text: String,
     // Frozen log snapshot rendered while auto-scroll is off, so the churning
     // live traffic doesn't make the console unreadable.
     log_frozen: Vec<String>,
@@ -550,6 +554,9 @@ enum Message {
     WindowClosed(iced::window::Id),
     ToggleLogAutoscroll,
     LogFilterChanged(String),
+    /// A text-editor action from the read-only log view (selection/scroll; edits
+    /// are ignored).
+    LogEditorAction(text_editor::Action),
     /// Copy the currently-visible (filtered) log lines to the clipboard.
     CopyLog,
     // Graphic-EQ screens (FR-EQ-01).
@@ -730,10 +737,10 @@ impl App {
             diag_enabled,
             show_log: false,
             log_autoscroll: true,
-            log_id: scrollable::Id::new("diag-log"),
+            log_content: text_editor::Content::new(),
+            log_text: String::new(),
             log_frozen: Vec::new(),
             log_filter: String::new(),
-            log_len: 0,
             bw_hz: 2800,
             tx_vfo_b: false,
             last_split: None,
@@ -1817,19 +1824,24 @@ impl App {
                 self.log_autoscroll = !self.log_autoscroll;
                 if self.log_autoscroll {
                     self.log_frozen.clear();
-                    // Resume following the newest line.
-                    return scrollable::snap_to(
-                        self.log_id.clone(),
-                        scrollable::RelativeOffset::END,
-                    );
+                } else {
+                    // Freeze the current lines so the console holds still to be
+                    // read/selected (the live buffer keeps churning underneath).
+                    self.log_frozen = self.ui.diag_lines.clone();
                 }
-                // Freeze the current lines so the console holds still to be read
-                // (the live buffer keeps churning underneath). Start at the newest.
-                self.log_frozen = self.ui.diag_lines.clone();
-                return scrollable::snap_to(self.log_id.clone(), scrollable::RelativeOffset::END);
+                self.refresh_log_content();
             }
             Message::LogFilterChanged(pat) => {
                 self.log_filter = pat;
+                self.refresh_log_content();
+            }
+            Message::LogEditorAction(action) => {
+                // Read-only console: allow navigation, selection, and scrolling
+                // (and the widget's built-in Ctrl+C copy), but ignore edits so the
+                // buffer can't be typed into.
+                if !action.is_edit() {
+                    self.log_content.perform(action);
+                }
             }
             Message::CopyLog => {
                 // Copy the currently-visible (filtered, frozen-or-live) lines to
@@ -2054,16 +2066,11 @@ impl App {
                         self.send(WorkerCmd::Cat("TB$;".into()));
                     }
                 }
-                // Follow the newest log line while auto-scroll is on (only when
-                // the log actually grew, so manual scrolling isn't fought).
-                let n = self.ui.diag_lines.len();
-                let grew = n != self.log_len;
-                self.log_len = n;
-                if self.show_log && self.log_autoscroll && grew {
-                    return scrollable::snap_to(
-                        self.log_id.clone(),
-                        scrollable::RelativeOffset::END,
-                    );
+                // Rebuild the log editor buffer when its visible text changed;
+                // while auto-scrolling this follows the newest line (see
+                // `refresh_log_content`).
+                if self.show_log {
+                    self.refresh_log_content();
                 }
             }
         }
@@ -4272,21 +4279,33 @@ impl App {
             .collect()
     }
 
+    /// Rebuild the read-only log-editor buffer from the currently-visible lines,
+    /// but only when the text actually changed — so a static (frozen) view keeps
+    /// the user's selection intact. While auto-scrolling, jump to the end to
+    /// follow the newest line. Called on each tick and on filter/freeze changes.
+    fn refresh_log_content(&mut self) {
+        // Bound the buffer so a full 4 000-line ring isn't re-parsed every tick;
+        // Copy still grabs the complete visible set.
+        let visible = self.visible_log_lines();
+        let start = visible.len().saturating_sub(2000);
+        let text = visible[start..].join("\n");
+        if text == self.log_text {
+            return;
+        }
+        self.log_text = text;
+        self.log_content = text_editor::Content::with_text(&self.log_text);
+        if self.log_autoscroll {
+            self.log_content
+                .perform(text_editor::Action::Move(text_editor::Motion::DocumentEnd));
+        }
+    }
+
     /// The detached diagnostics window's content (FR-DIAG-04): the console
     /// (raw-CAT entry, LOG/AUTOSCROLL toggles, and the log) filling the window.
     fn diag_window_view(&self) -> Element<'_, Message> {
         set_active_theme(self.effective_theme());
         let dim = role_color(ui::ColorRole::Inactive);
-        let visible = self.visible_log_lines();
-        // Bound how many lines are turned into widgets — the scrollable builds
-        // every child, so rendering the whole 4 000-line buffer would be slow.
-        // Copy still grabs the full visible set.
-        const MAX_RENDER: usize = 1500;
-        let start = visible.len().saturating_sub(MAX_RENDER);
-        let mut log_col = Column::new().spacing(1);
-        for line in &visible[start..] {
-            log_col = log_col.push(Text::new(line.clone()).size(11).color(dim));
-        }
+        let visible_count = self.visible_log_lines().len();
         let opt = |label: &'static str, on: bool, msg: Message| {
             Button::new(Text::new(label).size(11))
                 .style(btn_style(if on { BtnKind::Active } else { BtnKind::Plain }))
@@ -4298,7 +4317,7 @@ impl App {
             .align_y(Alignment::Center)
             .push(Text::new("DIAGNOSTICS").size(11).color(dim))
             .push(
-                Text::new(format!("{} lines", visible.len()))
+                Text::new(format!("{visible_count} lines"))
                     .size(10)
                     .color(dim),
             )
@@ -4341,13 +4360,13 @@ impl App {
                 .color(dim),
             );
         if self.show_log {
-            let log = scrollable(log_col)
-                .id(self.log_id.clone())
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .direction(scrollable::Direction::Vertical(
-                    scrollable::Scrollbar::new().width(6.0).scroller_width(6.0),
-                ));
+            // A read-only text_editor so lines can be selected and copied (Ctrl+C)
+            // natively; edits are ignored in the update handler. Turn AUTOSCROLL
+            // off to freeze the buffer for a stable selection.
+            let log = text_editor(&self.log_content)
+                .on_action(Message::LogEditorAction)
+                .size(11)
+                .height(Length::Fill);
             diag_col = diag_col.push(log);
         }
         Container::new(diag_col)

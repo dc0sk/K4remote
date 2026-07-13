@@ -281,6 +281,8 @@ troubleshooting.
 - **Filter** — type any text to show only log lines containing it (case-insensitive) — e.g. type
   `RO` to watch just RIT/XIT traffic, or `kpod` for K-Pod events.
 - **COPY** — copy the currently-visible (filtered) lines to the clipboard, to paste elsewhere.
+- **Selecting text** — the log is a read-only text area: drag to select and press **Ctrl+C** to copy
+  just the selection. Turn **AUTOSCROLL off** first so the buffer holds still while you select.
 - **Raw CAT** — type a command (e.g. `IF;`) and **Send** to issue it directly and see the reply.
 
 The log keeps several thousand recent lines; the header shows how many are currently visible.
