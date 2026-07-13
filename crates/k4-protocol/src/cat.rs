@@ -83,6 +83,15 @@ pub fn set_vfo_b_hz(hz: u64) -> String {
     format!("FB{hz:011};")
 }
 
+/// Set the VFO **tuning step / rate** (`VT`/`VT$`) — the digit the tuning knob
+/// (and K-Pod) steps at: `index` 0–5 = 1 Hz, 10 Hz, 100 Hz, 1 kHz, 10 kHz,
+/// 100 kHz. `mode` is the current `MD` digit (the K4 stores the rate per mode).
+///
+/// trace: FR-VFO-03
+pub fn set_tune_step(sub: bool, index: u8, mode: u8) -> String {
+    format!("VT{}{}{};", if sub { "$" } else { "" }, index.min(5), mode)
+}
+
 /// Set the operating mode for main RX (`MD`, digit 1–9; see [`crate::Mode`]).
 ///
 /// trace: FR-MODE-01

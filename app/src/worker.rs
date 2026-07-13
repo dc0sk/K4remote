@@ -104,6 +104,10 @@ pub enum WorkerCmd {
     /// (display/band screens, FR-PAN-CTL-01/FR-VFO-04). Distinct from
     /// `SendRawCat` (operator console) — logged at debug, not info.
     Cat(String),
+    /// Like [`WorkerCmd::Cat`] but also folds the command into the local radio
+    /// state (`Session::apply_local`) so a `SET` the K4 doesn't echo (e.g. the
+    /// tuning step `VT`) is reflected in the UI at once.
+    CatLocal(String),
     /// Select the RX playback device by name (`None` = default) — FR-AUD-DEV-01.
     SetOutputDevice(Option<String>),
     /// Select the TX capture device by name (`None` = default) — FR-AUD-DEV-01.
@@ -837,6 +841,13 @@ fn handle_cmd(cmd: WorkerCmd, ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnaps
         WorkerCmd::Cat(cmd) => {
             if let Some(s) = ws.session.as_mut() {
                 let _ = s.send(&cmd);
+                ws.diag.log(Level::Debug, "tx", &cmd);
+            }
+        }
+        WorkerCmd::CatLocal(cmd) => {
+            if let Some(s) = ws.session.as_mut() {
+                let _ = s.send(&cmd);
+                s.apply_local(&cmd);
                 ws.diag.log(Level::Debug, "tx", &cmd);
             }
         }
