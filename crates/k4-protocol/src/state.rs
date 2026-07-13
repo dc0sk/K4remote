@@ -477,8 +477,9 @@ impl RadioState {
                 }
             }
         } else if let Some(arg) = cmd.strip_prefix("RO") {
-            // `RO$snnnn` — signed RIT/XIT offset in Hz (the `$` is part of the K4
-            // mnemonic; `split_sub` just tolerates it here).
+            // Bare `RO snnnn` — signed RIT/XIT offset (Hz) for the main VFO, the
+            // one `IF` reports. `RO$…` is the sub-RX form; `split_sub` tolerates
+            // the optional `$` so both parse here.
             let (_, a) = split_sub(arg);
             if let Ok(mag) = a.get(1..5).unwrap_or("").parse::<i16>() {
                 self.rit_offset = Some(if a.starts_with('-') { -mag } else { mag });
@@ -773,7 +774,7 @@ pub fn connect_state_seed() -> &'static [&'static str] {
         "TM1;", // enable auto TX metering (RF/ALC/SWR/CMP during transmit)
         "AT;", "ACM;", "ACS;", // ATU mode + RX/sub antenna access masks
         "SN;",  // K4 serial number (for config-export filenames)
-        "RO$;", // RIT/XIT offset (Hz) — the K4 mnemonic is `RO$`
+        "RO;",  // RIT/XIT offset (Hz) — bare `RO` is the main VFO's
         "ML0;", "ML1;", "ML2;", // monitor levels (CW / AF-data / voice)
         "VGV;", "VI;", // VOX gain (voice) + anti-VOX level
         "VT;", "VT$;", // VFO tuning step (for optimistic ◄► stepping)

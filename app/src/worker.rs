@@ -413,7 +413,7 @@ fn publish(snapshot: &Arc<Mutex<UiSnapshot>>, ws: &WorkerState) {
         s.waterfall = ws.waterfall[0].iter().cloned().collect();
         s.waterfall_sub = ws.waterfall[1].iter().cloned().collect();
         s.mini_pan = ws.mini_pan.clone();
-        s.diag_lines = ws.diag.recent(30);
+        s.diag_lines = ws.diag.recent(300);
         s.radio = st.clone();
     }
 }
@@ -593,7 +593,7 @@ fn run(rx: Receiver<WorkerCmd>, snapshot: Arc<Mutex<UiSnapshot>>) {
             }
             // Publish diagnostics even while disconnected (connect errors, etc.).
             if let Ok(mut s) = snapshot.lock() {
-                s.diag_lines = ws.diag.recent(30);
+                s.diag_lines = ws.diag.recent(300);
             }
             thread::sleep(Duration::from_millis(50));
         }
