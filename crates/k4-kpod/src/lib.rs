@@ -150,24 +150,29 @@ pub enum Action {
 }
 
 /// Map a report's encoder ticks to a tuning action on the rocker-selected
-/// control. `step_hz` is the frequency change per encoder tick.
+/// control. `tune_step_hz` is the Hz-per-tick for VFO tuning (the radio's tune
+/// rate); `rit_step_hz` is the finer Hz-per-tick for the RIT/XIT offset, which
+/// only spans ±9999 Hz — using the VFO rate there would jump straight to the
+/// clamp.
 ///
 /// trace: FR-KPOD-01, FR-KPOD-02
-pub fn action_for(report: &Report, step_hz: u32) -> Action {
+pub fn action_for(report: &Report, tune_step_hz: u32, rit_step_hz: u32) -> Action {
     if !report.is_event() || report.ticks == 0 {
         return Action::None;
     }
-    let delta = i64::from(report.ticks) * i64::from(step_hz);
+    let ticks = i64::from(report.ticks);
     match report.rocker {
         Rocker::VfoA => Action::Tune {
             vfo_b: false,
-            delta_hz: delta,
+            delta_hz: ticks * i64::from(tune_step_hz),
         },
         Rocker::VfoB => Action::Tune {
             vfo_b: true,
-            delta_hz: delta,
+            delta_hz: ticks * i64::from(tune_step_hz),
         },
-        Rocker::RitXit => Action::RitXit { delta_hz: delta },
+        Rocker::RitXit => Action::RitXit {
+            delta_hz: ticks * i64::from(rit_step_hz),
+        },
         Rocker::Unknown => Action::None,
     }
 }
@@ -228,7 +233,7 @@ mod tests {
         assert!(!r.hold);
         assert_eq!(r.rocker, Rocker::VfoA);
         assert_eq!(
-            action_for(&r, 10),
+            action_for(&r, 10, 5),
             Action::Tune {
                 vfo_b: false,
                 delta_hz: 50
@@ -239,23 +244,27 @@ mod tests {
         let r = Report::parse(&pkt(b'u', -3, 0b00 << 5));
         assert_eq!(r.rocker, Rocker::VfoB);
         assert_eq!(
-            action_for(&r, 10),
+            action_for(&r, 10, 5),
             Action::Tune {
                 vfo_b: true,
                 delta_hz: -30
             }
         );
 
-        // Rocker right (0b01) + hold flag → RIT/XIT.
+        // Rocker right (0b01) + hold flag → RIT/XIT uses the *finer* rit step, not
+        // the (here much larger) tune step.
         let r = Report::parse(&pkt(b'u', 2, (0b01 << 5) | 0x10));
         assert!(r.hold);
         assert_eq!(r.rocker, Rocker::RitXit);
-        assert_eq!(action_for(&r, 10), Action::RitXit { delta_hz: 20 });
+        assert_eq!(action_for(&r, 100, 5), Action::RitXit { delta_hz: 10 });
 
         // Idle report (cmd 0) or zero ticks → no action.
-        assert_eq!(action_for(&Report::parse(&pkt(0, 9, 0)), 10), Action::None);
         assert_eq!(
-            action_for(&Report::parse(&pkt(b'u', 0, 0)), 10),
+            action_for(&Report::parse(&pkt(0, 9, 0)), 10, 5),
+            Action::None
+        );
+        assert_eq!(
+            action_for(&Report::parse(&pkt(b'u', 0, 0)), 10, 5),
             Action::None
         );
     }

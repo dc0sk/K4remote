@@ -1,7 +1,7 @@
 ---
 title: "Test Strategy & Traceability"
 status: Draft
-version: "1.20"
+version: "1.21"
 updated: 2026-07-07
 authors:
   - Simon Keimer (DC0SK)
@@ -319,3 +319,4 @@ FR-SES-MULTI, FR-DIAG-02, etc. — get `TC` IDs when promoted to `Approved`.)*
 | 2026-07-13 | 1.18 | DC0SK | K-Pod HID fix (FR-KPOD-04): the K-Pod does NOT support HID feature reports (`SET/GET_REPORT` → "Broken pipe"), so the app never recognised it. Switch `device.rs` to `write()`/`read_timeout()` (interrupt endpoints) — validated live on real hardware (182 polls, 0 errors, live encoder/rocker events; see hil-runs/2026-07-13-kpod-framing.md). Move the K-Pod polling to a dedicated thread so its blocking USB read can't stall the audio/CAT loop, and make recognition independent of the radio connection. 157 tests. |
 | 2026-07-13 | 1.19 | DC0SK | K-Pod display fixes: (1) K-Pod tuning now updates the app's VFO readout immediately — `WorkerCmd::SetFreqA/B` and the K-Pod path only *sent* the CAT SET, which the K4 doesn't auto-echo, so the readout only refreshed on the ~8 s resync; new `Session::apply_local` folds the SET into local state so the snapshot reflects it at once (FR-KPOD-02). (2) The K-Pod rocker now switches the app's shown VFO A/B — the rocker selection is published in the snapshot and the UI adopts it on a genuine change (FR-KPOD-01). 157 tests. |
 | 2026-07-13 | 1.20 | DC0SK | K-Pod rocker switches the K4 TX VFO (FR-KPOD-01): the rocker now commands split — VFO A = FT0 (TX on A), VFO B = FT1 (TX on B) — on a genuine change, applied locally so the app's TX-VFO indicator (driven by the split state) follows immediately. Replaces the prior app-only RX-view switch (removed the kpod_vfo snapshot field + app-side follow). Knob still tunes the rocker-selected VFO. 157 tests. |
+| 2026-07-13 | 1.21 | DC0SK | K-Pod RIT/XIT step fix (FR-KPOD-02): the RIT/XIT offset was tuned at the VFO rate (`tune_step_hz`, e.g. 100 Hz–1 kHz/tick), so a couple of ticks slammed it to the ±9999 Hz clamp (jumping +9.99/0/−9.99 kHz). `action_for` now takes a separate `rit_step_hz`; the worker uses a fine 10 Hz/tick for RIT/XIT while VFO tuning keeps the radio rate. Test exercises both steps. 157 tests. |
