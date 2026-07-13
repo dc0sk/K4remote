@@ -593,6 +593,11 @@ fn run(rx: Receiver<WorkerCmd>, snapshot: Arc<Mutex<UiSnapshot>>) {
             }
             thread::sleep(Duration::from_millis(50));
         }
+
+        // Drain K-Pod events every loop — recognition is independent of the radio
+        // link; tuning applies only when a session is connected.
+        #[cfg(feature = "kpod")]
+        ws.kpod.service(ws.session.as_mut(), &mut ws.diag);
     }
 }
 
@@ -685,10 +690,6 @@ fn service(ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnapshot>>) {
         ws.diag.log(Level::Warn, "net", "link lost");
         set_status(snapshot, "link lost");
     }
-
-    // Poll the K-Pod (if attached) and apply its encoder/rocker events.
-    #[cfg(feature = "kpod")]
-    ws.kpod.service(session, &mut ws.diag);
 
     let connected = session.is_connected();
     publish(snapshot, ws);
@@ -881,114 +882,94 @@ fn handle_cmd(cmd: WorkerCmd, ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnaps
 }
 
 /// Elecraft K-Pod USB control-surface integration (FR-KPOD-04). Feature-gated
-/// (`kpod`): polls the HID device each service loop and applies encoder-tick /
-/// rocker events to the connected session — the rocker selects VFO A / VFO B /
-/// RIT-XIT, the encoder tunes it, and the indicator LEDs track the selection.
-/// The pure protocol + mapping (`k4_kpod`) is unit-tested; the HID I/O here is
-/// L4 hardware (see docs/test/hil-runs/).
+/// (`kpod`): a dedicated thread owns the HID device (its blocking USB reads must
+/// not stall the audio/CAT service loop) — it polls the K-Pod, drives the
+/// indicator LEDs, and forwards events over a channel. The worker drains that
+/// channel each loop and applies tuning to the connected session: the rocker
+/// selects VFO A / VFO B / RIT-XIT, the encoder tunes it. The pure protocol +
+/// mapping (`k4_kpod`) is unit-tested; the HID I/O here is L4 hardware.
 #[cfg(feature = "kpod")]
 mod kpod {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::mpsc::{self, Receiver, Sender};
+    use std::sync::Arc;
+    use std::thread;
+    use std::time::Duration;
+
     use super::Link;
     use k4_diag::{DiagLog, Level};
     use k4_kpod::device::Kpod;
     use k4_kpod::{action_for, led_aux_packet, selection_leds, Action, Report, Rocker, Tuner};
 
-    /// Service loops (~150 ms each) between re-open attempts when enabled but no
-    /// K-Pod is attached — so plugging one in later is picked up (~3 s).
-    const REOPEN_TICKS: u16 = 20;
+    /// Message from the K-Pod thread to the worker.
+    enum KpodMsg {
+        Connected,
+        Lost,
+        Event(Report),
+    }
 
     pub(super) struct KpodState {
-        /// Runtime opt-in from the config menu; nothing happens while `false`.
-        enabled: bool,
-        dev: Option<Kpod>,
-        /// Countdown to the next open attempt while enabled but disconnected.
-        retry: u16,
+        /// Runtime opt-in (config toggle), shared with the poll thread.
+        enabled: Arc<AtomicBool>,
+        rx: Receiver<KpodMsg>,
         tuner: [Tuner; 2], // [VFO A, VFO B] running tune targets
-        last_rocker: Option<Rocker>,
-        announced: bool,
+        _handle: thread::JoinHandle<()>,
     }
 
     impl KpodState {
-        /// Created disabled and closed; the device is opened lazily only after
-        /// the operator enables it, so a build/run with no K-Pod costs nothing.
+        /// Spawn the (idle) poll thread; it does nothing until `set_enabled(true)`.
         pub(super) fn new() -> Self {
+            let enabled = Arc::new(AtomicBool::new(false));
+            let (tx, rx) = mpsc::channel();
+            let flag = Arc::clone(&enabled);
+            let handle = thread::Builder::new()
+                .name("kpod".into())
+                .spawn(move || poll_loop(&flag, &tx))
+                .expect("spawn kpod thread");
             Self {
-                enabled: false,
-                dev: None,
-                retry: 0,
+                enabled,
+                rx,
                 tuner: [Tuner::default(); 2],
-                last_rocker: None,
-                announced: false,
+                _handle: handle,
             }
         }
 
-        /// Enable/disable at runtime (config toggle). Disabling closes the device.
+        /// Enable/disable at runtime (config toggle); the poll thread reacts.
         pub(super) fn set_enabled(&mut self, on: bool, diag: &mut DiagLog) {
-            if on == self.enabled {
-                return;
-            }
-            self.enabled = on;
-            self.retry = 0;
-            if on {
-                diag.log(Level::Info, "kpod", "K-Pod enabled — searching for device");
-            } else {
-                self.dev = None;
-                self.announced = false;
-                diag.log(Level::Info, "kpod", "K-Pod disabled");
-            }
+            self.enabled.store(on, Ordering::Relaxed);
+            diag.log(
+                Level::Info,
+                "kpod",
+                if on {
+                    "K-Pod enabled — searching for device"
+                } else {
+                    "K-Pod disabled"
+                },
+            );
         }
 
-        /// Poll once and apply one event to the connected session. Safe to call
-        /// with no K-Pod attached: it retries opening periodically and drops the
-        /// handle on any I/O error (unplug), so the app never blocks or panics.
+        /// Drain pending K-Pod messages (non-blocking) and apply tuning if a
+        /// session is connected. Recognition (connect/disconnect) is logged
+        /// regardless of the radio link.
         ///
         /// trace: FR-KPOD-04
-        pub(super) fn service(&mut self, session: &mut Link, diag: &mut DiagLog) {
-            if !self.enabled {
-                return;
-            }
-            // (Re-)open lazily; back off between attempts when none is present.
-            if self.dev.is_none() {
-                if self.retry > 0 {
-                    self.retry -= 1;
-                    return;
-                }
-                self.retry = REOPEN_TICKS;
-                self.dev = Kpod::open().ok();
-                if self.dev.is_none() {
-                    return; // still absent — try again in REOPEN_TICKS
-                }
-                self.announced = false;
-            }
-            // Take the handle out so `apply` can borrow `&mut self` freely; put it
-            // back on success, drop it on error (treat as unplug → re-open later).
-            let Some(dev) = self.dev.take() else {
-                return;
-            };
-            if !self.announced {
-                self.announced = true;
-                diag.log(Level::Info, "kpod", "K-Pod connected");
-            }
-            match dev.poll() {
-                Ok(report) => {
-                    self.apply(&dev, report, session);
-                    self.dev = Some(dev);
-                }
-                Err(_) => {
-                    diag.log(Level::Warn, "kpod", "K-Pod I/O error — reconnecting");
-                    self.announced = false;
-                    self.retry = REOPEN_TICKS;
-                    // `dev` dropped here → handle closed, will re-open.
+        pub(super) fn service(&mut self, mut session: Option<&mut Link>, diag: &mut DiagLog) {
+            while let Ok(msg) = self.rx.try_recv() {
+                match msg {
+                    KpodMsg::Connected => diag.log(Level::Info, "kpod", "K-Pod connected"),
+                    KpodMsg::Lost => diag.log(Level::Info, "kpod", "K-Pod disconnected"),
+                    KpodMsg::Event(report) => {
+                        if let Some(s) = session.as_deref_mut() {
+                            self.apply(report, s);
+                        }
+                        // No session → ignore ticks (nothing to tune yet).
+                    }
                 }
             }
         }
 
-        /// Apply one decoded report to the session (LEDs + tuning).
-        fn apply(&mut self, dev: &Kpod, report: Report, session: &mut Link) {
-            if self.last_rocker != Some(report.rocker) {
-                self.last_rocker = Some(report.rocker);
-                let _ = dev.command(led_aux_packet(selection_leds(report.rocker)));
-            }
+        /// Apply one decoded event to the connected session (tuning).
+        fn apply(&mut self, report: Report, session: &mut Link) {
             let step = session.state().tune_step_hz.unwrap_or(10);
             match action_for(&report, step) {
                 Action::Tune { vfo_b, delta_hz } => {
@@ -1018,6 +999,64 @@ mod kpod {
             // Hand back to the radio's real value once it confirms our target.
             self.tuner[0].sync(session.state().vfo_a_hz);
             self.tuner[1].sync(session.state().vfo_b_hz);
+        }
+    }
+
+    /// The K-Pod poll thread: opens the device when enabled, retries discovery,
+    /// drives the selection LEDs, and forwards events. It owns all the blocking
+    /// USB I/O so the worker's service loop never stalls. Exits when the worker
+    /// (and thus the channel receiver) is dropped.
+    fn poll_loop(enabled: &Arc<AtomicBool>, tx: &Sender<KpodMsg>) {
+        let mut dev: Option<Kpod> = None;
+        let mut last_rocker: Option<Rocker> = None;
+        loop {
+            if !enabled.load(Ordering::Relaxed) {
+                if dev.take().is_some() {
+                    last_rocker = None;
+                    if tx.send(KpodMsg::Lost).is_err() {
+                        return;
+                    }
+                }
+                thread::sleep(Duration::from_millis(150));
+                continue;
+            }
+            if dev.is_none() {
+                match Kpod::open() {
+                    Ok(d) => {
+                        dev = Some(d);
+                        if tx.send(KpodMsg::Connected).is_err() {
+                            return;
+                        }
+                    }
+                    Err(_) => {
+                        thread::sleep(Duration::from_millis(1000)); // retry discovery
+                        continue;
+                    }
+                }
+            }
+            let d = dev.as_ref().expect("device present");
+            match d.poll() {
+                Ok(report) => {
+                    if report.is_event() {
+                        if last_rocker != Some(report.rocker) {
+                            last_rocker = Some(report.rocker);
+                            let _ = d.command(led_aux_packet(selection_leds(report.rocker)));
+                        }
+                        if tx.send(KpodMsg::Event(report)).is_err() {
+                            return; // worker gone
+                        }
+                    }
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(_) => {
+                    dev = None;
+                    last_rocker = None;
+                    if tx.send(KpodMsg::Lost).is_err() {
+                        return;
+                    }
+                    thread::sleep(Duration::from_millis(1000));
+                }
+            }
         }
     }
 }
