@@ -280,7 +280,10 @@ troubleshooting.
   current lines so the fast-scrolling traffic holds still to be read.
 - **Filter** — type any text to show only log lines containing it (case-insensitive) — e.g. type
   `RO` to watch just RIT/XIT traffic, or `kpod` for K-Pod events.
+- **COPY** — copy the currently-visible (filtered) lines to the clipboard, to paste elsewhere.
 - **Raw CAT** — type a command (e.g. `IF;`) and **Send** to issue it directly and see the reply.
+
+The log keeps several thousand recent lines; the header shows how many are currently visible.
 
 > 📷 **Screenshot needed — `screenshots/diagnostics.png`:** The Diagnostics window with the log
 > visible, the filter box containing a term, and the raw-CAT input.

@@ -550,6 +550,8 @@ enum Message {
     WindowClosed(iced::window::Id),
     ToggleLogAutoscroll,
     LogFilterChanged(String),
+    /// Copy the currently-visible (filtered) log lines to the clipboard.
+    CopyLog,
     // Graphic-EQ screens (FR-EQ-01).
     EqChanged(EqTarget, usize, i8),
     EqFlat(EqTarget),
@@ -1828,6 +1830,12 @@ impl App {
             }
             Message::LogFilterChanged(pat) => {
                 self.log_filter = pat;
+            }
+            Message::CopyLog => {
+                // Copy the currently-visible (filtered, frozen-or-live) lines to
+                // the clipboard so they can be pasted elsewhere.
+                let text = self.visible_log_lines().join("\n");
+                return iced::clipboard::write(text);
             }
             Message::EqChanged(target, band, value) => {
                 let v = value.clamp(-ui::EQ_DB_RANGE, ui::EQ_DB_RANGE);
@@ -4246,25 +4254,37 @@ impl App {
         col.into()
     }
 
-    /// The detached diagnostics window's content (FR-DIAG-04): the console
-    /// (raw-CAT entry, LOG/AUTOSCROLL toggles, and the log) filling the window.
-    fn diag_window_view(&self) -> Element<'_, Message> {
-        set_active_theme(self.effective_theme());
-        let dim = role_color(ui::ColorRole::Inactive);
-        // While auto-scroll is off, show a frozen snapshot so the fast-churning
-        // live traffic doesn't keep replacing the lines under the reader.
+    /// The log lines currently visible in the console: the frozen snapshot while
+    /// auto-scroll is off (so it holds still to be read/copied), else the live
+    /// buffer, narrowed by the filter (FR-DIAG-02). Shared by the renderer and
+    /// the Copy action so both show exactly the same set.
+    fn visible_log_lines(&self) -> Vec<String> {
         let lines = if self.log_autoscroll {
             &self.ui.diag_lines
         } else {
             &self.log_frozen
         };
-        // Case-insensitive substring filter over the visible log lines (FR-DIAG-02).
         let filter = self.log_filter.to_lowercase();
+        lines
+            .iter()
+            .filter(|l| filter.is_empty() || l.to_lowercase().contains(&filter))
+            .cloned()
+            .collect()
+    }
+
+    /// The detached diagnostics window's content (FR-DIAG-04): the console
+    /// (raw-CAT entry, LOG/AUTOSCROLL toggles, and the log) filling the window.
+    fn diag_window_view(&self) -> Element<'_, Message> {
+        set_active_theme(self.effective_theme());
+        let dim = role_color(ui::ColorRole::Inactive);
+        let visible = self.visible_log_lines();
+        // Bound how many lines are turned into widgets — the scrollable builds
+        // every child, so rendering the whole 4 000-line buffer would be slow.
+        // Copy still grabs the full visible set.
+        const MAX_RENDER: usize = 1500;
+        let start = visible.len().saturating_sub(MAX_RENDER);
         let mut log_col = Column::new().spacing(1);
-        for line in lines {
-            if !filter.is_empty() && !line.to_lowercase().contains(&filter) {
-                continue;
-            }
+        for line in &visible[start..] {
             log_col = log_col.push(Text::new(line.clone()).size(11).color(dim));
         }
         let opt = |label: &'static str, on: bool, msg: Message| {
@@ -4277,13 +4297,19 @@ impl App {
             .spacing(8)
             .align_y(Alignment::Center)
             .push(Text::new("DIAGNOSTICS").size(11).color(dim))
+            .push(
+                Text::new(format!("{} lines", visible.len()))
+                    .size(10)
+                    .color(dim),
+            )
             .push(horizontal_space())
             .push(opt("LOG", self.show_log, Message::ToggleShowLog))
             .push(opt(
                 "AUTOSCROLL",
                 self.log_autoscroll,
                 Message::ToggleLogAutoscroll,
-            ));
+            ))
+            .push(opt("COPY", false, Message::CopyLog));
         let mut diag_col = Column::new()
             .spacing(8)
             .push(diag_header)
