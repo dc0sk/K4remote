@@ -940,9 +940,6 @@ mod kpod {
         /// Per-slot CAT macro strings (F1–F8 × tap/hold; see `k4_kpod::slot_index`)
         /// sent to the K4 on a switch press (FR-KPOD-06). Empty = unassigned.
         buttons: Vec<String>,
-        /// Last (button, hold) seen — used only for the raw-event trace (to log
-        /// the release that follows a press).
-        last_press: (u8, bool),
         /// Last macro we fired and when, to collapse a burst of identical reports
         /// into one press. The K-Pod emits **one** resolved `'u'` event per gesture
         /// (tap = hold-bit 0, hold = 1; confirmed live — a 1–2 s hold yields a
@@ -968,7 +965,6 @@ mod kpod {
                 tuner: [Tuner::default(); 2],
                 tx_vfo: None,
                 buttons: vec![String::new(); k4_kpod::SLOT_COUNT],
-                last_press: (0, false),
                 last_fire: None,
                 _handle: handle,
             }
@@ -1036,43 +1032,26 @@ mod kpod {
         /// Run a function-switch macro when a switch is pressed (FR-KPOD-06):
         /// look up the (button, tap/hold) slot's CAT string and send it to the
         /// K4. The K-Pod emits one resolved `'u'` event per gesture (tap → hold=0,
-        /// hold → hold=1; confirmed live), so we fire once per button event —
-        /// collapsing only a burst of the identical `(button, hold)` within a short
-        /// window. Firing merely on a `(button, hold)` *change* (the previous
-        /// approach) dropped a repeat of the same gesture, since there is no
-        /// release event to reset between presses, and made tap/hold feel swapped.
+        /// hold → hold=1; confirmed live), so we fire once per *pure* button event
+        /// (`ticks == 0`) — collapsing only a burst of the identical `(button,
+        /// hold)` within a short window. Encoder-tick reports carry the held-button
+        /// state too, so they're excluded here (else a held switch re-fires on
+        /// every tick while tuning); they still tune via [`Self::apply`].
         fn fire_button(&mut self, report: &Report, session: &mut Link, diag: &mut DiagLog) {
-            let press = (report.button, report.hold);
-            // Raw-event trace (kpod-raw) for tap/hold diagnosis: log every
-            // button-bearing report and the release that follows one, with all
-            // fields — so the true press→hold→release sequence is visible in the
-            // diagnostics console (filter "kpod"). Pure encoder/rocker idle is
-            // skipped to avoid flooding.
-            if report.button != 0 || self.last_press.0 != 0 {
-                diag.log(
-                    Level::Debug,
-                    "kpod-raw",
-                    &format!(
-                        "cmd={} btn={} hold={} ticks={} rocker={:?}",
-                        report.cmd as char,
-                        report.button,
-                        u8::from(report.hold),
-                        report.ticks,
-                        report.rocker,
-                    ),
-                );
-            }
-            self.last_press = press;
-            if report.button == 0 {
+            // Only a *pure* button event (no encoder motion) is a switch press. The
+            // K-Pod carries the held-button state on encoder-tick reports too, so
+            // without this a held switch re-fires its macro on every tick while the
+            // knob turns — flooding the K4. `ticks != 0` reports still tune (via
+            // `apply`); they just don't re-fire the macro.
+            if report.button == 0 || report.ticks != 0 {
                 return;
             }
+            let press = (report.button, report.hold);
             // The K-Pod emits one resolved event per gesture (tap → hold=0, hold →
             // hold=1), with no release/idle event to reset between presses. Fire on
             // every button event so repeated identical gestures (tap, tap) each
             // count — collapsing only a burst of the *same* (button, hold) within a
-            // short window, in case a report is ever repeated. (The old
-            // "fire only when (button,hold) changed" logic dropped a repeat of the
-            // same gesture and made tap/hold feel swapped.)
+            // short window, in case a report is ever repeated.
             let now = Instant::now();
             if let Some((last, at)) = self.last_fire {
                 if last == press && now.duration_since(at) < Duration::from_millis(150) {
