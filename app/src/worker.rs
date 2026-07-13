@@ -166,9 +166,6 @@ pub struct UiSnapshot {
     pub diag_lines: Vec<String>,
     /// Human-readable status / last error.
     pub status: String,
-    /// K-Pod rocker selection: `Some(false)` = VFO A, `Some(true)` = VFO B,
-    /// `None` = RIT/XIT or K-Pod idle. The UI switches its active VFO to match.
-    pub kpod_vfo: Option<bool>,
     /// Full radio state model, for the config screens to read back their current
     /// values on connect (FR-UI-19 read-back). `None` fields = not yet reported.
     pub radio: RadioState,
@@ -385,10 +382,6 @@ fn publish(snapshot: &Arc<Mutex<UiSnapshot>>, ws: &WorkerState) {
         // move us out of this phase (FR-UI-16).
         if s.connected {
             s.phase = ConnPhase::Connected;
-        }
-        #[cfg(feature = "kpod")]
-        {
-            s.kpod_vfo = ws.kpod.active_vfo();
         }
         s.transmitting = session.is_transmitting();
         s.tx_armed = session.is_tx_armed();
@@ -920,8 +913,8 @@ mod kpod {
         enabled: Arc<AtomicBool>,
         rx: Receiver<KpodMsg>,
         tuner: [Tuner; 2], // [VFO A, VFO B] running tune targets
-        /// Rocker selection published to the UI: Some(false)=A, Some(true)=B.
-        active_vfo: Option<bool>,
+        /// Last TX-VFO we commanded from the rocker (via split): Some(true)=B.
+        tx_vfo: Option<bool>,
         _handle: thread::JoinHandle<()>,
     }
 
@@ -939,14 +932,9 @@ mod kpod {
                 enabled,
                 rx,
                 tuner: [Tuner::default(); 2],
-                active_vfo: None,
+                tx_vfo: None,
                 _handle: handle,
             }
-        }
-
-        /// The rocker's current VFO selection, for the UI to follow.
-        pub(super) fn active_vfo(&self) -> Option<bool> {
-            self.active_vfo
         }
 
         /// Enable/disable at runtime (config toggle); the poll thread reacts.
@@ -974,17 +962,27 @@ mod kpod {
                     KpodMsg::Connected => diag.log(Level::Info, "kpod", "K-Pod connected"),
                     KpodMsg::Lost => diag.log(Level::Info, "kpod", "K-Pod disconnected"),
                     KpodMsg::Event(report) => {
-                        // Track the rocker's VFO selection so the UI can follow it
-                        // (RIT/XIT and idle leave the last VFO selection in place).
-                        match report.rocker {
-                            Rocker::VfoA => self.active_vfo = Some(false),
-                            Rocker::VfoB => self.active_vfo = Some(true),
-                            _ => {}
-                        }
                         if let Some(s) = session.as_deref_mut() {
+                            // Rocker A/B → switch the K4 TX VFO via split: VFO A =
+                            // split off (TX on A), VFO B = split on (TX on B). Only
+                            // on a genuine change; RIT/XIT/idle leave TX alone. The
+                            // app reflects the TX VFO from the split state.
+                            let want_tx_b = match report.rocker {
+                                Rocker::VfoA => Some(false),
+                                Rocker::VfoB => Some(true),
+                                _ => None,
+                            };
+                            if let Some(tx_b) = want_tx_b {
+                                if self.tx_vfo != Some(tx_b) {
+                                    self.tx_vfo = Some(tx_b);
+                                    let cmd = if tx_b { "FT1;" } else { "FT0;" };
+                                    let _ = s.send(cmd);
+                                    s.apply_local(cmd);
+                                }
+                            }
                             self.apply(report, s);
                         }
-                        // No session → ignore ticks (nothing to tune yet).
+                        // No session → ignore (nothing to tune/switch yet).
                     }
                 }
             }
