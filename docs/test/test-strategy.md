@@ -1,7 +1,7 @@
 ---
 title: "Test Strategy & Traceability"
 status: Draft
-version: "1.18"
+version: "1.19"
 updated: 2026-07-07
 authors:
   - Simon Keimer (DC0SK)
@@ -317,3 +317,4 @@ FR-SES-MULTI, FR-DIAG-02, etc. — get `TC` IDs when promoted to `Approved`.)*
 | 2026-07-12 | 1.16 | DC0SK | New feature: Elecraft K-Pod support (FR-KPOD-01/02/03/04). New `k4-kpod` crate — pure, dependency-free protocol per the K-Pod USB spec v1.03 (8-byte HID packets, VID 0x04D8/PID 0xF12D): `Report::parse`, `action_for` (rocker → VFO A/B/RIT-XIT, encoder ticks × step), `Tuner` (accumulates rapid ticks), command builders + `selection_leds`; unit-tested. HID device I/O behind the `hidapi` feature; worker integration behind the app's `kpod` feature polls the K-Pod and applies events. Hardware I/O (FR-KPOD-04, Ver D) validated in the HIL run. Also fixed a leftover FR-VFO-08 dash mojibake. 156 tests. |
 | 2026-07-12 | 1.17 | DC0SK | K-Pod runtime opt-in (FR-KPOD-05): move the K-Pod from a compile-only feature to a **config-menu toggle** (`kpod_enabled` pref, default off, persisted; new Settings control + WorkerCmd::SetKpodEnabled). The `kpod` feature is now default-built. The worker opens the device lazily only when enabled, retries discovery every ~3 s while absent, and drops the handle on any I/O error (unplug) — so the app never blocks or panics whether or not a K-Pod is attached. New config round-trip test. 157 tests. |
 | 2026-07-13 | 1.18 | DC0SK | K-Pod HID fix (FR-KPOD-04): the K-Pod does NOT support HID feature reports (`SET/GET_REPORT` → "Broken pipe"), so the app never recognised it. Switch `device.rs` to `write()`/`read_timeout()` (interrupt endpoints) — validated live on real hardware (182 polls, 0 errors, live encoder/rocker events; see hil-runs/2026-07-13-kpod-framing.md). Move the K-Pod polling to a dedicated thread so its blocking USB read can't stall the audio/CAT loop, and make recognition independent of the radio connection. 157 tests. |
+| 2026-07-13 | 1.19 | DC0SK | K-Pod display fixes: (1) K-Pod tuning now updates the app's VFO readout immediately — `WorkerCmd::SetFreqA/B` and the K-Pod path only *sent* the CAT SET, which the K4 doesn't auto-echo, so the readout only refreshed on the ~8 s resync; new `Session::apply_local` folds the SET into local state so the snapshot reflects it at once (FR-KPOD-02). (2) The K-Pod rocker now switches the app's shown VFO A/B — the rocker selection is published in the snapshot and the UI adopts it on a genuine change (FR-KPOD-01). 157 tests. |

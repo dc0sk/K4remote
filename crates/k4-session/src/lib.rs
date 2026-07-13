@@ -336,6 +336,15 @@ impl<L: CatLink, C: Clock> Session<L, C> {
     pub fn state(&self) -> &RadioState {
         &self.state
     }
+
+    /// Fold a locally-generated CAT string into the state, as if the radio had
+    /// echoed it — for optimistic display of commands we originate (e.g. K-Pod
+    /// tuning) when the radio does not auto-echo `SET`s. Reconciled by the next
+    /// real read-back.
+    pub fn apply_local(&mut self, cat: &str) -> bool {
+        self.state.apply_cat(cat)
+    }
+
     /// Whether the link is considered up.
     pub fn is_connected(&self) -> bool {
         self.connected
