@@ -175,6 +175,10 @@ struct App {
     // Last K4 panadapter mode seen (#DPM), so the A/B/A+B view follows it on a
     // genuine change without fighting a manual selection.
     last_pan_mode: Option<u8>,
+    // Last per-VFO modes seen, so the per-mode tuning step (VT/VT$) is re-queried
+    // when a VFO's mode is first known / changes (the K4 stores it per mode).
+    last_mode_a: Option<k4_protocol::state::Mode>,
+    last_mode_b: Option<k4_protocol::state::Mode>,
     // Optimistic VFO frequency after a digit click, so the readout updates
     // instantly instead of waiting for the radio's echo (FR-VFO-08). Cleared
     // once the radio confirms, or after a short staleness timeout (see ui::OptVfo).
@@ -710,6 +714,8 @@ impl App {
             tx_vfo_b: false,
             last_split: None,
             last_pan_mode: None,
+            last_mode_a: None,
+            last_mode_b: None,
             opt_vfo: ui::OptVfo::default(),
             last_pwr_range: None,
             af_gain: 30,
@@ -1913,6 +1919,21 @@ impl App {
                     if self.view_mode != ui::ViewMode::Dual {
                         self.active_rx_b = self.view_mode == ui::ViewMode::SingleB;
                     }
+                }
+                // The K4 stores the tuning step (VT) per mode *and* per VFO, so
+                // re-query each VFO's step with its mode once known / on a mode
+                // change — the bare VT$; GET doesn't reliably report VFO B's.
+                if let Some(m) = ui::adopt_on_change(&mut self.last_mode_a, self.ui.radio.mode_a) {
+                    self.send(WorkerCmd::Cat(k4_protocol::cat::query_tune_step(
+                        false,
+                        md_digit(m),
+                    )));
+                }
+                if let Some(m) = ui::adopt_on_change(&mut self.last_mode_b, self.ui.radio.mode_b) {
+                    self.send(WorkerCmd::Cat(k4_protocol::cat::query_tune_step(
+                        true,
+                        md_digit(m),
+                    )));
                 }
                 // Adopt the radio's TX power range on a genuine change only, so it
                 // reflects the real state (incl. changes made at the K4) without a

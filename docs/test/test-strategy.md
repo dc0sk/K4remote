@@ -1,7 +1,7 @@
 ---
 title: "Test Strategy & Traceability"
 status: Draft
-version: "1.22"
+version: "1.23"
 updated: 2026-07-07
 authors:
   - Simon Keimer (DC0SK)
@@ -321,3 +321,4 @@ FR-SES-MULTI, FR-DIAG-02, etc. — get `TC` IDs when promoted to `Approved`.)*
 | 2026-07-13 | 1.20 | DC0SK | K-Pod rocker switches the K4 TX VFO (FR-KPOD-01): the rocker now commands split — VFO A = FT0 (TX on A), VFO B = FT1 (TX on B) — on a genuine change, applied locally so the app's TX-VFO indicator (driven by the split state) follows immediately. Replaces the prior app-only RX-view switch (removed the kpod_vfo snapshot field + app-side follow). Knob still tunes the rocker-selected VFO. 157 tests. |
 | 2026-07-13 | 1.21 | DC0SK | K-Pod RIT/XIT step fix (FR-KPOD-02): the RIT/XIT offset was tuned at the VFO rate (`tune_step_hz`, e.g. 100 Hz–1 kHz/tick), so a couple of ticks slammed it to the ±9999 Hz clamp (jumping +9.99/0/−9.99 kHz). `action_for` now takes a separate `rit_step_hz`; the worker uses a fine 10 Hz/tick for RIT/XIT while VFO tuning keeps the radio rate. Test exercises both steps. 157 tests. |
 | 2026-07-13 | 1.22 | DC0SK | K-Pod tune-cursor + view sync: (1) clicking a frequency digit now sets the K4 tune rate (`VT`) to that digit's place (1 Hz…100 kHz) via new `cat::set_tune_step` + a `CatLocal` worker cmd (send + apply_local), so the K-Pod steps at that digit and the K4/app stay in sync — an underline cursor marks the digit in both VFO frames (fixed-width digit cells so it renders reliably). (2) The A/B/A+B view now follows the K4's panadapter mode (`#DPM`) continuously (not just the one-shot seed), fixing the startup mismatch (and the empty spectrum pane it caused). 158 tests. |
+| 2026-07-13 | 1.23 | DC0SK | Per-VFO tune-step sync (FR-VFO-03): the K4 stores the tuning step (VT) per mode and per VFO, and the bare `VT$;` GET didn't reliably report VFO B's — so B's underline/step wasn't synced at startup. Add `cat::query_tune_step` (the documented mode-qualified ALT GET `VT[$]Xm;`) and re-query each VFO's step with its mode as soon as the mode is known / on a mode change. 159 tests. |
