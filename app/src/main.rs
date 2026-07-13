@@ -163,6 +163,11 @@ struct App {
     log_autoscroll: bool,
     log_id: scrollable::Id,
     log_len: usize,
+    // Frozen log snapshot rendered while auto-scroll is off, so the churning
+    // live traffic doesn't make the console unreadable.
+    log_frozen: Vec<String>,
+    // Case-insensitive substring filter for the log console (empty = show all).
+    log_filter: String,
     // Local RX filter bandwidth, Hz (seeded from the radio; cycled by the BW btn).
     bw_hz: u32,
     // Which VFO transmits (B under split); tracks the radio, set optimistically
@@ -534,6 +539,7 @@ enum Message {
     WindowOpened,
     WindowClosed(iced::window::Id),
     ToggleLogAutoscroll,
+    LogFilterChanged(String),
     // Graphic-EQ screens (FR-EQ-01).
     EqChanged(EqTarget, usize, i8),
     EqFlat(EqTarget),
@@ -709,6 +715,8 @@ impl App {
             show_log: false,
             log_autoscroll: true,
             log_id: scrollable::Id::new("diag-log"),
+            log_frozen: Vec::new(),
+            log_filter: String::new(),
             log_len: 0,
             bw_hz: 2800,
             tx_vfo_b: false,
@@ -1735,22 +1743,20 @@ impl App {
             Message::ToggleLogAutoscroll => {
                 self.log_autoscroll = !self.log_autoscroll;
                 if self.log_autoscroll {
+                    self.log_frozen.clear();
                     // Resume following the newest line.
                     return scrollable::snap_to(
                         self.log_id.clone(),
                         scrollable::RelativeOffset::END,
                     );
                 }
-                // Freeze: convert the sticky "bottom" (Relative(1.0)) into a
-                // concrete absolute offset near the current end so new lines no
-                // longer drag the view. ~15 px per line at text size 11.
-                return scrollable::scroll_to(
-                    self.log_id.clone(),
-                    scrollable::AbsoluteOffset {
-                        x: 0.0,
-                        y: self.log_len as f32 * 15.0,
-                    },
-                );
+                // Freeze the current lines so the console holds still to be read
+                // (the live buffer keeps churning underneath). Start at the newest.
+                self.log_frozen = self.ui.diag_lines.clone();
+                return scrollable::snap_to(self.log_id.clone(), scrollable::RelativeOffset::END);
+            }
+            Message::LogFilterChanged(pat) => {
+                self.log_filter = pat;
             }
             Message::EqChanged(target, band, value) => {
                 let v = value.clamp(-ui::EQ_DB_RANGE, ui::EQ_DB_RANGE);
@@ -4174,8 +4180,20 @@ impl App {
     fn diag_window_view(&self) -> Element<'_, Message> {
         set_active_theme(self.effective_theme());
         let dim = role_color(ui::ColorRole::Inactive);
+        // While auto-scroll is off, show a frozen snapshot so the fast-churning
+        // live traffic doesn't keep replacing the lines under the reader.
+        let lines = if self.log_autoscroll {
+            &self.ui.diag_lines
+        } else {
+            &self.log_frozen
+        };
+        // Case-insensitive substring filter over the visible log lines (FR-DIAG-02).
+        let filter = self.log_filter.to_lowercase();
         let mut log_col = Column::new().spacing(1);
-        for line in &self.ui.diag_lines {
+        for line in lines {
+            if !filter.is_empty() && !line.to_lowercase().contains(&filter) {
+                continue;
+            }
             log_col = log_col.push(Text::new(line.clone()).size(11).color(dim));
         }
         let opt = |label: &'static str, on: bool, msg: Message| {
@@ -4208,7 +4226,14 @@ impl App {
                             .size(13)
                             .width(Length::Fixed(200.0)),
                     )
-                    .push(small_btn("SEND", Message::SendCat)),
+                    .push(small_btn("SEND", Message::SendCat))
+                    .push(horizontal_space())
+                    .push(
+                        TextInput::new("filter log…", &self.log_filter)
+                            .on_input(Message::LogFilterChanged)
+                            .size(13)
+                            .width(Length::Fixed(160.0)),
+                    ),
             )
             .push(
                 Text::new(format!(

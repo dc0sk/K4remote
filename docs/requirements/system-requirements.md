@@ -228,7 +228,7 @@ Interface Spec v1.03; Owner's Manual Rev F) for hands-on VFO selection + tuning.
 | ID | Statement | Up | Pri | Ver | Acceptance criteria |
 |---|---|---|---|---|---|
 | `FR-DIAG-01` | provide structured, levelled logging of transport, CAT frames, and session events. | STK-17 | S | T | Log records carry level, timestamp, category; CAT frames optionally traced. |
-| `FR-DIAG-02` | offer a raw CAT command/console view for troubleshooting (send arbitrary command, see raw RESP). | STK-17 | C | D | Operator can send `IF;` and see the raw reply. |
+| `FR-DIAG-02` | offer a raw CAT command/console view for troubleshooting (send arbitrary command, see raw RESP), with a **text filter** that narrows the visible log lines to those matching a typed substring (case-insensitive). | STK-17 | C | D | Operator can send `IF;` and see the raw reply; typing `RO` in the filter shows only lines containing `RO`. |
 | `FR-DIAG-04` | show the diagnostics console in a **separate window**, off by default, toggled from Settings. | STK-13 | C | D | Settings toggles a detached diagnostics window; closing the main window quits. |
 | `FR-DIAG-03` | never log secrets (passwords) or full audio payloads. | STK-14/17 | M | I | Inspection confirms redaction. |
 
