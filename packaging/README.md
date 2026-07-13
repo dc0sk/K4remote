@@ -56,10 +56,21 @@ Build the arm64 package on an arm64 host (or a Raspberry Pi) the same way.
 cd packaging && makepkg -si          # build + install
 ```
 
-## Windows (`.zip` / installer)
+## Windows (`.zip` + installer)
 
-The release workflow ships a `.zip` of `k4remote.exe`. A signed MSI can be added
-with [`cargo-wix`](https://github.com/volks73/cargo-wix) (`cargo wix`).
+The release workflow ships two Windows artifacts: a `.zip` of `k4remote.exe`
+(portable) and a **`setup.exe` installer** built with
+[Inno Setup 6](https://jrsoftware.org/isinfo.php) from
+`packaging/windows/k4remote.iss`. The installer places the app under
+*Program Files*, adds Start-menu (and optional desktop) shortcuts, and registers
+an uninstaller; the app version is passed in from the release tag.
+
+Build it locally on Windows (Inno Setup installed):
+
+```powershell
+cargo build -p k4remote --release --features vendored-tls
+iscc /DMyAppVersion=0.2.1 packaging\windows\k4remote.iss   # → k4remote-windows-x86_64-setup.exe
+```
 
 ## macOS (`.app` / `.dmg`)
 
