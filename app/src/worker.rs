@@ -322,7 +322,9 @@ impl WorkerState {
             waterfall: [VecDeque::new(), VecDeque::new()],
             mini_pan: Vec::new(),
             // Debug level so the raw CAT console shows traffic; bounded ring.
-            diag: DiagLog::new(300, Level::Debug),
+            // Sized to hold a few minutes of busy traffic so lines don't scroll
+            // out from under the reader before they can be copied.
+            diag: DiagLog::new(4000, Level::Debug),
             connect_params: None,
             backoff: Backoff::default(),
             next_attempt: None,
@@ -416,7 +418,7 @@ fn publish(snapshot: &Arc<Mutex<UiSnapshot>>, ws: &WorkerState) {
         s.waterfall = ws.waterfall[0].iter().cloned().collect();
         s.waterfall_sub = ws.waterfall[1].iter().cloned().collect();
         s.mini_pan = ws.mini_pan.clone();
-        s.diag_lines = ws.diag.recent(300);
+        s.diag_lines = ws.diag.recent(4000);
         s.radio = st.clone();
     }
 }
@@ -596,7 +598,7 @@ fn run(rx: Receiver<WorkerCmd>, snapshot: Arc<Mutex<UiSnapshot>>) {
             }
             // Publish diagnostics even while disconnected (connect errors, etc.).
             if let Ok(mut s) = snapshot.lock() {
-                s.diag_lines = ws.diag.recent(300);
+                s.diag_lines = ws.diag.recent(4000);
             }
             thread::sleep(Duration::from_millis(50));
         }
