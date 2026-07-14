@@ -127,6 +127,11 @@ struct App {
     rx_tab: RxTab,
     // MENU screen search filter (FR-MENU-01)
     menu_filter: String,
+    // MENU value editing (FR-MENU-01): the selected item id and the pending new
+    // value typed into its editor; the current value comes from the radio's
+    // `menu_values` read-back.
+    menu_selected: Option<u16>,
+    menu_edit: String,
     // TX text-message entry (FR-TX-MSG-01), Fn sub-panel + DX search
     tx_text: String,
     fn_tab: FnTab,
@@ -570,11 +575,16 @@ enum Message {
     SetTxTab(TxTab),
     Tx(TxMsg),
     VfoOp(u8),
-    MenuOpen(u16),
     // Front-panel switch emulation (FR-SW-01): quick memories, PF keys.
     Switch(u16),
     // MENU screen search (FR-MENU-01).
     MenuFilter(String),
+    // MENU value editing (FR-MENU-01): select an item (queries its value), edit
+    // the pending value, set it (`ME<id>.<value>`), or nudge a numeric value ±.
+    MenuSelect(u16),
+    MenuEditChanged(String),
+    MenuSet,
+    MenuNudge(i64),
     // BAND transverter select (FR-VFO-04), TX text (FR-TX-MSG-01), Fn tabs / DX.
     SelectXvtr(u8),
     TxText(String),
@@ -714,6 +724,8 @@ impl App {
             rx_cfg: RxConfig::default(),
             rx_tab: RxTab::Eq,
             menu_filter: String::new(),
+            menu_selected: None,
+            menu_edit: String::new(),
             tx_text: String::new(),
             fn_tab: FnTab::Keys,
             dx_filter: String::new(),
@@ -1898,7 +1910,41 @@ impl App {
             Message::SetTxTab(t) => self.tx_tab = t,
             Message::Tx(t) => self.apply_tx(t),
             Message::VfoOp(op) => self.send(WorkerCmd::Cat(k4_protocol::cat::vfo_copy_swap(op))),
-            Message::MenuOpen(id) => self.send(WorkerCmd::Cat(k4_protocol::cat::menu_open(id))),
+            Message::MenuSelect(id) => {
+                // Select an item to edit: remember it, clear the entry field, and
+                // query its current value (`ME<id>`) so the editor can show it.
+                self.menu_selected = Some(id);
+                self.menu_edit.clear();
+                self.send(WorkerCmd::Cat(k4_protocol::cat::menu_query(id)));
+            }
+            Message::MenuEditChanged(v) => self.menu_edit = v,
+            Message::MenuSet => {
+                if let Some(id) = self.menu_selected {
+                    let v = self.menu_edit.trim();
+                    if !v.is_empty() {
+                        self.send(WorkerCmd::Cat(k4_protocol::cat::menu_set(id, v)));
+                        self.menu_edit.clear();
+                        // Read the value back so the "current" reflects the change.
+                        self.send(WorkerCmd::Cat(k4_protocol::cat::menu_query(id)));
+                    }
+                }
+            }
+            Message::MenuNudge(delta) => {
+                // Step a numeric menu value by ±delta from its current read-back.
+                if let Some(id) = self.menu_selected {
+                    if let Some(cur) = self
+                        .ui
+                        .radio
+                        .menu_values
+                        .get(&id)
+                        .and_then(|s| s.trim().parse::<i64>().ok())
+                    {
+                        let next = (cur + delta).to_string();
+                        self.send(WorkerCmd::Cat(k4_protocol::cat::menu_set(id, &next)));
+                        self.send(WorkerCmd::Cat(k4_protocol::cat::menu_query(id)));
+                    }
+                }
+            }
             Message::Switch(code) => {
                 use k4_protocol::cat;
                 self.switch_flash = Some(code);
@@ -3965,8 +4011,9 @@ impl App {
     }
 
     /// MENU screen (FR-MENU-01, SCR-MENU-*): the full K4 configuration-menu list
-    /// (from D12), searchable; tapping an item opens it on the radio (`MO`).
-    /// In-app value edit/lock/NORM (`MEDF`/`ME` read-back) is a follow-up.
+    /// (from D12), searchable. Tap an item to select it (queries its value via
+    /// `ME`); the editor below shows the current value and sets a new one
+    /// (`ME<id>.<value>`) — type a value and **Set**, or nudge a number with ±.
     fn menu_config_screen(&self) -> Element<'_, Message> {
         let dim = role_color(ui::ColorRole::Inactive);
         let rxv = role_color(ui::ColorRole::RxValue);
@@ -3976,18 +4023,25 @@ impl App {
         let mut list = Column::new().spacing(3);
         for i in &matches {
             let (id, name) = items[*i];
+            let selected = self.menu_selected == Some(id);
+            let mut row = Row::new()
+                .spacing(10)
+                .align_y(Alignment::Center)
+                .push(Text::new(name).size(12).width(Length::Fixed(300.0)))
+                .push(Text::new(format!("#{id:04}")).size(11).color(dim));
+            if let Some(v) = self.ui.radio.menu_values.get(&id) {
+                row = row.push(Text::new(format!("= {v}")).size(11).color(rxv));
+            }
             list = list.push(
-                Button::new(
-                    Row::new()
-                        .spacing(10)
-                        .align_y(Alignment::Center)
-                        .push(Text::new(name).size(12).width(Length::Fixed(320.0)))
-                        .push(Text::new(format!("#{id:04}")).size(11).color(dim)),
-                )
-                .style(btn_style(BtnKind::Plain))
-                .width(Length::Fill)
-                .padding([4, 8])
-                .on_press(Message::MenuOpen(id)),
+                Button::new(row)
+                    .style(btn_style(if selected {
+                        BtnKind::Active
+                    } else {
+                        BtnKind::Plain
+                    }))
+                    .width(Length::Fill)
+                    .padding([4, 8])
+                    .on_press(Message::MenuSelect(id)),
             );
         }
 
@@ -4006,19 +4060,61 @@ impl App {
                     .size(11)
                     .color(dim),
             );
-        Column::new()
+
+        let mut col = Column::new()
             .spacing(10)
             .push(header)
-            .push(scrollable(list).height(Length::Fixed(200.0)))
-            .push(
-                Text::new(
-                    "Tap an item to open it on the radio (MO). In-app value \
-                     edit / lock / NORM needs MEDF/ME read-back — follow-up.",
-                )
-                .size(10)
-                .color(dim),
-            )
-            .into()
+            .push(scrollable(list).height(Length::Fixed(180.0)));
+
+        // Value editor for the selected item.
+        if let Some(id) = self.menu_selected {
+            let name = items
+                .iter()
+                .find(|(iid, _)| *iid == id)
+                .map(|(_, n)| *n)
+                .unwrap_or("");
+            let cur = self
+                .ui
+                .radio
+                .menu_values
+                .get(&id)
+                .map(String::as_str)
+                .unwrap_or("…");
+            col = col.push(
+                Row::new()
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                    .push(
+                        Text::new(format!("{name}  #{id:04}"))
+                            .size(12)
+                            .color(rxv)
+                            .width(Length::Fixed(250.0)),
+                    )
+                    .push(
+                        Text::new(format!("now: {cur}"))
+                            .size(12)
+                            .color(dim)
+                            .width(Length::Fixed(110.0)),
+                    )
+                    .push(small_btn("−", Message::MenuNudge(-1)))
+                    .push(small_btn("+", Message::MenuNudge(1)))
+                    .push(
+                        TextInput::new("new value", &self.menu_edit)
+                            .on_input(Message::MenuEditChanged)
+                            .on_submit(Message::MenuSet)
+                            .size(13)
+                            .width(Length::Fixed(110.0)),
+                    )
+                    .push(small_btn("Set", Message::MenuSet)),
+            );
+        } else {
+            col = col.push(
+                Text::new("Tap an item to read its value, then set it or nudge a number with ±.")
+                    .size(10)
+                    .color(dim),
+            );
+        }
+        col.into()
     }
 
     /// DISPLAY panadapter-setup screen (FR-PAN-CTL-01, SCR-DSP-*): pan mode
