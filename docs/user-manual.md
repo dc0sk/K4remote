@@ -1,8 +1,8 @@
 ---
 title: "K4 Remote — User Manual"
 status: Draft
-version: "0.2.1"
-updated: 2026-07-13
+version: "0.2.2"
+updated: 2026-07-14
 authors:
   - Simon Keimer (DC0SK)
 ---
@@ -38,6 +38,20 @@ or USB/serial. This manual walks through installing, connecting, and operating t
 ---
 
 ## 1. Installing & running
+
+### Prebuilt downloads
+
+Tagged releases ship ready-to-run builds on the project's
+[Releases page](https://github.com/dc0sk/K4remote/releases):
+
+- **Windows** — `k4remote-windows-x86_64-setup.exe` (installer, with Start-menu shortcut and
+  uninstaller) or the portable `k4remote-windows-x86_64.zip`.
+- **Linux** — `.deb` (Debian / Ubuntu / Raspberry Pi OS, x86_64 + arm64) or a `.tar.gz` binary.
+- **macOS** — `.tar.gz` binary.
+
+To build from source instead, read on.
+
+### Building from source
 
 K4 Remote is built from source with **Rust 1.90 or newer**.
 
