@@ -1303,7 +1303,19 @@ impl App {
                     }
                 }
             }
-            Message::Band(up) => self.send(WorkerCmd::Band(up)),
+            Message::Band(up) => {
+                // Band up/down applies to the **active** VFO (main or sub), not
+                // always VFO A — matches the other menu controls (FR-VFO-04).
+                let cmd = if up {
+                    k4_protocol::cat::band_up()
+                } else {
+                    k4_protocol::cat::band_down()
+                };
+                self.send(WorkerCmd::Cat(target_rx(
+                    cmd.to_string(),
+                    self.active_sub(),
+                )));
+            }
             Message::ToggleAtten => {
                 self.send(WorkerCmd::Cat(target_rx("RA/;".into(), self.active_sub())))
             }
@@ -1873,10 +1885,17 @@ impl App {
                 }
             },
             Message::Disp(d) => self.apply_disp(d),
-            Message::SelectBand(bn) => self.send(WorkerCmd::Cat(k4_protocol::cat::set_band(bn))),
-            Message::BandStack => self.send(WorkerCmd::Cat(
+            // Band select + band-stack recall target the active VFO (main or sub),
+            // via `target_rx`, so a direct band change follows the VFO you're on —
+            // not always VFO A (FR-VFO-04).
+            Message::SelectBand(bn) => self.send(WorkerCmd::Cat(target_rx(
+                k4_protocol::cat::set_band(bn),
+                self.active_sub(),
+            ))),
+            Message::BandStack => self.send(WorkerCmd::Cat(target_rx(
                 k4_protocol::cat::band_stack_next().to_string(),
-            )),
+                self.active_sub(),
+            ))),
             Message::SetTxTab(t) => self.tx_tab = t,
             Message::Tx(t) => self.apply_tx(t),
             Message::VfoOp(op) => self.send(WorkerCmd::Cat(k4_protocol::cat::vfo_copy_swap(op))),
@@ -2078,8 +2097,10 @@ impl App {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        // Poll the shared snapshot ~6×/s; the UI thread never blocks on I/O.
-        let tick = iced::time::every(Duration::from_millis(150)).map(|_| Message::Tick);
+        // Poll the shared snapshot ~10×/s; the UI thread never blocks on I/O. A
+        // brisk tick keeps radio-round-trip changes (band, mode, freq read-back)
+        // and the spectrum/meters feeling responsive.
+        let tick = iced::time::every(Duration::from_millis(100)).map(|_| Message::Tick);
         // Track window width for the responsive band layout (FR-UI-12).
         let resize =
             iced::window::resize_events().map(|(id, size)| Message::Resized(id, size.width));
@@ -6210,5 +6231,31 @@ fn target_rx(cmd: String, sub: bool) -> String {
         format!("{}${}", &cmd[..2], &cmd[2..])
     } else {
         cmd
+    }
+}
+
+#[cfg(test)]
+mod band_target_tests {
+    use super::target_rx;
+
+    /// Band select / band up-down / band-stack recall target the **active** VFO:
+    /// the bare mnemonic for the main receiver, and the `$` form (inserted after
+    /// the 2-char mnemonic) for the sub / VFO B — so a band change follows the
+    /// VFO you're operating instead of always VFO A.
+    ///
+    /// trace: FR-VFO-04
+    #[test]
+    fn band_commands_follow_active_vfo() {
+        for cmd in ["BN05;", "BN+;", "BN-;", "BN^;"] {
+            assert_eq!(
+                target_rx(cmd.to_string(), false),
+                cmd,
+                "main VFO stays bare"
+            );
+        }
+        assert_eq!(target_rx("BN05;".to_string(), true), "BN$05;");
+        assert_eq!(target_rx("BN+;".to_string(), true), "BN$+;");
+        assert_eq!(target_rx("BN-;".to_string(), true), "BN$-;");
+        assert_eq!(target_rx("BN^;".to_string(), true), "BN$^;");
     }
 }

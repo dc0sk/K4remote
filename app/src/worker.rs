@@ -76,8 +76,6 @@ pub enum WorkerCmd {
     SetFreqB(u64),
     /// Set main-RX mode (raw `MD` digit, e.g. 3 = CW).
     SetMode(u8),
-    /// Band up (`true`) / down (`false`).
-    Band(bool),
     /// Toggle split (`FT/`).
     ToggleSplit,
     /// Toggle RIT (`RT/`).
@@ -768,15 +766,6 @@ fn handle_cmd(cmd: WorkerCmd, ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnaps
         WorkerCmd::SetMode(digit) => {
             if let Some(s) = ws.session.as_mut() {
                 let _ = s.send(&k4_protocol::cat::set_mode(digit));
-            }
-        }
-        WorkerCmd::Band(up) => {
-            if let Some(s) = ws.session.as_mut() {
-                let _ = s.send(if up {
-                    k4_protocol::cat::band_up()
-                } else {
-                    k4_protocol::cat::band_down()
-                });
             }
         }
         WorkerCmd::ToggleSplit => {
