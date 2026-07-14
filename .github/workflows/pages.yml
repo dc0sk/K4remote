@@ -1,0 +1,47 @@
+# Deploy the marketing/landing page (site/) to GitHub Pages.
+# Source is "GitHub Actions" (Settings → Pages). The page's images are pulled in
+# from docs/screenshots and packaging/icons at build time, so nothing is
+# duplicated in the repo.
+name: Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - "docs/screenshots/**"
+      - "packaging/icons/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Assemble site
+        run: |
+          mkdir -p _site/screenshots _site/img
+          cp site/index.html _site/
+          cp docs/screenshots/*.png _site/screenshots/
+          cp packaging/icons/k4remote-256.png _site/img/ 2>/dev/null || true
+          cp packaging/icons/k4remote.svg _site/img/ 2>/dev/null || true
+          touch _site/.nojekyll
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v4
