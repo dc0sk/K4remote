@@ -145,6 +145,18 @@
     .nav .links a:not(.btn){display:none}
     .gallery{grid-template-columns:1fr}
   }
+
+  /* click-to-zoom lightbox */
+  img.zoomable{cursor:zoom-in}
+  .lightbox{position:fixed; inset:0; z-index:100; display:flex; align-items:center;
+    justify-content:center; padding:24px; background:rgba(5,7,10,.88);
+    backdrop-filter:blur(6px); cursor:zoom-out;
+    opacity:0; visibility:hidden; transition:opacity .2s ease, visibility .2s ease}
+  .lightbox.open{opacity:1; visibility:visible}
+  .lightbox img{max-width:100%; max-height:100%; border:1px solid var(--line);
+    border-radius:12px; box-shadow:0 24px 70px rgba(0,0,0,.6);
+    transform:scale(.96); transition:transform .2s ease}
+  .lightbox.open img{transform:scale(1)}
 </style>
 </head>
 <body>
@@ -355,6 +367,40 @@
     <span class="sp">Not affiliated with or endorsed by Elecraft, Inc. “Elecraft”, “K4”, and “K-Pod” are trademarks of Elecraft, Inc.</span>
   </div>
 </footer>
+
+<div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="Enlarged image">
+  <img src="" alt="">
+</div>
+
+<script>
+(function(){
+  var box = document.getElementById('lightbox');
+  var boxImg = box.querySelector('img');
+
+  function open(img){
+    boxImg.src = img.currentSrc || img.src;
+    boxImg.alt = img.alt || '';
+    box.classList.add('open');
+    document.body.style.overflow = 'hidden';
+  }
+  function close(){
+    box.classList.remove('open');
+    document.body.style.overflow = '';
+  }
+
+  // Zoom any content image (hero shot, gallery, and walk-through steps).
+  var imgs = document.querySelectorAll('.hero-shot, .gallery img, .step img');
+  imgs.forEach(function(img){
+    img.classList.add('zoomable');
+    img.addEventListener('click', function(){ open(img); });
+  });
+
+  box.addEventListener('click', close);
+  document.addEventListener('keydown', function(e){
+    if(e.key === 'Escape' && box.classList.contains('open')) close();
+  });
+})();
+</script>
 
 </body>
 </html>
