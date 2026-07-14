@@ -1304,17 +1304,16 @@ impl App {
                 }
             }
             Message::Band(up) => {
-                // Band up/down applies to the **active** VFO (main or sub), not
-                // always VFO A — matches the other menu controls (FR-VFO-04).
+                // Band up/down applies to the **transmit** VFO — VFO B under split,
+                // else VFO A — not always VFO A. `tx_vfo_b` tracks the radio's split
+                // state (synced at connect), so this is right immediately, before
+                // any A/B click (FR-VFO-04).
                 let cmd = if up {
                     k4_protocol::cat::band_up()
                 } else {
                     k4_protocol::cat::band_down()
                 };
-                self.send(WorkerCmd::Cat(target_rx(
-                    cmd.to_string(),
-                    self.active_sub(),
-                )));
+                self.send(WorkerCmd::Cat(target_rx(cmd.to_string(), self.tx_vfo_b)));
             }
             Message::ToggleAtten => {
                 self.send(WorkerCmd::Cat(target_rx("RA/;".into(), self.active_sub())))
@@ -1885,16 +1884,16 @@ impl App {
                 }
             },
             Message::Disp(d) => self.apply_disp(d),
-            // Band select + band-stack recall target the active VFO (main or sub),
-            // via `target_rx`, so a direct band change follows the VFO you're on —
-            // not always VFO A (FR-VFO-04).
+            // Band select + band-stack recall target the transmit VFO (VFO B under
+            // split, else A) via `target_rx`, so a band change follows the VFO you
+            // operate on — not always VFO A (FR-VFO-04).
             Message::SelectBand(bn) => self.send(WorkerCmd::Cat(target_rx(
                 k4_protocol::cat::set_band(bn),
-                self.active_sub(),
+                self.tx_vfo_b,
             ))),
             Message::BandStack => self.send(WorkerCmd::Cat(target_rx(
                 k4_protocol::cat::band_stack_next().to_string(),
-                self.active_sub(),
+                self.tx_vfo_b,
             ))),
             Message::SetTxTab(t) => self.tx_tab = t,
             Message::Tx(t) => self.apply_tx(t),
@@ -6238,10 +6237,10 @@ fn target_rx(cmd: String, sub: bool) -> String {
 mod band_target_tests {
     use super::target_rx;
 
-    /// Band select / band up-down / band-stack recall target the **active** VFO:
-    /// the bare mnemonic for the main receiver, and the `$` form (inserted after
-    /// the 2-char mnemonic) for the sub / VFO B — so a band change follows the
-    /// VFO you're operating instead of always VFO A.
+    /// Band select / band up-down / band-stack recall target the **transmit** VFO
+    /// (VFO B under split, else A): the bare mnemonic for the main VFO, and the
+    /// `$` form (inserted after the 2-char mnemonic) for the sub / VFO B — so a
+    /// band change follows the VFO you operate on instead of always VFO A.
     ///
     /// trace: FR-VFO-04
     #[test]
