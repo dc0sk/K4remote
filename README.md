@@ -18,7 +18,7 @@ stakeholder needs down to individual tests, enforced by a build gate.
 > macros), a filterable + selectable diagnostics console, and RIT/XIT sync fixes; K-Pod tap/hold
 > discrimination and hold-while-tuning fixes (0.2.1); a **Windows `setup.exe` installer** (0.2.2).
 >
-> 📖 **New here? Start with the [User Manual](docs/user-manual.md).**
+> 🌐 **[Project website](https://dc0sk.github.io/K4remote/)** · 📖 **New here? Start with the [User Manual](docs/user-manual.md).**
 >
 > *(Screenshots show the app driven by the protocol simulator; the panadapter fills in from a
 > live radio's stream.)*

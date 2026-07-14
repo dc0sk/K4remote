@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>K4 Remote — remote control panel for the Elecraft K4</title>
+<meta name="description" content="A cross-platform Rust/iced remote-control panel for the Elecraft K4 transceiver: rig control, spectrum + waterfall, full-duplex audio, transmit, and Elecraft K-Pod support — over Ethernet or USB/serial.">
+<link rel="icon" type="image/png" href="img/k4remote-256.png">
+<meta property="og:title" content="K4 Remote">
+<meta property="og:description" content="Remote control panel for the Elecraft K4 — rig control, spectrum/waterfall, full-duplex audio, transmit, and K-Pod support.">
+<meta property="og:type" content="website">
+<style>
+  :root{
+    --bg:#0a0c10; --bg2:#11151c; --panel:#161b23; --panel2:#1b212b;
+    --line:#28303c; --ink:#eceff2; --dim:#93a0b3; --dim2:#6b7787;
+    --blue:#3d9bff; --blue2:#5bb0ff; --amber:#ff9a1e;
+    --radius:14px; --maxw:1080px;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  a{color:var(--blue2); text-decoration:none}
+  a:hover{text-decoration:underline}
+  code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.9em}
+  .wrap{max-width:var(--maxw); margin:0 auto; padding:0 20px}
+  h1,h2,h3{line-height:1.2; margin:0 0 .4em}
+  h2{font-size:clamp(1.5rem,3vw,2rem); margin-top:0}
+  .muted{color:var(--dim)}
+
+  /* header */
+  header{position:sticky; top:0; z-index:10; background:rgba(10,12,16,.82);
+    backdrop-filter:blur(10px); border-bottom:1px solid var(--line)}
+  .nav{display:flex; align-items:center; gap:20px; height:60px}
+  .brand{display:flex; align-items:center; gap:10px; font-weight:700; letter-spacing:.2px}
+  .brand img{width:26px; height:26px}
+  .nav .links{margin-left:auto; display:flex; gap:22px; align-items:center}
+  .nav .links a{color:var(--dim); font-size:.94rem}
+  .nav .links a:hover{color:var(--ink); text-decoration:none}
+  .btn{display:inline-block; padding:10px 18px; border-radius:10px; font-weight:600;
+    border:1px solid transparent; cursor:pointer}
+  .btn-primary{background:linear-gradient(180deg,var(--blue2),var(--blue)); color:#02121f}
+  .btn-primary:hover{filter:brightness(1.06); text-decoration:none}
+  .btn-ghost{border-color:var(--line); color:var(--ink); background:var(--panel)}
+  .btn-ghost:hover{border-color:var(--blue); text-decoration:none}
+
+  /* hero */
+  .hero{position:relative; overflow:hidden; border-bottom:1px solid var(--line);
+    background:
+      radial-gradient(1200px 400px at 80% -10%, rgba(61,155,255,.16), transparent 60%),
+      radial-gradient(800px 380px at 0% 0%, rgba(255,154,30,.08), transparent 55%);}
+  .hero .wrap{padding:64px 20px 40px}
+  .kicker{display:inline-block; font-size:.8rem; letter-spacing:.16em; text-transform:uppercase;
+    color:var(--blue2); border:1px solid var(--line); background:var(--panel);
+    padding:5px 12px; border-radius:999px; margin-bottom:20px}
+  .hero h1{font-size:clamp(2.1rem,5vw,3.4rem); letter-spacing:-.5px}
+  .hero p.lead{font-size:clamp(1.05rem,2.2vw,1.28rem); color:var(--dim); max-width:44ch}
+  .cta{display:flex; flex-wrap:wrap; gap:12px; margin-top:26px}
+  .hero-shot{margin-top:40px; border:1px solid var(--line); border-radius:var(--radius);
+    box-shadow:0 24px 60px rgba(0,0,0,.5); width:100%; display:block}
+  .badges{display:flex; flex-wrap:wrap; gap:8px 18px; margin-top:24px; color:var(--dim2); font-size:.86rem}
+  .badges b{color:var(--dim)}
+
+  /* sections */
+  section{padding:64px 0}
+  section.alt{background:var(--bg2); border-top:1px solid var(--line); border-bottom:1px solid var(--line)}
+  .sec-head{max-width:60ch; margin-bottom:34px}
+  .sec-head p{color:var(--dim); margin:.2em 0 0}
+
+  /* feature grid */
+  .grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:16px}
+  .card{background:var(--panel); border:1px solid var(--line); border-radius:var(--radius);
+    padding:20px 20px 18px; transition:border-color .15s, transform .15s}
+  .card:hover{border-color:#3a4658; transform:translateY(-2px)}
+  .card h3{font-size:1.06rem; display:flex; align-items:center; gap:9px}
+  .dot{width:9px; height:9px; border-radius:50%; background:var(--blue); flex:none; box-shadow:0 0 0 3px rgba(61,155,255,.14)}
+  .card.amber .dot{background:var(--amber); box-shadow:0 0 0 3px rgba(255,154,30,.14)}
+  .card p{margin:.4em 0 0; color:var(--dim); font-size:.95rem}
+
+  /* walkthrough */
+  .steps{display:flex; flex-direction:column; gap:44px}
+  .step{display:grid; grid-template-columns:1.05fr 1fr; gap:34px; align-items:center}
+  .step:nth-child(even) .step-media{order:2}
+  .step .num{font:700 .8rem/1 ui-monospace,monospace; color:var(--blue2);
+    letter-spacing:.15em; text-transform:uppercase; margin-bottom:8px}
+  .step h3{font-size:1.35rem}
+  .step p{color:var(--dim); margin:.5em 0 0}
+  .step ul{color:var(--dim); margin:.7em 0 0; padding-left:1.1em}
+  .step li{margin:.25em 0}
+  .step img{width:100%; border:1px solid var(--line); border-radius:12px; box-shadow:0 14px 34px rgba(0,0,0,.45); display:block}
+  .gallery{display:grid; grid-template-columns:repeat(3,1fr); gap:14px; margin-top:8px}
+  .gallery figure{margin:0}
+  .gallery img{width:100%; border:1px solid var(--line); border-radius:12px; display:block}
+  .gallery figcaption{color:var(--dim2); font-size:.82rem; text-align:center; margin-top:8px}
+
+  /* spotlight (signature features) */
+  .spotlight .wrap{padding-top:56px}
+  .spot{display:grid; grid-template-columns:1fr 1fr; gap:40px; align-items:center; padding:40px 0}
+  .spot + .spot{border-top:1px solid var(--line)}
+  .spot.reverse .spot-media{order:-1}
+  .tag{display:inline-block; font-size:.74rem; letter-spacing:.14em; text-transform:uppercase;
+    color:var(--blue2); background:rgba(61,155,255,.1); border:1px solid rgba(61,155,255,.3);
+    padding:4px 11px; border-radius:999px; margin-bottom:14px; font-weight:600}
+  .tag.amber{color:var(--amber); background:rgba(255,154,30,.1); border-color:rgba(255,154,30,.32)}
+  .spot h2{font-size:clamp(1.5rem,2.6vw,2.05rem)}
+  .spot p{color:var(--dim); font-size:1.02rem}
+  .spot ul{color:var(--dim); margin:.8em 0 0; padding-left:0; list-style:none}
+  .spot li{margin:.5em 0; padding-left:1.6em; position:relative}
+  .spot li::before{content:"›"; position:absolute; left:.2em; color:var(--blue2); font-weight:700}
+  .spot.reverse li::before{color:var(--amber)}
+
+  /* K-Pod macro-editor mock */
+  .kpod{background:var(--panel); border:1px solid var(--line); border-radius:var(--radius);
+    padding:14px; box-shadow:0 18px 40px rgba(0,0,0,.45)}
+  .kpod-head{display:flex; justify-content:space-between; align-items:center; color:var(--dim2);
+    font-size:.76rem; letter-spacing:.08em; text-transform:uppercase; padding:2px 4px 12px}
+  .kpod-head .rst{color:var(--amber); border:1px solid rgba(255,154,30,.32); border-radius:7px; padding:3px 9px}
+  .krow{display:grid; grid-template-columns:64px 78px 1fr; gap:8px; align-items:center;
+    padding:6px 4px; border-top:1px solid var(--line); font-size:.82rem}
+  .krow .slot{color:var(--dim)}
+  .krow .lbl{color:var(--amber); font-weight:600}
+  .krow .cat{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; color:var(--dim);
+    background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:4px 8px;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+
+  /* download */
+  .dl{display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:16px; margin-top:8px}
+  .dl .card h3{font-size:1rem}
+  .dl .card .os{color:var(--blue2)}
+  .note{color:var(--dim2); font-size:.9rem; margin-top:22px}
+
+  footer{border-top:1px solid var(--line); background:var(--bg2); padding:38px 0; color:var(--dim2); font-size:.9rem}
+  footer a{color:var(--dim)}
+  footer .cols{display:flex; flex-wrap:wrap; gap:10px 30px; align-items:center}
+  footer .sp{margin-left:auto}
+
+  @media(max-width:760px){
+    .step{grid-template-columns:1fr; gap:16px}
+    .step:nth-child(even) .step-media{order:0}
+    .nav .links a:not(.btn){display:none}
+    .gallery{grid-template-columns:1fr}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap nav">
+    <span class="brand"><img src="img/k4remote.svg" alt="" onerror="this.style.display='none'">K4 Remote</span>
+    <nav class="links">
+      <a href="#features">Features</a>
+      <a href="#walkthrough">Walk-through</a>
+      <a href="#download">Download</a>
+      <a class="btn btn-ghost" href="https://github.com/dc0sk/K4remote">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<div class="hero">
+  <div class="wrap">
+    <span class="kicker">Elecraft K4 · remote control panel</span>
+    <h1>Operate your K4 from anywhere.</h1>
+    <p class="lead">A fast, cross-platform control panel for the <b>Elecraft&nbsp;K4</b> transceiver —
+      rig control, spectrum&nbsp;+&nbsp;waterfall, full-duplex audio, and transmit — over Ethernet or
+      USB/serial. Written in Rust, requirements-first and test-driven.</p>
+    <div class="cta">
+      <a class="btn btn-primary" href="#download">Download</a>
+      <a class="btn btn-ghost" href="https://github.com/dc0sk/K4remote/blob/main/docs/user-manual.md">Read the manual</a>
+    </div>
+    <div class="badges">
+      <span><b>Linux</b> · x86_64 + arm64 (Raspberry&nbsp;Pi)</span>
+      <span><b>Windows</b> · installer + portable</span>
+      <span><b>macOS</b></span>
+      <span><b>Open source</b> · Rust + iced</span>
+    </div>
+    <img class="hero-shot" src="screenshots/main.png" alt="K4 Remote main window: VFO A/B, spectrum and waterfall, transmit panel">
+  </div>
+</div>
+
+<section class="spotlight alt" id="highlights">
+  <div class="wrap">
+    <div class="sec-head" style="margin-bottom:6px">
+      <span class="kicker">What sets it apart</span>
+    </div>
+
+    <div class="spot">
+      <div class="spot-body">
+        <div class="tag">Signature feature</div>
+        <h2>A UI that follows your operating mode</h2>
+        <p>Most panels show every control all the time. K4 Remote is <b>mode-aware</b>: controls the
+          current mode can't use are dimmed or tucked away, and a fixed-height strip surfaces the ones
+          it can — so each mode stays lean and the layout never jumps around.</p>
+        <ul>
+          <li><b>CW</b> — an APF / SPOT / DECODE strip, plus keyer WPM, pitch, and QSK delay.</li>
+          <li><b>FM</b> — filter controls step aside for repeater offset and PL/CTCSS.</li>
+          <li><b>DATA</b> — a sub-mode selector (DATA&nbsp;A / AFSK&nbsp;A / FSK&nbsp;D / PSK&nbsp;D) and text decode.</li>
+          <li>Follows the active receiver and the transmit VFO — and you can switch it off.</li>
+        </ul>
+      </div>
+      <div class="spot-media">
+        <div class="gallery">
+          <figure><img src="screenshots/rx-cw.png" alt="CW mode layout"><figcaption>CW</figcaption></figure>
+          <figure><img src="screenshots/rx-fm.png" alt="FM mode layout"><figcaption>FM</figcaption></figure>
+          <figure><img src="screenshots/rx-data.png" alt="DATA mode layout"><figcaption>DATA</figcaption></figure>
+        </div>
+      </div>
+    </div>
+
+    <div class="spot reverse">
+      <div class="spot-body">
+        <div class="tag amber">Hands-on control</div>
+        <h2>The Elecraft K-Pod, fully wired in</h2>
+        <p>Plug an Elecraft <b>K-Pod</b> into your computer for a real tuning knob, a rocker that
+          assigns it to VFO&nbsp;A / VFO&nbsp;B / RIT-XIT (with indicator LEDs), and eight function
+          switches. Each of the <b>F1–F8 switches has a tap and a hold action</b> — 16 slots — that run
+          a CAT macro on the radio, chosen from a preset list or typed as a free-form command string.</p>
+        <ul>
+          <li>Per-digit tune steps stay in sync between the app, the knob, and the K4.</li>
+          <li>Seed the 16 slots from the Elecraft sample macros, then tweak.</li>
+          <li>Runtime opt-in — the app runs fine whether or not one is attached.</li>
+        </ul>
+      </div>
+      <div class="spot-media">
+        <div class="kpod" aria-hidden="true">
+          <div class="kpod-head"><span>K-Pod function switches</span><span class="rst">Reset to samples</span></div>
+          <div class="krow"><span class="slot">F1 tap</span><span class="lbl">B&gt;A</span><span class="cat">SWT11;SWT13;SWT11;</span></div>
+          <div class="krow"><span class="slot">F1 hold</span><span class="lbl">SPLIT+2</span><span class="cat">SWT13;SWT13;FT1;UPB5;RT0;…</span></div>
+          <div class="krow"><span class="slot">F2 tap</span><span class="lbl">CW</span><span class="cat">MD3;</span></div>
+          <div class="krow"><span class="slot">F2 hold</span><span class="lbl">RTTY</span><span class="cat">MD6;DT1;SWH29;</span></div>
+          <div class="krow"><span class="slot">F3 tap</span><span class="lbl">RIT Clr</span><span class="cat">RC;</span></div>
+          <div class="krow"><span class="slot">F3 hold</span><span class="lbl">—</span><span class="cat">MD3;BW0040;  (custom)</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="features">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2>Everything the front panel does — remotely</h2>
+      <p>A complete operating surface, not just a CAT terminal. Metering, panadapter, audio, and
+        transmit, all with a clean, mode-aware UI.</p>
+    </div>
+    <div class="grid">
+      <div class="card"><h3><span class="dot"></span>Connect</h3><p>Plaintext Ethernet (SHA-384 auth), <b>TLS-PSK</b>, or <b>USB/serial</b> CAT — selectable in the UI, with auto-reconnect and bounded backoff.</p></div>
+      <div class="card"><h3><span class="dot"></span>Full rig control</h3><p>VFO A/B with <b>per-digit click tuning</b>, band, clickable mode cycle, bandwidth, filter edges, AGC, NB/NR, preamp, attenuator, RIT/XIT, and split.</p></div>
+      <div class="card"><h3><span class="dot"></span>Mode-adaptive UI</h3><p>Controls the current mode doesn't use dim away; per-mode strips (CW / voice / DATA / AM / FM) surface the ones it does. Lean, and it never jumps around.</p></div>
+      <div class="card"><h3><span class="dot"></span>Spectrum &amp; waterfall</h3><p>Decodes the K4 dB/bin stream into a live spectrum trace, scrolling waterfall, and mini-pan (GPU-drawn) — with click-to-QSY and mouse-wheel tuning.</p></div>
+      <div class="card"><h3><span class="dot"></span>Metering</h3><p>S-meter with S-unit mapping (bars + dBm), and TX RF / ALC / SWR / COMP bars while transmitting.</p></div>
+      <div class="card"><h3><span class="dot"></span>Full-duplex audio</h3><p>12&nbsp;kHz <b>Opus</b> both ways — jitter buffer, resampling, and device selection (left = Main RX, right = Sub RX).</p></div>
+      <div class="card amber"><h3><span class="dot"></span>Transmit — safely</h3><p>PTT, voice, and CW keying behind an explicit <b>TX arm</b>, with an emergency stop, a link-loss fail-safe, and a configurable PTT keyboard hotkey (toggle or hold).</p></div>
+      <div class="card amber"><h3><span class="dot"></span>Elecraft K-Pod</h3><p>Optional USB control surface: the rocker assigns the knob to VFO&nbsp;A / B / RIT-XIT, and the <b>F1–F8 switches</b> (tap + hold) run configurable CAT macros.</p></div>
+      <div class="card"><h3><span class="dot"></span>Built to last</h3><p>Saved connection profiles, OS-keychain passwords (never in config), K4 settings export/import, and a filterable, copyable diagnostics console.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="walkthrough" class="alt">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2>A quick walk-through</h2>
+      <p>From cold start to on the air in a few minutes.</p>
+    </div>
+    <div class="steps">
+
+      <div class="step">
+        <div class="step-body">
+          <div class="num">Step 1 · Connect</div>
+          <h3>Point it at your radio</h3>
+          <p>Open <b>Settings</b> and enter your K4's host and port. Pick plaintext, TLS-PSK, or a
+            serial device, tick <em>Remember</em> to stash the password in your OS keychain, and hit
+            <b>Connect</b>. Successful radios are saved for one-click reconnect.</p>
+        </div>
+        <div class="step-media"><img src="screenshots/main.png" alt="The main window after connecting"></div>
+      </div>
+
+      <div class="step">
+        <div class="step-body">
+          <div class="num">Step 2 · Tune</div>
+          <h3>Click a digit, spin the knob</h3>
+          <p>Click any digit of a VFO to set the tuning step — an underline marks it, kept in sync with
+            the radio and the K-Pod. Drag on the spectrum to QSY, wheel-tune, and use RIT/XIT for a
+            fine offset. Split puts TX on VFO&nbsp;B.</p>
+        </div>
+        <div class="step-media"><img src="screenshots/main.png" alt="Per-digit tuning and the panadapter"></div>
+      </div>
+
+      <div class="step">
+        <div class="step-body">
+          <div class="num">Step 3 · Operate any mode</div>
+          <h3>The panel adapts to the mode</h3>
+          <p>Switch to CW, FM, SSB, AM, or DATA and the controls rearrange to match — you only ever see
+            what that mode uses. (See the <a href="#highlights">mode-adaptive UI</a> above.)</p>
+        </div>
+        <div class="step-media"><img src="screenshots/rx-data.png" alt="DATA mode operating layout"></div>
+      </div>
+
+      <div class="step">
+        <div class="step-body">
+          <div class="num">Step 4 · Transmit &amp; go hands-on</div>
+          <h3>Arm TX, key up, add a K-Pod</h3>
+          <p>Transmit is gated behind an explicit <b>ARM&nbsp;TX</b>; then use the on-screen PTT, a
+            keyboard hotkey (toggle or hold), or CW keying — with an emergency stop and a link-loss
+            fail-safe always on.</p>
+          <ul>
+            <li>Plug in an Elecraft <b>K-Pod</b> for a real tuning knob and rocker.</li>
+            <li>Assign each of the 16 <b>F1–F8 tap/hold</b> slots a preset or a free-form CAT macro.</li>
+            <li>Watch it all in the filterable, copyable <b>diagnostics console</b>.</li>
+          </ul>
+        </div>
+        <div class="step-media"><img src="screenshots/rx-cw.png" alt="Transmit controls in CW"></div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<section id="download">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2>Download</h2>
+      <p>Grab a prebuilt release, or build from source with Rust 1.90+.</p>
+    </div>
+    <div class="dl">
+      <div class="card"><h3 class="os">Windows</h3><p><b>setup.exe</b> installer (Start-menu shortcut + uninstaller), or the portable <b>.zip</b>.</p></div>
+      <div class="card"><h3 class="os">Linux</h3><p><b>.deb</b> for Debian / Ubuntu / Raspberry&nbsp;Pi&nbsp;OS (x86_64 + arm64), or a <b>.tar.gz</b> binary.</p></div>
+      <div class="card"><h3 class="os">macOS</h3><p><b>.tar.gz</b> binary — build with the vendored-TLS feature.</p></div>
+      <div class="card"><h3 class="os">From source</h3><p><span class="mono">cargo run -p k4remote</span> — one Rust workspace, four platforms.</p></div>
+    </div>
+    <div class="cta" style="margin-top:26px">
+      <a class="btn btn-primary" href="https://github.com/dc0sk/K4remote/releases/latest">Latest release</a>
+      <a class="btn btn-ghost" href="https://github.com/dc0sk/K4remote/blob/main/docs/user-manual.md">User manual</a>
+    </div>
+    <p class="note">Requirements-first &amp; test-driven, with strict traceability from stakeholder
+      needs down to individual tests, enforced by a build gate. CI is green across Linux (x86_64 +
+      arm64), macOS, and Windows.</p>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap cols">
+    <span>© 2026 Simon Keimer (DC0SK)</span>
+    <a href="https://github.com/dc0sk/K4remote">Source</a>
+    <a href="https://github.com/dc0sk/K4remote/blob/main/docs/user-manual.md">Manual</a>
+    <a href="https://github.com/dc0sk/K4remote/releases">Releases</a>
+    <a href="https://github.com/dc0sk/K4remote/blob/main/LICENSE">License</a>
+    <span class="sp">Not affiliated with or endorsed by Elecraft, Inc. “Elecraft”, “K4”, and “K-Pod” are trademarks of Elecraft, Inc.</span>
+  </div>
+</footer>
+
+</body>
+</html>
