@@ -1,20 +1,21 @@
 //! CAT encoding tests. trace: FR-VFO-01, FR-VFO-04, FR-VFO-06, FR-MODE-01,
 //! FR-MODE-02, FR-RX-01, FR-RX-02
 use k4_protocol::cat::{
-    band_down, band_stack_next, band_up, clear_rit_xit, filter_normalize, menu_open, menu_query,
-    menu_query_def, menu_set, passband_edges, rx_eq_flat, send_text, set_af_gain, set_agc,
-    set_antivox, set_apf, set_attenuator, set_auto_notch, set_band, set_band_sub, set_bandwidth_hz,
-    set_compression, set_cw_pitch, set_diversity, set_dvr, set_filter_preset, set_keyer,
-    set_keyer_speed, set_line_in, set_line_out, set_manual_notch, set_mic_gain, set_mic_input,
-    set_mic_setup, set_mode, set_mode_sub, set_monitor, set_nb, set_nb_level, set_nr,
-    set_pan_average, set_pan_mode, set_pan_nb, set_pan_nb_level, set_pan_peak, set_pan_ref,
-    set_pan_scale, set_pan_span_hz, set_passband_edges_hz, set_pl_tone, set_power, set_preamp,
-    set_qsk_delay, set_repeater, set_rf_gain, set_rit, set_rit_offset, set_rx_antenna,
-    set_rx_antenna_sub, set_rx_eq, set_shift_hz, set_split, set_spot, set_squelch, set_sub_rx,
-    set_text_decode, set_transverter_band, set_tx_antenna, set_tx_eq, set_tx_power,
+    band_down, band_stack_next, band_up, clear_rit_xit, click_anchor, filter_normalize, menu_open,
+    menu_query, menu_query_def, menu_set, passband_edges, rf_passband_hz, rx_eq_flat, send_text,
+    set_af_gain, set_agc, set_antivox, set_apf, set_attenuator, set_auto_notch, set_band,
+    set_band_sub, set_bandwidth_hz, set_compression, set_cw_pitch, set_diversity, set_dvr,
+    set_filter_preset, set_keyer, set_keyer_speed, set_line_in, set_line_out, set_manual_notch,
+    set_mic_gain, set_mic_input, set_mic_setup, set_mode, set_mode_sub, set_monitor, set_nb,
+    set_nb_level, set_nr, set_pan_average, set_pan_mode, set_pan_nb, set_pan_nb_level,
+    set_pan_peak, set_pan_ref, set_pan_scale, set_pan_span_hz, set_passband_edges_hz, set_pl_tone,
+    set_power, set_preamp, set_qsk_delay, set_repeater, set_rf_gain, set_rit, set_rit_offset,
+    set_rx_antenna, set_rx_antenna_sub, set_rx_eq, set_shift_hz, set_split, set_spot, set_squelch,
+    set_sub_rx, set_text_decode, set_transverter_band, set_tx_antenna, set_tx_eq, set_tx_power,
     set_tx_power_range, set_vfo_a_hz, set_vfo_b_hz, set_vox, set_vox_gain, set_waterfall_height,
-    set_waterfall_palette, set_xit, switch, vfo_copy_swap,
+    set_waterfall_palette, set_xit, switch, vfo_copy_swap, vfo_for_click,
 };
+use k4_protocol::Mode;
 
 /// trace: FR-VFO-01
 #[test]
@@ -268,6 +269,105 @@ fn fr_pan_ctl_01_display_family() {
     assert_eq!(set_waterfall_height(100), "#WFH100;");
     assert_eq!(set_pan_nb(2), "#NB2;");
     assert_eq!(set_pan_nb_level(14), "#NBL14;");
+}
+
+/// A panadapter click anchors the passband per mode: USB/DATA place its low
+/// edge on the click, LSB/DATA-REV its high edge, CW/CW-REV/AM/FM its centre.
+/// trace: FR-PAN-05
+#[test]
+fn fr_pan_05_click_anchor_per_mode() {
+    use k4_protocol::cat::ClickAnchor::*;
+    assert_eq!(click_anchor(Mode::Usb), LowEdge);
+    assert_eq!(click_anchor(Mode::Data), LowEdge);
+    assert_eq!(click_anchor(Mode::Lsb), HighEdge);
+    assert_eq!(click_anchor(Mode::DataRev), HighEdge);
+    for m in [Mode::Cw, Mode::CwRev, Mode::Am, Mode::Fm] {
+        assert_eq!(click_anchor(m), Center);
+    }
+}
+
+/// The RF passband sits above the VFO on USB, below it on LSB, straddles it on
+/// CW (a signal at the VFO sounds at the sidetone pitch), and is symmetric
+/// about the carrier on AM/FM.
+/// trace: FR-PAN-05
+#[test]
+fn fr_pan_05_rf_passband_follows_sideband_sense() {
+    // BW 2.7 kHz centred at 1.5 kHz audio ⇒ audio passband 150…2850 Hz.
+    let (bw, is, pitch) = (2_700, 1_500, 600);
+    let vfo = 14_200_000;
+
+    assert_eq!(
+        rf_passband_hz(vfo, Mode::Usb, bw, is, pitch),
+        (14_200_150, 14_202_850)
+    );
+    assert_eq!(
+        rf_passband_hz(vfo, Mode::Lsb, bw, is, pitch),
+        (14_197_150, 14_199_850)
+    );
+    // CW: audio shifted down by the 600 Hz pitch ⇒ −450…+2250 about the VFO.
+    assert_eq!(
+        rf_passband_hz(vfo, Mode::Cw, bw, is, pitch),
+        (14_199_550, 14_202_250)
+    );
+    // CW-REV mirrors CW about the VFO.
+    assert_eq!(
+        rf_passband_hz(vfo, Mode::CwRev, bw, is, pitch),
+        (14_197_750, 14_200_450)
+    );
+    // AM/FM are carrier-centred and ignore the IF centre pitch.
+    assert_eq!(
+        rf_passband_hz(vfo, Mode::Am, bw, is, pitch),
+        (14_198_650, 14_201_350)
+    );
+    assert_eq!(
+        rf_passband_hz(vfo, Mode::Fm, bw, is, pitch),
+        rf_passband_hz(vfo, Mode::Am, bw, 9_999, pitch)
+    );
+}
+
+/// `vfo_for_click` is the inverse of `rf_passband_hz`: after tuning, the edge
+/// (or centre) the mode anchors lands exactly on the clicked frequency, so the
+/// shaded overlay sits under the cursor.
+/// trace: FR-PAN-05
+#[test]
+fn fr_pan_05_click_round_trips_to_the_anchored_edge() {
+    let (bw, is, pitch) = (2_700, 1_500, 600);
+    let clicked = 14_200_000;
+
+    for mode in [
+        Mode::Usb,
+        Mode::Lsb,
+        Mode::Cw,
+        Mode::CwRev,
+        Mode::Am,
+        Mode::Fm,
+        Mode::Data,
+        Mode::DataRev,
+    ] {
+        let vfo = vfo_for_click(clicked, mode, bw, is, pitch);
+        let (lo, hi) = rf_passband_hz(vfo, mode, bw, is, pitch);
+        match click_anchor(mode) {
+            k4_protocol::cat::ClickAnchor::LowEdge => assert_eq!(lo, clicked, "{mode:?}"),
+            k4_protocol::cat::ClickAnchor::HighEdge => assert_eq!(hi, clicked, "{mode:?}"),
+            k4_protocol::cat::ClickAnchor::Center => {
+                assert_eq!((lo + hi) / 2, clicked, "{mode:?}")
+            }
+        }
+        assert!(hi > lo, "{mode:?}: passband must have positive width");
+    }
+}
+
+/// Clicking near 0 Hz saturates instead of wrapping the unsigned VFO.
+/// trace: FR-PAN-05
+#[test]
+fn fr_pan_05_click_below_zero_saturates() {
+    // USB anchors the low edge 150 Hz above the VFO, so a click at 100 Hz
+    // would imply a negative VFO.
+    assert_eq!(vfo_for_click(100, Mode::Usb, 2_700, 1_500, 600), 0);
+    // LSB puts the VFO *above* the click, so the same click needs no clamping.
+    assert_eq!(vfo_for_click(100, Mode::Lsb, 2_700, 1_500, 600), 250);
+    // A passband edge reaching below 0 Hz saturates rather than wrapping.
+    assert_eq!(rf_passband_hz(10, Mode::Lsb, 2_700, 1_500, 600).0, 0);
 }
 
 /// trace: FR-VFO-07

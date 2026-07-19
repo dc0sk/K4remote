@@ -7,14 +7,18 @@ use iced::mouse;
 use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke, Text};
 use iced::{Color, Pixels, Point, Rectangle, Renderer, Size, Theme};
 
-use k4_stream::render::{dbm_to_color, dbm_to_y};
+use crate::worker::PanRow;
+use k4_stream::render::{
+    axis_ticks, db_grid_step, dbm_to_color, dbm_to_y, hz_per_bin, row_scroll_px,
+};
 
 /// Canvas program drawing a spectrum trace (top) and waterfall (bottom).
 pub struct Spectrum<'a, Message> {
     /// Latest trace, downsampled dBm bins.
     pub latest: &'a [f32],
-    /// Waterfall rows, newest first, downsampled dBm bins.
-    pub waterfall: &'a [Vec<f32>],
+    /// Waterfall rows, newest first, each carrying the pan geometry it was
+    /// sampled at so the history can scroll with the VFO (FR-PAN-06).
+    pub waterfall: &'a [PanRow],
     /// dBm at the top of the spectrum window.
     pub top_dbm: f32,
     /// dB span of the spectrum window.
@@ -25,8 +29,12 @@ pub struct Spectrum<'a, Message> {
     /// click-to-QSY. `span_hz == 0` disables QSY (span unknown / fixed-tune).
     pub center_hz: u64,
     pub span_hz: u32,
-    /// Active RX filter bandwidth (Hz), for the passband overlay. `0` = none.
-    pub bw_hz: u32,
+    /// This pane's VFO frequency (Hz), for the carrier line. Equals
+    /// `center_hz` when the pan tracks the VFO, but not under `#FXT`.
+    pub vfo_hz: u64,
+    /// RF passband edges `(lo, hi)` in absolute Hz for the overlay, from
+    /// `k4_protocol::cat::rf_passband_hz`. `None` = mode/filter not yet known.
+    pub passband_hz: Option<(u64, u64)>,
     /// Left-click → tune this VFO to the clicked frequency.
     pub on_qsy: fn(bool, u64) -> Message,
     /// Wheel scroll → step this VFO up (`+1`) / down (`-1`).
@@ -104,8 +112,10 @@ impl<Message> canvas::Program<Message> for Spectrum<'_, Message> {
         let grid = Color::from_rgba8(255, 255, 255, 0.07);
         let label = Color::from_rgba8(150, 156, 168, 0.85);
         let bottom_dbm = self.top_dbm - self.range_db;
-        // Horizontal lines + dB labels every 20 dB, aligned to a 20 dB boundary.
-        let step = 20.0_f32;
+        // Horizontal lines + dB labels, on a step chosen for the window so the
+        // grid stays readable across the whole `#SCL` 10–150 dB range
+        // (FR-PAN-07); aligned to a step boundary.
+        let step = db_grid_step(self.range_db);
         let mut db = (self.top_dbm / step).floor() * step;
         while db >= bottom_dbm {
             let y = dbm_to_y(db, self.top_dbm, self.range_db, spec_h);
@@ -122,26 +132,84 @@ impl<Message> canvas::Program<Message> for Spectrum<'_, Message> {
             });
             db -= step;
         }
-        // Vertical grid lines (quarter divisions) across the spectrum band.
-        for i in 1..4 {
-            let x = w * i as f32 / 4.0;
-            frame.stroke(
-                &Path::line(Point::new(x, 0.0), Point::new(x, spec_h)),
-                Stroke::default().with_width(1.0).with_color(grid),
-            );
+        // Vertical grid lines, each labelled with the frequency it marks, so
+        // the horizontal resolution is readable off the display rather than
+        // being four anonymous divisions (FR-PAN-07).
+        const DIVS: u32 = 4;
+        if self.span_hz > 0 {
+            for (i, hz) in axis_ticks(self.center_hz as i64, self.span_hz, DIVS)
+                .into_iter()
+                .enumerate()
+            {
+                let x = w * i as f32 / DIVS as f32;
+                // Skip the canvas edges for the line; still label them.
+                if i > 0 && i < DIVS as usize {
+                    frame.stroke(
+                        &Path::line(Point::new(x, 0.0), Point::new(x, spec_h)),
+                        Stroke::default().with_width(1.0).with_color(grid),
+                    );
+                }
+                // MHz with enough decimals to resolve one division.
+                let text = format!("{:.3}", hz as f64 / 1e6);
+                frame.fill_text(Text {
+                    content: text,
+                    // Nudge the edge labels inward so they stay on-canvas.
+                    position: Point::new(x.clamp(20.0, w - 20.0), spec_h - 11.0),
+                    color: label,
+                    size: Pixels(9.0),
+                    horizontal_alignment: iced::alignment::Horizontal::Center,
+                    ..Text::default()
+                });
+            }
+
+            // Resolution readout: span and Hz per displayed column.
+            let per_bin = hz_per_bin(self.span_hz, self.latest.len());
+            let span_khz = self.span_hz as f32 / 1000.0;
+            frame.fill_text(Text {
+                content: if per_bin > 0.0 {
+                    format!("{span_khz:.1} kHz span · {per_bin:.0} Hz/bin")
+                } else {
+                    format!("{span_khz:.1} kHz span")
+                },
+                position: Point::new(w - 4.0, 2.0),
+                color: label,
+                size: Pixels(9.0),
+                horizontal_alignment: iced::alignment::Horizontal::Right,
+                ..Text::default()
+            });
+        } else {
+            for i in 1..DIVS {
+                let x = w * i as f32 / DIVS as f32;
+                frame.stroke(
+                    &Path::line(Point::new(x, 0.0), Point::new(x, spec_h)),
+                    Stroke::default().with_width(1.0).with_color(grid),
+                );
+            }
         }
 
-        // Passband overlay: a translucent band of width BW centred on the VFO
-        // (assumes a VFO-centred pan) plus the VFO centre line.
-        // trace: FR-FIL-03
-        if self.span_hz > 0 && self.bw_hz > 0 {
-            let half_px = (self.bw_hz as f32 / 2.0 / self.span_hz as f32 * w).min(w / 2.0);
-            let cx = w / 2.0;
-            frame.fill_rectangle(
-                Point::new(cx - half_px, 0.0),
-                Size::new(half_px * 2.0, spec_h),
-                Color::from_rgba8(0x3D, 0x7E, 0xFF, 0.12),
-            );
+        // Passband overlay: the *RF* passband, in absolute Hz, as computed by
+        // `k4_protocol::cat::rf_passband_hz` — asymmetric about the VFO on
+        // USB/LSB/CW, symmetric on AM/FM. Drawn by frequency rather than
+        // assumed centred, so it agrees with click-to-QSY by construction.
+        // trace: FR-FIL-03, FR-PAN-05
+        if let (true, Some((lo, hi))) = (self.span_hz > 0, self.passband_hz) {
+            let x_of = |hz: u64| {
+                let frac = (hz as f64 - self.center_hz as f64) / self.span_hz as f64 + 0.5;
+                (frac as f32).clamp(0.0, 1.0) * w
+            };
+            let (x_lo, x_hi) = (x_of(lo), x_of(hi));
+            if x_hi > x_lo {
+                frame.fill_rectangle(
+                    Point::new(x_lo, 0.0),
+                    Size::new(x_hi - x_lo, spec_h),
+                    Color::from_rgba8(0x3D, 0x7E, 0xFF, 0.12),
+                );
+            }
+            // The VFO carrier line, at its real position in the pan: under
+            // fixed-tune (`#FXT`) the pan centre and the VFO diverge, so this
+            // is not necessarily mid-canvas. For USB/LSB it marks an *edge* of
+            // the shaded band rather than its middle.
+            let cx = x_of(self.vfo_hz);
             frame.stroke(
                 &Path::line(Point::new(cx, 0.0), Point::new(cx, spec_h)),
                 Stroke::default()
@@ -173,19 +241,45 @@ impl<Message> canvas::Program<Message> for Spectrum<'_, Message> {
         }
 
         // Waterfall (newest row at the top of its band).
+        //
+        // Each row is drawn at the offset its own centre frequency now falls
+        // at, so retuning *scrolls* the history sideways and a signal stays on
+        // one vertical line instead of smearing across the waterfall
+        // (FR-PAN-06). Rows that have scrolled fully off-canvas are skipped,
+        // and partially-visible ones are clipped per cell.
         let rows = self.waterfall.len();
         if rows > 0 {
             let row_h = (wf_h / rows as f32).max(1.0);
             let min_db = self.top_dbm - self.range_db;
             for (r, row) in self.waterfall.iter().enumerate() {
-                let cols = row.len().max(1);
-                let col_w = (w / cols as f32).max(1.0);
+                let cols = row.bins.len().max(1);
+                // A row sampled at a different span also occupies a different
+                // width; scale it so its bins keep their true frequencies.
+                let row_w = if self.span_hz > 0 && row.span_hz > 0 {
+                    w * row.span_hz as f32 / self.span_hz as f32
+                } else {
+                    w
+                };
+                let dx = row_scroll_px(row.center_hz, self.center_hz as i64, self.span_hz, w)
+                    - (row_w - w) / 2.0;
+                if dx >= w || dx + row_w <= 0.0 {
+                    continue; // scrolled out of view
+                }
+                let col_w = (row_w / cols as f32).max(1.0);
                 let y = spec_h + r as f32 * row_h;
-                for (c, &dbm) in row.iter().enumerate() {
+                for (c, &dbm) in row.bins.iter().enumerate() {
+                    let x = dx + c as f32 * col_w;
+                    if x + col_w <= 0.0 || x >= w {
+                        continue;
+                    }
+                    // Clip against the canvas so a scrolled row cannot bleed
+                    // outside the pane.
+                    let x0 = x.max(0.0);
+                    let x1 = (x + col_w + 1.0).min(w);
                     let (cr, cg, cb) = dbm_to_color(dbm, min_db, self.top_dbm);
                     frame.fill_rectangle(
-                        Point::new(c as f32 * col_w, y),
-                        Size::new(col_w + 1.0, row_h + 1.0),
+                        Point::new(x0, y),
+                        Size::new(x1 - x0, row_h + 1.0),
                         Color::from_rgb8(cr, cg, cb),
                     );
                 }

@@ -74,6 +74,9 @@ Legend: ✅ test-traced · 🟡 waived (see r3-waivers.md) · ⚪ not test-requi
 | `FR-PAN-02` | W | D | ✅ |
 | `FR-PAN-03` | W | D | ✅ |
 | `FR-PAN-04` | W | D | ⚪ |
+| `FR-PAN-05` | S | T/D | ✅ |
+| `FR-PAN-06` | S | T/D | ✅ |
+| `FR-PAN-07` | S | T/D | ✅ |
 | `FR-PAN-CTL-01` | S | T | ✅ |
 | `FR-PAN-CTL-02` | S | T | ✅ |
 | `FR-PAN-CTL-03` | C | T | ⚪ |

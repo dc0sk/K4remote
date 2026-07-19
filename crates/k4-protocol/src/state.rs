@@ -535,27 +535,33 @@ impl RadioState {
                 self.line_out_gang = Some(b[6] == b'1');
             }
         } else if let Some(arg) = cmd.strip_prefix("#REF") {
-            if let Ok(v) = arg.parse::<i16>() {
+            // D12 names these `#REF$` / `#SPN$` / `#WFC$` (LCD) against
+            // `#HREF` / `#HWFC` (external monitor): here the `$` is part of
+            // the *mnemonic*, not the sub-receiver modifier. Accept it either
+            // way — a `$` response used to fail the integer parse and be
+            // dropped silently, so the read-back these controls sync from
+            // never arrived.
+            if let Ok(v) = split_sub(arg).1.parse::<i16>() {
                 self.pan_ref = Some(v);
             }
         } else if let Some(arg) = cmd.strip_prefix("#SPN") {
-            if let Ok(v) = arg.parse::<u32>() {
+            if let Ok(v) = split_sub(arg).1.parse::<u32>() {
                 self.pan_span_hz = Some(v);
             }
         } else if let Some(arg) = cmd.strip_prefix("#SCL") {
-            if let Ok(v) = arg.parse::<u16>() {
+            if let Ok(v) = split_sub(arg).1.parse::<u16>() {
                 self.pan_scale = Some(v);
             }
         } else if let Some(arg) = cmd.strip_prefix("#DPM") {
-            if let Ok(v) = arg.parse::<u8>() {
+            if let Ok(v) = split_sub(arg).1.parse::<u8>() {
                 self.pan_mode = Some(v);
             }
         } else if let Some(arg) = cmd.strip_prefix("#WFC") {
-            if let Ok(v) = arg.parse::<u8>() {
+            if let Ok(v) = split_sub(arg).1.parse::<u8>() {
                 self.wf_palette = Some(v);
             }
         } else if let Some(arg) = cmd.strip_prefix("#WFH") {
-            if let Ok(v) = arg.parse::<u8>() {
+            if let Ok(v) = split_sub(arg).1.parse::<u8>() {
                 self.wf_height = Some(v);
             }
         } else if let Some(arg) = cmd.strip_prefix("#MP") {
