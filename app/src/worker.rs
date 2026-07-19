@@ -26,8 +26,17 @@ use k4_transport::{CatLink, ConnectConfig, SerialPortTransport, TcpRemoteTranspo
 
 /// 20 ms TX frame at 12 kHz.
 const TX_FRAME_SAMPLES: usize = 240;
-/// Display width (bins) for the spectrum trace + waterfall.
-const SPECTRUM_WIDTH: usize = 192;
+/// Cap on the bins retained per pan row for the spectrum trace + waterfall.
+///
+/// This is a *ceiling*, not a target: `downsample` returns the input unchanged
+/// when it is already shorter, so a row costs only what the radio actually
+/// sent inside the cropped window. The waterfall rasterises to one texture
+/// (FR-PAN-09), so display cost no longer scales with this — but the snapshot
+/// is deep-cloned to the UI each tick, so it still bounds memory bandwidth,
+/// which matters on the Pi target (NFR-PORT-02).
+///
+/// Worst case: 64 rows × 1024 bins × 4 B × 2 receivers ≈ 512 kB resident.
+const SPECTRUM_WIDTH: usize = 1024;
 /// Waterfall history depth (rows).
 const WATERFALL_ROWS: usize = 64;
 

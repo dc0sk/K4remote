@@ -5,12 +5,69 @@
 
 use iced::mouse;
 use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke, Text};
+use iced::widget::image;
 use iced::{Color, Pixels, Point, Rectangle, Renderer, Size, Theme};
 
 use crate::worker::PanRow;
 use k4_stream::render::{
-    axis_ticks, db_grid_step, dbm_to_color, dbm_to_y, hz_per_bin, row_scroll_px,
+    axis_ticks, column_to_bin, db_grid_step, dbm_to_color, dbm_to_y, hz_per_bin,
 };
+
+/// Upper bound on the rasterised waterfall width, in texels.
+///
+/// The pane drives the width now, but a texture is uploaded per frame, so this
+/// caps the per-frame cost on a very wide (or HiDPI) window. Well past the
+/// column count any real pan carries, so it never crops detail in practice.
+const MAX_TEXTURE_WIDTH: usize = 2048;
+
+/// Rasterise the waterfall history into an RGBA buffer, `tex_w` texels wide
+/// and one row tall per history row (newest first).
+///
+/// Kept out of `draw` so the pixel maths is unit-testable without a GPU
+/// surface: the canvas only uploads the result. Each row is looked up through
+/// [`column_to_bin`], so it stays pinned to the absolute frequencies it was
+/// sampled at — retuning scrolls the history (FR-PAN-06) and rows sampled at
+/// another span map at their own scale. Columns no row covers are left fully
+/// transparent.
+///
+/// trace: FR-PAN-09
+fn waterfall_rgba(
+    rows: &[PanRow],
+    view_center_hz: i64,
+    view_span_hz: u32,
+    top_dbm: f32,
+    range_db: f32,
+    tex_w: usize,
+) -> Vec<u8> {
+    let mut rgba = vec![0u8; tex_w * rows.len() * 4];
+    if tex_w == 0 {
+        return rgba;
+    }
+    let min_db = top_dbm - range_db;
+    for (r, row) in rows.iter().enumerate() {
+        let base = r * tex_w * 4;
+        for c in 0..tex_w {
+            let Some(bin) = column_to_bin(
+                c,
+                tex_w,
+                view_center_hz,
+                view_span_hz,
+                row.center_hz,
+                row.span_hz,
+                row.bins.len(),
+            ) else {
+                continue; // scrolled out of view → transparent
+            };
+            let (cr, cg, cb) = dbm_to_color(row.bins[bin], min_db, top_dbm);
+            let p = base + c * 4;
+            rgba[p] = cr;
+            rgba[p + 1] = cg;
+            rgba[p + 2] = cb;
+            rgba[p + 3] = 0xFF;
+        }
+    }
+    rgba
+}
 
 /// Canvas program drawing a spectrum trace (top) and waterfall (bottom).
 pub struct Spectrum<'a, Message> {
@@ -240,50 +297,37 @@ impl<Message> canvas::Program<Message> for Spectrum<'_, Message> {
             );
         }
 
-        // Waterfall (newest row at the top of its band).
+        // Waterfall (newest row at the top of its band), rasterised into one
+        // RGBA image and drawn with a single `draw_image`.
         //
-        // Each row is drawn at the offset its own centre frequency now falls
-        // at, so retuning *scrolls* the history sideways and a signal stays on
-        // one vertical line instead of smearing across the waterfall
-        // (FR-PAN-06). Rows that have scrolled fully off-canvas are skipped,
-        // and partially-visible ones are clipped per cell.
+        // This used to emit one `fill_rectangle` per bin per row — ~12k quads
+        // per pane per frame at 64×192, and the cost scaled with the column
+        // count, which is what capped the display at 192 columns (FR-PAN-09).
+        // One texture is a fixed cost, so the width can now follow the pane.
+        //
+        // Geometry is unchanged: `column_to_bin` pins each row to the absolute
+        // frequencies it was sampled at, so retuning still *scrolls* the
+        // history (FR-PAN-06), rows sampled at another span still map at their
+        // own scale, and anything scrolled off-canvas is simply transparent.
         let rows = self.waterfall.len();
-        if rows > 0 {
-            let row_h = (wf_h / rows as f32).max(1.0);
-            let min_db = self.top_dbm - self.range_db;
-            for (r, row) in self.waterfall.iter().enumerate() {
-                let cols = row.bins.len().max(1);
-                // A row sampled at a different span also occupies a different
-                // width; scale it so its bins keep their true frequencies.
-                let row_w = if self.span_hz > 0 && row.span_hz > 0 {
-                    w * row.span_hz as f32 / self.span_hz as f32
-                } else {
-                    w
-                };
-                let dx = row_scroll_px(row.center_hz, self.center_hz as i64, self.span_hz, w)
-                    - (row_w - w) / 2.0;
-                if dx >= w || dx + row_w <= 0.0 {
-                    continue; // scrolled out of view
-                }
-                let col_w = (row_w / cols as f32).max(1.0);
-                let y = spec_h + r as f32 * row_h;
-                for (c, &dbm) in row.bins.iter().enumerate() {
-                    let x = dx + c as f32 * col_w;
-                    if x + col_w <= 0.0 || x >= w {
-                        continue;
-                    }
-                    // Clip against the canvas so a scrolled row cannot bleed
-                    // outside the pane.
-                    let x0 = x.max(0.0);
-                    let x1 = (x + col_w + 1.0).min(w);
-                    let (cr, cg, cb) = dbm_to_color(dbm, min_db, self.top_dbm);
-                    frame.fill_rectangle(
-                        Point::new(x0, y),
-                        Size::new(x1 - x0, row_h + 1.0),
-                        Color::from_rgb8(cr, cg, cb),
-                    );
-                }
-            }
+        if rows > 0 && w >= 1.0 && wf_h >= 1.0 && self.span_hz > 0 {
+            let tex_w = (w.round() as usize).clamp(1, MAX_TEXTURE_WIDTH);
+            let rgba = waterfall_rgba(
+                self.waterfall,
+                self.center_hz as i64,
+                self.span_hz,
+                self.top_dbm,
+                self.range_db,
+                tex_w,
+            );
+            // One texel per row: let the GPU stretch it over the waterfall
+            // band. `Nearest` keeps the columns crisp rather than smearing
+            // adjacent bins together.
+            let handle = image::Handle::from_rgba(tex_w as u32, rows as u32, rgba);
+            frame.draw_image(
+                Rectangle::new(Point::new(0.0, spec_h), Size::new(w, wf_h)),
+                canvas::Image::new(handle).filter_method(image::FilterMethod::Nearest),
+            );
         }
 
         vec![frame.into_geometry()]
@@ -333,5 +377,121 @@ impl<Message> canvas::Program<Message> for MiniPan<'_> {
             );
         }
         vec![frame.into_geometry()]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A row of `bins` dBm values at a given centre/span.
+    fn row(center_hz: i64, span_hz: u32, bins: Vec<f32>) -> PanRow {
+        PanRow {
+            bins,
+            center_hz,
+            span_hz,
+        }
+    }
+
+    /// Alpha of texel `(col, r)` — 0 means "nothing drawn here".
+    fn alpha(rgba: &[u8], tex_w: usize, col: usize, r: usize) -> u8 {
+        rgba[(r * tex_w + col) * 4 + 3]
+    }
+
+    /// The buffer is exactly `tex_w × rows × 4` bytes, as `Handle::from_rgba`
+    /// requires — a mismatch here would be a renderer-side panic, not a visual
+    /// glitch.
+    /// trace: FR-PAN-09
+    #[test]
+    fn fr_pan_09_buffer_is_exactly_the_declared_size() {
+        for (rows_n, tex_w) in [(1usize, 1usize), (64, 192), (64, 2048), (7, 800)] {
+            let rows: Vec<PanRow> = (0..rows_n)
+                .map(|_| row(14_200_000, 50_000, vec![-100.0; 192]))
+                .collect();
+            let rgba = waterfall_rgba(&rows, 14_200_000, 50_000, -30.0, 100.0, tex_w);
+            assert_eq!(rgba.len(), tex_w * rows_n * 4, "{rows_n}×{tex_w}");
+        }
+        // No rows, or a zero-width texture, yields an empty buffer rather than
+        // panicking.
+        assert!(waterfall_rgba(&[], 14_200_000, 50_000, -30.0, 100.0, 800).is_empty());
+        assert!(waterfall_rgba(
+            &[row(14_200_000, 50_000, vec![-100.0; 8])],
+            14_200_000,
+            50_000,
+            -30.0,
+            100.0,
+            0
+        )
+        .is_empty());
+    }
+
+    /// An aligned row fills its whole scanline; a row retuned by a quarter span
+    /// fills only the part still in view, and the rest stays transparent —
+    /// the scroll of FR-PAN-06, in pixels.
+    /// trace: FR-PAN-09
+    #[test]
+    fn fr_pan_09_scrolled_row_is_partly_transparent() {
+        let tex_w = 800;
+        let rows = vec![
+            row(14_200_000, 50_000, vec![-60.0; 400]), // aligned with the view
+            row(14_187_500, 50_000, vec![-60.0; 400]), // captured a quarter-span down
+        ];
+        let rgba = waterfall_rgba(&rows, 14_200_000, 50_000, -30.0, 100.0, tex_w);
+
+        // Row 0 is fully painted.
+        assert!((0..tex_w).all(|c| alpha(&rgba, tex_w, c, 0) == 0xFF));
+
+        // Row 1 sat a quarter-span lower, so it now covers only the left
+        // three-quarters of the view.
+        let painted = (0..tex_w)
+            .filter(|&c| alpha(&rgba, tex_w, c, 1) == 0xFF)
+            .count();
+        assert!(
+            (595..=605).contains(&painted),
+            "expected ~3/4 of {tex_w} painted, got {painted}"
+        );
+        assert_eq!(alpha(&rgba, tex_w, 0, 1), 0xFF, "left edge still in view");
+        assert_eq!(alpha(&rgba, tex_w, 799, 1), 0, "right edge scrolled off");
+    }
+
+    /// A row scrolled a full span away contributes nothing at all.
+    /// trace: FR-PAN-09
+    #[test]
+    fn fr_pan_09_fully_scrolled_row_paints_nothing() {
+        let tex_w = 256;
+        let rows = vec![row(14_200_000, 50_000, vec![-60.0; 192])];
+        let rgba = waterfall_rgba(&rows, 14_260_000, 50_000, -30.0, 100.0, tex_w);
+        assert!((0..tex_w).all(|c| alpha(&rgba, tex_w, c, 0) == 0));
+    }
+
+    /// Levels map through the colormap: a hot bin is not the same colour as
+    /// the noise floor, and the window (`#REF`/`#SCL`) is honoured.
+    /// trace: FR-PAN-09
+    #[test]
+    fn fr_pan_09_levels_map_through_the_colormap() {
+        let tex_w = 4;
+        let rows = vec![row(14_200_000, 50_000, vec![-120.0, -120.0, -40.0, -40.0])];
+        let rgba = waterfall_rgba(&rows, 14_200_000, 50_000, -30.0, 100.0, tex_w);
+        let texel = |c: usize| &rgba[c * 4..c * 4 + 3];
+        assert_eq!(texel(0), texel(1), "equal levels → equal colour");
+        assert_ne!(texel(0), texel(3), "a hot bin must differ from the floor");
+        // The same bins under a narrower window render differently.
+        let tight = waterfall_rgba(&rows, 14_200_000, 50_000, -30.0, 20.0, tex_w);
+        assert_ne!(
+            &rgba[0..3],
+            &tight[0..3],
+            "changing #REF/#SCL must change the pixels"
+        );
+    }
+
+    /// Widening the texture past the bin count must not read out of bounds or
+    /// leave gaps: every column of an aligned row is painted.
+    /// trace: FR-PAN-09
+    #[test]
+    fn fr_pan_09_texture_wider_than_the_bins_is_gapless() {
+        let tex_w = 2048;
+        let rows = vec![row(14_200_000, 50_000, vec![-60.0; 17])];
+        let rgba = waterfall_rgba(&rows, 14_200_000, 50_000, -30.0, 100.0, tex_w);
+        assert!((0..tex_w).all(|c| alpha(&rgba, tex_w, c, 0) == 0xFF));
     }
 }
