@@ -1,7 +1,7 @@
 ---
 title: "Test Strategy & Traceability"
 status: Draft
-version: "1.48"
+version: "1.49"
 updated: 2026-07-19
 authors:
   - Simon Keimer (DC0SK)
@@ -142,6 +142,7 @@ Maintained partly by hand (design intent) and verified/augmented by `xtask trace
 | FR-PAN-06 | STK-09 | ARC-11 | TC-PAN-06 (hz→x mapping, row scroll by retune delta, scroll/map agreement, frame centre+span retained) | L1 | V\* |
 | FR-PAN-07 | STK-09/10 | ARC-11 | TC-PAN-07 (`#REF`/`#SCL` → window, adaptive dB grid step, axis ticks + Hz/bin, `$`-spelling read-back) | L1 | V\* |
 | FR-PAN-08 | STK-09 | ARC-10/11 | TC-PAN-08 (centre crop + degenerate cases, contiguous-bucket resample, cropped row reports display span, crop resolves a merged carrier pair) | L1 | V\* |
+| FR-PAN-09 | STK-09 | ARC-11 | TC-PAN-09 (column→bin lookup incl. scroll/clip/rescale/degenerate; RGBA buffer size, transparency, colormap window) | L1 | V\* |
 | FR-UI-04 | STK-08/11 | ARC-08 | TC-UI-01 (arm/e-stop affordances) | L4 | P |
 | FR-UI-07 | STK-11 | ARC-08 | TC-UI-02 (no UI block under load) | L5 | P |
 | FR-UI-08 | STK-11 | ARC-15 | TC-UI-03 (ViewMode cycle + pane visibility) | L1 | V\* |
@@ -351,3 +352,4 @@ FR-SES-MULTI, FR-DIAG-02, etc. — get `TC` IDs when promoted to `Approved`.)*
 | 2026-07-19 | 1.46 | DC0SK | Frequency-aligned waterfall scrolling (FR-PAN-06). `PanRow` now carries the centre/span of the frame it came from (previously decoded then dropped), new pure helpers `hz_to_x`/`row_scroll_px` in `k4-stream::render` place each row at the offset its centre now falls at, and the canvas clips rows scrolled off-pane. Also fixes the VFO carrier line, which was pinned to mid-canvas and so was wrong under fixed-tune (`#FXT`). 5 new tests sabotage-verified (discarding the frame centre → 2 fail; ignoring the retune delta → 2 fail). 171 tests. |
 | 2026-07-19 | 1.47 | DC0SK | Panadapter scales displayed and K4-authoritative (FR-PAN-07). New pure helpers `pan_window`/`db_grid_step`/`axis_ticks`/`hz_per_bin`; the canvas labels each division with its frequency, shows span + Hz/bin, and takes its vertical window from `#REF`/`#SCL` (previously hardcoded −130…−30 while the tracked values went unused). Also fixes a **silent** state bug: `#REF$`/`#SPN$`/`#SCL$`/`#WFC$`/`#WFH$` responses failed `parse()` on the leading `$` and were discarded, so the read-back was never received — `$` is part of the LCD mnemonic in D12, not the sub-RX modifier. 5 new tests sabotage-verified (silent-drop parse, #REF-as-top, fixed grid step each fail one). 176 tests. |
 | 2026-07-19 | 1.48 | DC0SK | Tier-span cropping (FR-PAN-08) — **fixes a defect shipped in 1.45/0.17**. `PanFrame::span_hz()` is the *tier* the radio streams, not the display span (its doc comment said "Displayed span", which is what misled FR-PAN-06 into overriding `#SPN` with it — scaling the axis, the span readout and click-to-QSY by `tier / #SPN`). Rows are now cropped to the `#SPN` centre window before decimating, which also improves resolution at no memory cost (important for the Pi target, NFR-PORT-02). New `crop_to_span`/`resample_peak`; fixed an overlapping-bucket bug in the latter that put one carrier in two columns. 8 new tests sabotage-verified (no-crop, off-centre crop, tier-span-reported each fail). 184 tests. |
+| 2026-07-19 | 1.49 | DC0SK | Waterfall rasterised to one texture (FR-PAN-09), closing the render-cost half of #115. The old loop emitted one `fill_rectangle` per bin per row — ~12.3k quads per pane per frame at 64×192, doubled in dual-pan — so cost scaled with the column count and capped it at 192. New `column_to_bin` expresses the FR-PAN-06 scroll as a pixel lookup, and `waterfall_rgba` (extracted from `draw` so the buffer maths is testable without a GPU) builds one image drawn via `Frame::draw_image`. Row cap raised 192 → 1024. 11 new tests sabotage-verified (ignoring the retune fails 3, clamping instead of clipping fails 4, using the view span for the row fails 1, wrong row stride fails 1, always-opaque fails 2, ignoring the dB window fails 1). 195 tests. |

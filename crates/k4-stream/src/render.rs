@@ -130,6 +130,46 @@ pub fn resample_peak(bins: &[f32], columns: usize) -> Vec<f32> {
         .collect()
 }
 
+/// Which bin of a waterfall row falls under output `column`, or `None` if that
+/// column lies outside the frequencies the row sampled.
+///
+/// This is the pixel-space form of the row scrolling in [`row_scroll_px`]: the
+/// row is pinned to the absolute frequencies it was captured at, so a view that
+/// has since retuned reads a shifted (or partly empty) part of it. Expressing
+/// it as a lookup lets the whole waterfall be rasterised into one image instead
+/// of one filled rectangle per bin per row, while keeping identical geometry —
+/// including rows sampled at a different span, which map at a different scale.
+///
+/// `None` means "nothing to draw here": the row has scrolled off, or its span
+/// is narrower than the view and this column falls outside it.
+///
+/// trace: FR-PAN-09
+#[allow(clippy::too_many_arguments)]
+pub fn column_to_bin(
+    column: usize,
+    columns: usize,
+    view_center_hz: i64,
+    view_span_hz: u32,
+    row_center_hz: i64,
+    row_span_hz: u32,
+    row_bins: usize,
+) -> Option<usize> {
+    if columns == 0 || row_bins == 0 || view_span_hz == 0 || row_span_hz == 0 || column >= columns {
+        return None;
+    }
+    // Frequency at the centre of this output column.
+    let view_span = f64::from(view_span_hz);
+    let hz = (view_center_hz as f64 - view_span / 2.0)
+        + (column as f64 + 0.5) * view_span / columns as f64;
+    // Where that falls within the row's own sampled range.
+    let row_span = f64::from(row_span_hz);
+    let frac = (hz - (row_center_hz as f64 - row_span / 2.0)) / row_span;
+    if !(0.0..1.0).contains(&frac) {
+        return None;
+    }
+    Some(((frac * row_bins as f64) as usize).min(row_bins - 1))
+}
+
 /// Horizontal position (px) of an absolute frequency `hz` in a pan view
 /// centred on `center_hz` spanning `span_hz`, over a canvas `width` px wide.
 /// The view centre maps to `width / 2`. Not clamped: callers that need the

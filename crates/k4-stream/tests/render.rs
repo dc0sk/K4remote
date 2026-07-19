@@ -1,7 +1,7 @@
 //! Spectrum/waterfall render-helper tests. trace: FR-PAN-02, FR-PAN-03
 use k4_stream::render::{
-    axis_ticks, crop_to_span, db_grid_step, dbm_to_color, dbm_to_y, hz_per_bin, hz_to_x,
-    pan_window, resample_peak, row_scroll_px,
+    axis_ticks, column_to_bin, crop_to_span, db_grid_step, dbm_to_color, dbm_to_y, hz_per_bin,
+    hz_to_x, pan_window, resample_peak, row_scroll_px,
 };
 
 /// dBm→y maps the top of the window to 0 and the bottom to `height`, clamping.
@@ -239,4 +239,128 @@ fn fr_pan_08_widening_invents_no_detail() {
     for v in &out {
         assert!(bins.contains(v), "{v} is not a source value");
     }
+}
+
+/// Helper: the column lookup for a row that matches the view exactly.
+fn aligned(col: usize, cols: usize, bins: usize) -> Option<usize> {
+    column_to_bin(col, cols, 14_200_000, 50_000, 14_200_000, 50_000, bins)
+}
+
+/// A row aligned with the view maps left-to-right across all its bins.
+/// trace: FR-PAN-09
+#[test]
+fn fr_pan_09_aligned_row_maps_across_the_view() {
+    assert_eq!(aligned(0, 4, 4), Some(0));
+    assert_eq!(aligned(3, 4, 4), Some(3));
+    // Monotonic and fully in range at a decimating ratio.
+    let mut prev = 0;
+    for c in 0..800 {
+        let b = aligned(c, 800, 192).expect("in view");
+        assert!(b >= prev && b < 192, "col {c} → bin {b}");
+        prev = b;
+    }
+    // Both ends are reached, so no part of the row is unreachable.
+    assert_eq!(aligned(0, 800, 192), Some(0));
+    assert_eq!(aligned(799, 800, 192), Some(191));
+}
+
+/// A row captured before a retune reads shifted, and the part that scrolled
+/// off the edge reports nothing to draw — the pixel-space form of the
+/// FR-PAN-06 scroll.
+/// trace: FR-PAN-09
+#[test]
+fn fr_pan_09_retuned_row_shifts_and_clips() {
+    // View tuned 12.5 kHz up (a quarter of the 50 kHz span) from the row.
+    let f = |c| column_to_bin(c, 800, 14_212_500, 50_000, 14_200_000, 50_000, 800);
+    // The right three-quarters of the view reads the row's upper quarter...
+    assert_eq!(f(0), Some(200)); // a quarter into the row
+    assert_eq!(f(599), Some(799)); // the row's last bin
+                                   // ...and beyond that the row has scrolled out entirely.
+    assert_eq!(f(600), None);
+    assert_eq!(f(799), None);
+
+    // Tuning down mirrors it: the row's low end runs off the left.
+    let g = |c| column_to_bin(c, 800, 14_187_500, 50_000, 14_200_000, 50_000, 800);
+    assert_eq!(g(0), None);
+    assert_eq!(g(199), None);
+    assert_eq!(g(200), Some(0));
+}
+
+/// A row retuned by a full span or more contributes nothing at all.
+/// trace: FR-PAN-09
+#[test]
+fn fr_pan_09_fully_scrolled_row_is_empty() {
+    for c in [0usize, 400, 799] {
+        assert_eq!(
+            column_to_bin(c, 800, 14_250_000, 50_000, 14_200_000, 50_000, 800),
+            None
+        );
+    }
+}
+
+/// A row sampled at a different span maps at a different scale, so zooming in
+/// stretches the older, wider rows rather than misaligning them.
+/// trace: FR-PAN-09
+#[test]
+fn fr_pan_09_row_of_a_different_span_maps_at_its_own_scale() {
+    // Row covers 100 kHz; view now shows the centre 50 kHz of it.
+    let f = |c| column_to_bin(c, 800, 14_200_000, 50_000, 14_200_000, 100_000, 1000);
+    // The view's edges sit a quarter and three-quarters into the row.
+    assert_eq!(f(0), Some(250));
+    assert_eq!(f(799), Some(749));
+    // Every column is in view — the row is wider, so nothing clips.
+    assert!((0..800).all(|c| f(c).is_some()));
+
+    // The converse: a row narrower than the view occupies only its middle.
+    let g = |c| column_to_bin(c, 800, 14_200_000, 100_000, 14_200_000, 50_000, 1000);
+    assert_eq!(g(0), None);
+    assert_eq!(g(399), Some(498));
+    assert_eq!(g(799), None);
+}
+
+/// Degenerate inputs report nothing rather than panicking or reading out of
+/// bounds — the raster loop runs per pixel, so this is the hot path.
+/// trace: FR-PAN-09
+#[test]
+fn fr_pan_09_degenerate_inputs_are_empty() {
+    assert_eq!(column_to_bin(0, 0, 0, 50_000, 0, 50_000, 192), None); // no columns
+    assert_eq!(column_to_bin(0, 800, 0, 0, 0, 50_000, 192), None); // no view span
+    assert_eq!(column_to_bin(0, 800, 0, 50_000, 0, 0, 192), None); // no row span
+    assert_eq!(column_to_bin(0, 800, 0, 50_000, 0, 50_000, 0), None); // no bins
+    assert_eq!(column_to_bin(800, 800, 0, 50_000, 0, 50_000, 192), None); // out of range
+                                                                          // Never returns an index past the end, at any ratio.
+    for bins in [1usize, 3, 192, 4096] {
+        for c in 0..64 {
+            if let Some(b) = column_to_bin(c, 64, 0, 50_000, 0, 50_000, bins) {
+                assert!(b < bins, "bins={bins} col={c} → {b}");
+            }
+        }
+    }
+}
+
+/// The lookup agrees with `row_scroll_px`: the column where a row's first bin
+/// lands is the pixel offset that function reports.
+/// trace: FR-PAN-09
+#[test]
+fn fr_pan_09_agrees_with_row_scroll_px() {
+    let (cols, span) = (800usize, 50_000u32);
+    let (row_c, view_c) = (14_200_000_i64, 14_212_500_i64);
+    // First column that reads the row at all.
+    let first = (0..cols)
+        .find(|&c| column_to_bin(c, cols, view_c, span, row_c, span, cols).is_some())
+        .expect("some of the row is visible");
+    // row_scroll_px puts the row's left edge here (negative = off to the left).
+    let dx = row_scroll_px(row_c, view_c, span, cols as f32);
+    assert_eq!(first, 0, "row starts off-screen left, so column 0 is first");
+    assert!(dx < 0.0, "and its offset is negative: {dx}");
+    // The last visible column matches where the row's right edge lands.
+    let last = (0..cols)
+        .rev()
+        .find(|&c| column_to_bin(c, cols, view_c, span, row_c, span, cols).is_some())
+        .unwrap();
+    assert!(
+        ((last as f32) - (dx + cols as f32)).abs() <= 1.0,
+        "last visible column {last} vs edge {}",
+        dx + cols as f32
+    );
 }
