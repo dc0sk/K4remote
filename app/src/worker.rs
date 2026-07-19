@@ -20,6 +20,7 @@ use k4_audio::{AudioInput, AudioOutput, JitterBuffer, OpusDecoder, OpusEncoder};
 use k4_diag::{DiagLog, Level};
 use k4_protocol::state::{Mode, RadioState};
 use k4_session::{Backoff, Session, SessionConfig, SessionEvent, SystemClock};
+use k4_stream::render::crop_to_span;
 use k4_stream::{AudioPacket, EncodeMode, PanFrame};
 use k4_transport::{CatLink, ConnectConfig, SerialPortTransport, TcpRemoteTransport};
 
@@ -50,20 +51,36 @@ pub struct PanRow {
 }
 
 impl PanRow {
-    /// Build a row from a decoded frame and its downsampled bins, retaining
-    /// the frame's own centre/span.
+    /// Build a row from a decoded frame, cropping to the display span and
+    /// decimating the visible window to `columns`.
     ///
-    /// The app previously dropped both and reconstructed the geometry from the
-    /// VFO plus the CAT `#SPN` value, which is wrong under fixed-tune (`#FXT`)
-    /// and cannot express a per-row centre at all — so the waterfall could not
-    /// scroll (FR-PAN-06).
+    /// A frame's bins cover the **tier** the radio streams
+    /// (`sample_rate × 1000`), not the display span: `#SPN` selects a narrower
+    /// window and the client shows the centre crop (`R-EXT-01`). Cropping
+    /// *before* decimating is what preserves resolution — the columns are
+    /// spent on the visible window instead of being spread across the whole
+    /// tier — and it costs no extra memory, which matters on the Pi.
     ///
-    /// trace: FR-PAN-06
-    pub fn from_frame(frame: &PanFrame, bins: Vec<f32>) -> Self {
+    /// The retained `span_hz` is therefore the span the row's bins actually
+    /// cover after cropping, which is what the scroll maths and the axis
+    /// labels need (FR-PAN-06/07).
+    ///
+    /// `display_span_hz == 0` (span not yet read back) keeps the whole tier.
+    ///
+    /// trace: FR-PAN-06, FR-PAN-08
+    pub fn from_frame(frame: &PanFrame, display_span_hz: u32, columns: usize) -> Self {
+        let tier_span_hz = frame.span_hz().clamp(0, i64::from(u32::MAX)) as u32;
+        let total = frame.bins_dbm.len();
+        let (start, len) = crop_to_span(total, tier_span_hz, display_span_hz);
+        let cropped = len < total;
         Self {
-            bins,
+            bins: downsample(&frame.bins_dbm[start..start + len], columns),
             center_hz: frame.center_freq_hz,
-            span_hz: frame.span_hz().clamp(0, i64::from(u32::MAX)) as u32,
+            span_hz: if cropped {
+                display_span_hz
+            } else {
+                tier_span_hz
+            },
         }
     }
 }
@@ -695,16 +712,20 @@ fn service(ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnapshot>>) {
             }
         }
         // Spectrum → downsampled trace + waterfall history (FR-PAN-02/03).
+        // `#SPN` is the *display* span; a frame's bins cover the wider streamed
+        // tier, so rows are cropped to the centre before decimating (FR-PAN-08).
+        let display_span_hz = session.state().pan_span_hz.unwrap_or(0);
         for payload in &inbound.spectrum {
             if let Some(frame) = PanFrame::decode(payload) {
-                let bins = downsample(&frame.bins_dbm, SPECTRUM_WIDTH);
                 if frame.mini {
-                    ws.mini_pan = bins; // mini-pan overview (FR-UI-14)
+                    // The mini-pan is a deliberate wide-span overview, so it is
+                    // never cropped to `#SPN` (FR-UI-14).
+                    ws.mini_pan = downsample(&frame.bins_dbm, SPECTRUM_WIDTH);
                     continue;
                 }
                 let rx = usize::from(frame.receiver.min(1)); // 0=main/A, 1=sub/B
                 ws.spectrum_bins = frame.bins_dbm.len();
-                let row = PanRow::from_frame(&frame, bins);
+                let row = PanRow::from_frame(&frame, display_span_hz, SPECTRUM_WIDTH);
                 ws.spectrum_latest[rx] = row.clone();
                 ws.waterfall[rx].push_front(row);
                 while ws.waterfall[rx].len() > WATERFALL_ROWS {
@@ -1241,15 +1262,16 @@ mod tests {
         p
     }
 
-    /// A row keeps the centre/span of the frame it came from, so the waterfall
-    /// can pin it to absolute frequency. Regression guard: these two fields
-    /// were decoded and then discarded, which is what prevented scrolling.
+    /// A row keeps the centre of the frame it came from, so the waterfall can
+    /// pin it to absolute frequency. Regression guard: these fields were
+    /// decoded and then discarded, which is what prevented scrolling.
     /// trace: FR-PAN-06
     #[test]
     fn fr_pan_06_row_retains_frame_centre_and_span() {
         let payload = pan_payload(14_200_000, 50, &[100, 120, 140, 160]);
         let frame = PanFrame::decode(&payload).expect("decodes");
-        let row = PanRow::from_frame(&frame, downsample(&frame.bins_dbm, 2));
+        // Display span == tier span ⇒ no crop.
+        let row = PanRow::from_frame(&frame, 50_000, 2);
 
         assert_eq!(row.center_hz, 14_200_000);
         assert_eq!(row.span_hz, 50_000); // sample rate ×1000
@@ -1265,8 +1287,8 @@ mod tests {
         let a = PanFrame::decode(&pan_payload(14_200_000, 50, &bins)).unwrap();
         let b = PanFrame::decode(&pan_payload(14_212_500, 50, &bins)).unwrap();
         let (ra, rb) = (
-            PanRow::from_frame(&a, downsample(&a.bins_dbm, 4)),
-            PanRow::from_frame(&b, downsample(&b.bins_dbm, 4)),
+            PanRow::from_frame(&a, 50_000, 4),
+            PanRow::from_frame(&b, 50_000, 4),
         );
 
         assert_ne!(ra.center_hz, rb.center_hz);
@@ -1274,5 +1296,71 @@ mod tests {
         // Identical energy, different place: exactly the case that used to
         // smear across the waterfall instead of scrolling.
         assert_eq!(ra.bins, rb.bins);
+    }
+
+    /// A row's bins cover the tier the radio streams; `#SPN` shows the CENTRE
+    /// crop of it. The retained span must be the *display* span after cropping,
+    /// or the axis labels, the scroll maths and click-to-QSY all scale wrong.
+    /// trace: FR-PAN-08
+    #[test]
+    fn fr_pan_08_row_crops_the_tier_to_the_display_span() {
+        // 100 kHz tier, 200 bins; a marker at each end and one dead centre.
+        let mut raw = vec![100u8; 200];
+        raw[0] = 250; // low edge of the tier
+        raw[199] = 250; // high edge of the tier
+        raw[100] = 200; // centre
+        let frame = PanFrame::decode(&pan_payload(14_200_000, 100, &raw)).unwrap();
+
+        // Display 25 kHz of a 100 kHz tier ⇒ centre quarter only.
+        let row = PanRow::from_frame(&frame, 25_000, 50);
+        assert_eq!(row.span_hz, 25_000, "must report the DISPLAY span");
+        let peak = row.bins.iter().cloned().fold(f32::MIN, f32::max);
+        assert!(
+            (peak - (200.0 - 146.0)).abs() < 1e-3,
+            "the centre marker must survive, the tier edges must be cropped away: {peak}"
+        );
+
+        // Asking for the whole tier keeps the edge markers.
+        let full = PanRow::from_frame(&frame, 100_000, 50);
+        assert_eq!(full.span_hz, 100_000);
+        let peak_full = full.bins.iter().cloned().fold(f32::MIN, f32::max);
+        assert!((peak_full - (250.0 - 146.0)).abs() < 1e-3, "{peak_full}");
+    }
+
+    /// An unknown display span (no `#SPN` read-back yet) keeps the whole tier
+    /// rather than cropping to nothing.
+    /// trace: FR-PAN-08
+    #[test]
+    fn fr_pan_08_unknown_display_span_keeps_the_tier() {
+        let frame = PanFrame::decode(&pan_payload(14_200_000, 100, &[120; 64])).unwrap();
+        let row = PanRow::from_frame(&frame, 0, 32);
+        assert_eq!(row.span_hz, 100_000);
+        assert_eq!(row.bins.len(), 32);
+    }
+
+    /// Cropping spends the display columns on the visible window, so a narrow
+    /// span resolves detail a full-tier decimation would merge away.
+    /// trace: FR-PAN-08
+    #[test]
+    fn fr_pan_08_cropping_improves_resolution() {
+        // Two carriers 400 Hz apart near the centre of a 200 kHz / 2000-bin
+        // tier (100 Hz per native bin). Across the full tier one column spans
+        // ~10 native bins, so the pair cannot be resolved; cropped, it can.
+        let mut raw = vec![100u8; 2000];
+        raw[1000] = 240;
+        raw[1004] = 240;
+        let frame = PanFrame::decode(&pan_payload(14_200_000, 200, &raw)).unwrap();
+
+        // Whole tier across 192 columns: ~10 native bins per column, so the two
+        // carriers collapse into one.
+        let wide = PanRow::from_frame(&frame, 200_000, 192);
+        let wide_peaks = wide.bins.iter().filter(|&&v| v > 0.0).count();
+
+        // Cropped to 10 kHz: the pair separates.
+        let narrow = PanRow::from_frame(&frame, 10_000, 192);
+        let narrow_peaks = narrow.bins.iter().filter(|&&v| v > 0.0).count();
+
+        assert_eq!(wide_peaks, 1, "full tier should merge the pair");
+        assert_eq!(narrow_peaks, 2, "cropped view should resolve both");
     }
 }

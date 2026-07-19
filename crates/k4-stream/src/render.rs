@@ -76,6 +76,60 @@ pub fn hz_per_bin(span_hz: u32, bins: usize) -> f32 {
     span_hz as f32 / bins as f32
 }
 
+/// The `(start, len)` slice of a frame's bins that a display span covers.
+///
+/// A PAN frame's bins span the **tier** the radio is streaming
+/// (`sample_rate × 1000`), which is not the display span: `#SPN` selects a
+/// narrower window and the client shows the **centre** crop of the tier —
+/// `span / tierSpan × totalBins` bins (`R-EXT-01`). Cropping is also where the
+/// horizontal resolution comes from: the visible window keeps the radio's own
+/// bin density instead of being decimated across the full tier.
+///
+/// Degrades to the whole array when the display span meets or exceeds the tier
+/// (or either is unknown), so a radio whose tier already equals `#SPN` is
+/// unaffected.
+///
+/// trace: FR-PAN-08
+pub fn crop_to_span(total_bins: usize, tier_span_hz: u32, display_span_hz: u32) -> (usize, usize) {
+    if total_bins == 0 {
+        return (0, 0);
+    }
+    if tier_span_hz == 0 || display_span_hz == 0 || display_span_hz >= tier_span_hz {
+        return (0, total_bins);
+    }
+    let frac = f64::from(display_span_hz) / f64::from(tier_span_hz);
+    // At least one bin, and never past the end.
+    let len = ((total_bins as f64 * frac).round() as usize).clamp(1, total_bins);
+    let start = (total_bins - len) / 2;
+    (start, len)
+}
+
+/// Resample `bins` to exactly `columns` output values by bucket **peak**, the
+/// same rule the worker uses when decimating: a narrow carrier must survive
+/// being squeezed into fewer columns rather than being averaged away.
+///
+/// Widening (fewer bins than columns) repeats the nearest source bin, so the
+/// display never invents detail the radio did not send.
+///
+/// trace: FR-PAN-08
+pub fn resample_peak(bins: &[f32], columns: usize) -> Vec<f32> {
+    if bins.is_empty() || columns == 0 {
+        return Vec::new();
+    }
+    (0..columns)
+        .map(|i| {
+            // Bucket bounds must be contiguous, not overlapping: rounding the
+            // end UP would let a single carrier land in two output columns.
+            let start = i * bins.len() / columns;
+            let end = ((i + 1) * bins.len() / columns).clamp(start + 1, bins.len());
+            bins[start..end]
+                .iter()
+                .copied()
+                .fold(f32::NEG_INFINITY, f32::max)
+        })
+        .collect()
+}
+
 /// Horizontal position (px) of an absolute frequency `hz` in a pan view
 /// centred on `center_hz` spanning `span_hz`, over a canvas `width` px wide.
 /// The view centre maps to `width / 2`. Not clamped: callers that need the

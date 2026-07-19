@@ -60,7 +60,13 @@ impl PanFrame {
         })
     }
 
-    /// Displayed span in Hz (`sample_rate × 1000`).
+    /// **Tier** span in Hz (`sample_rate × 1000`) — the width the radio is
+    /// streaming, which is *not* the displayed span.
+    ///
+    /// `#SPN` selects a narrower display window and the client shows the centre
+    /// crop of these bins (`R-EXT-01`); see
+    /// [`crate::render::crop_to_span`]. Treating this as the display span
+    /// scales the frequency axis and click-to-QSY by `tier / #SPN`.
     pub fn span_hz(&self) -> i64 {
         self.sample_rate as i64 * 1000
     }
