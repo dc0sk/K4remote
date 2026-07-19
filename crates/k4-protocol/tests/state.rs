@@ -436,3 +436,40 @@ fn nfr_perf_ai_burst_bounded_memory() {
         s.menu_values.len()
     );
 }
+
+/// The panadapter display commands are named `#REF$` / `#SPN$` / `#WFC$` in
+/// D12 — there the `$` is part of the *mnemonic* (LCD, against `#HREF` /
+/// `#HWFC` for the external monitor), not the sub-receiver modifier. The
+/// `$` spelling used to fail the integer parse and be dropped in silence, so
+/// the read-back that span/reference/scale sync from never arrived.
+/// trace: FR-PAN-07
+#[test]
+fn fr_pan_07_display_readback_accepts_the_dollar_spelling() {
+    for (with, without) in [
+        ("#REF$-130;", "#REF-130;"),
+        ("#SPN$50000;", "#SPN50000;"),
+        ("#SCL$70;", "#SCL70;"),
+        ("#DPM$2;", "#DPM2;"),
+        ("#WFC$1;", "#WFC1;"),
+        ("#WFH$080;", "#WFH080;"),
+    ] {
+        let (mut a, mut b) = (RadioState::new(), RadioState::new());
+        a.apply_cat(with);
+        b.apply_cat(without);
+        assert_eq!(a.pan_ref, b.pan_ref, "{with}");
+        assert_eq!(a.pan_span_hz, b.pan_span_hz, "{with}");
+        assert_eq!(a.pan_scale, b.pan_scale, "{with}");
+        assert_eq!(a.pan_mode, b.pan_mode, "{with}");
+        assert_eq!(a.wf_palette, b.wf_palette, "{with}");
+        assert_eq!(a.wf_height, b.wf_height, "{with}");
+    }
+
+    // And the values actually land, rather than both spellings being no-ops.
+    let mut s = RadioState::new();
+    s.apply_cat("#REF$-130;");
+    s.apply_cat("#SPN$50000;");
+    s.apply_cat("#SCL$70;");
+    assert_eq!(s.pan_ref, Some(-130));
+    assert_eq!(s.pan_span_hz, Some(50_000));
+    assert_eq!(s.pan_scale, Some(70));
+}

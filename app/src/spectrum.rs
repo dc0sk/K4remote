@@ -8,7 +8,9 @@ use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke, Text};
 use iced::{Color, Pixels, Point, Rectangle, Renderer, Size, Theme};
 
 use crate::worker::PanRow;
-use k4_stream::render::{dbm_to_color, dbm_to_y, row_scroll_px};
+use k4_stream::render::{
+    axis_ticks, db_grid_step, dbm_to_color, dbm_to_y, hz_per_bin, row_scroll_px,
+};
 
 /// Canvas program drawing a spectrum trace (top) and waterfall (bottom).
 pub struct Spectrum<'a, Message> {
@@ -110,8 +112,10 @@ impl<Message> canvas::Program<Message> for Spectrum<'_, Message> {
         let grid = Color::from_rgba8(255, 255, 255, 0.07);
         let label = Color::from_rgba8(150, 156, 168, 0.85);
         let bottom_dbm = self.top_dbm - self.range_db;
-        // Horizontal lines + dB labels every 20 dB, aligned to a 20 dB boundary.
-        let step = 20.0_f32;
+        // Horizontal lines + dB labels, on a step chosen for the window so the
+        // grid stays readable across the whole `#SCL` 10–150 dB range
+        // (FR-PAN-07); aligned to a step boundary.
+        let step = db_grid_step(self.range_db);
         let mut db = (self.top_dbm / step).floor() * step;
         while db >= bottom_dbm {
             let y = dbm_to_y(db, self.top_dbm, self.range_db, spec_h);
@@ -128,13 +132,59 @@ impl<Message> canvas::Program<Message> for Spectrum<'_, Message> {
             });
             db -= step;
         }
-        // Vertical grid lines (quarter divisions) across the spectrum band.
-        for i in 1..4 {
-            let x = w * i as f32 / 4.0;
-            frame.stroke(
-                &Path::line(Point::new(x, 0.0), Point::new(x, spec_h)),
-                Stroke::default().with_width(1.0).with_color(grid),
-            );
+        // Vertical grid lines, each labelled with the frequency it marks, so
+        // the horizontal resolution is readable off the display rather than
+        // being four anonymous divisions (FR-PAN-07).
+        const DIVS: u32 = 4;
+        if self.span_hz > 0 {
+            for (i, hz) in axis_ticks(self.center_hz as i64, self.span_hz, DIVS)
+                .into_iter()
+                .enumerate()
+            {
+                let x = w * i as f32 / DIVS as f32;
+                // Skip the canvas edges for the line; still label them.
+                if i > 0 && i < DIVS as usize {
+                    frame.stroke(
+                        &Path::line(Point::new(x, 0.0), Point::new(x, spec_h)),
+                        Stroke::default().with_width(1.0).with_color(grid),
+                    );
+                }
+                // MHz with enough decimals to resolve one division.
+                let text = format!("{:.3}", hz as f64 / 1e6);
+                frame.fill_text(Text {
+                    content: text,
+                    // Nudge the edge labels inward so they stay on-canvas.
+                    position: Point::new(x.clamp(20.0, w - 20.0), spec_h - 11.0),
+                    color: label,
+                    size: Pixels(9.0),
+                    horizontal_alignment: iced::alignment::Horizontal::Center,
+                    ..Text::default()
+                });
+            }
+
+            // Resolution readout: span and Hz per displayed column.
+            let per_bin = hz_per_bin(self.span_hz, self.latest.len());
+            let span_khz = self.span_hz as f32 / 1000.0;
+            frame.fill_text(Text {
+                content: if per_bin > 0.0 {
+                    format!("{span_khz:.1} kHz span · {per_bin:.0} Hz/bin")
+                } else {
+                    format!("{span_khz:.1} kHz span")
+                },
+                position: Point::new(w - 4.0, 2.0),
+                color: label,
+                size: Pixels(9.0),
+                horizontal_alignment: iced::alignment::Horizontal::Right,
+                ..Text::default()
+            });
+        } else {
+            for i in 1..DIVS {
+                let x = w * i as f32 / DIVS as f32;
+                frame.stroke(
+                    &Path::line(Point::new(x, 0.0), Point::new(x, spec_h)),
+                    Stroke::default().with_width(1.0).with_color(grid),
+                );
+            }
         }
 
         // Passband overlay: the *RF* passband, in absolute Hz, as computed by

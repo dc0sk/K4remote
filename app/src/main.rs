@@ -5012,6 +5012,19 @@ impl App {
             } else {
                 self.ui.radio.pan_span_hz.unwrap_or(0)
             };
+            // Vertical window follows the radio: `#REF` (dBm at the bottom of
+            // the scale) + `#SCL` (dB shown). The K4's read-back is
+            // authoritative; the local DISPLAY-screen values are only the
+            // fallback until it reports (FR-PAN-07). Previously these were
+            // hardcoded to a −130…−30 window and the tracked #REF/#SCL were
+            // never consulted at all.
+            let (top_dbm, range_db) = k4_stream::render::pan_window(
+                self.ui.radio.pan_ref.unwrap_or(self.display.ref_db),
+                self.ui
+                    .radio
+                    .pan_scale
+                    .unwrap_or(u16::from(self.display.scale)),
+            );
             let plot: Element<Message> = if latest.bins.is_empty() {
                 Container::new(
                     Text::new("spectrum + waterfall — waiting for data")
@@ -5026,8 +5039,8 @@ impl App {
                 Canvas::new(spectrum::Spectrum {
                     latest: &latest.bins,
                     waterfall,
-                    top_dbm: -30.0,
-                    range_db: 100.0,
+                    top_dbm,
+                    range_db,
                     is_b: p.is_b(),
                     center_hz: pan_center_hz,
                     span_hz: pan_span_hz,

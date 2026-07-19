@@ -1,5 +1,8 @@
 //! Spectrum/waterfall render-helper tests. trace: FR-PAN-02, FR-PAN-03
-use k4_stream::render::{dbm_to_color, dbm_to_y, hz_to_x, row_scroll_px};
+use k4_stream::render::{
+    axis_ticks, db_grid_step, dbm_to_color, dbm_to_y, hz_per_bin, hz_to_x, pan_window,
+    row_scroll_px,
+};
 
 /// dBm→y maps the top of the window to 0 and the bottom to `height`, clamping.
 ///
@@ -78,4 +81,64 @@ fn fr_pan_06_scroll_agrees_with_hz_to_x() {
         (via_scroll - via_map).abs() < 1e-3,
         "{via_scroll} vs {via_map}"
     );
+}
+
+/// trace: FR-PAN-07
+#[test]
+fn fr_pan_07_pan_window_from_ref_and_scale() {
+    assert_eq!(pan_window(-130, 70), (-60.0, 70.0)); // −130…−60 dBm
+    assert_eq!(pan_window(-100, 50), (-50.0, 50.0));
+    assert_eq!(pan_window(-130, 0), (-120.0, 10.0)); // degenerate → #SCL min
+                                                     // The window is exactly `scale` tall, whatever the reference.
+    for (r, sc) in [(-200i16, 10u16), (-130, 70), (0, 150), (60, 150)] {
+        let (top, range) = pan_window(r, sc);
+        assert_eq!(range, f32::from(sc));
+        assert_eq!(top - range, f32::from(r), "bottom must equal #REF");
+    }
+}
+
+/// The dB grid adapts to the window instead of a fixed 20 dB step, which drew
+/// a single line at a 10 dB scale and eight at 150 dB.
+/// trace: FR-PAN-07
+#[test]
+fn fr_pan_07_db_grid_step_adapts_to_range() {
+    assert_eq!(db_grid_step(10.0), 2.0);
+    assert_eq!(db_grid_step(70.0), 20.0);
+    assert_eq!(db_grid_step(150.0), 50.0);
+    // Across the whole documented #SCL range, division count stays readable.
+    for scale in 10..=150u16 {
+        let (_, range) = pan_window(-130, scale);
+        let n = range / db_grid_step(range);
+        assert!((1.0..=8.0).contains(&n), "scale {scale} → {n} divisions");
+    }
+}
+
+/// Axis ticks span the full view inclusive of both edges and stay centred.
+/// trace: FR-PAN-07
+#[test]
+fn fr_pan_07_axis_ticks_span_the_view() {
+    let t = axis_ticks(14_200_000, 50_000, 4);
+    assert_eq!(
+        t,
+        vec![14_175_000, 14_187_500, 14_200_000, 14_212_500, 14_225_000]
+    );
+    assert_eq!(t.len(), 5); // divisions + 1
+    assert_eq!(axis_ticks(14_200_000, 50_000, 0), Vec::<i64>::new());
+    // Ticks agree with the frequency→pixel mapping used to place them.
+    let (span, w) = (50_000u32, 800.0f32);
+    for (i, &hz) in t.iter().enumerate() {
+        let x = hz_to_x(hz as f64, 14_200_000.0, span, w);
+        assert!((x - i as f32 * w / 4.0).abs() < 1e-3, "tick {i} at {x}");
+    }
+}
+
+/// Display resolution is span / displayed columns.
+/// trace: FR-PAN-07
+#[test]
+fn fr_pan_07_hz_per_bin() {
+    assert_eq!(hz_per_bin(50_000, 192), 50_000.0 / 192.0);
+    assert_eq!(hz_per_bin(6_000, 192), 6_000.0 / 192.0);
+    assert_eq!(hz_per_bin(50_000, 0), 0.0); // no bins yet
+                                            // Halving the span halves the Hz each column covers (finer resolution).
+    assert_eq!(hz_per_bin(25_000, 192) * 2.0, hz_per_bin(50_000, 192));
 }
