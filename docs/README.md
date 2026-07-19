@@ -1,8 +1,8 @@
 ---
 title: "K4 Remote — Documentation & RE Process"
 status: Draft
-version: "0.1"
-updated: 2026-06-25
+version: "0.2"
+updated: 2026-07-19
 authors:
   - Simon Keimer (DC0SK)
 ---
@@ -32,6 +32,9 @@ consistent traceability** from stakeholder needs down to test cases and test res
 | [concept/architecture.md](concept/architecture.md) | Concept, architecture, components, data flow, ADRs | `ARC-`, `ADR-` |
 | [concept/ui-design.md](concept/ui-design.md) | UI/UX design concept: layout, switchable view mode, semantic colour, interaction model | — (elaborates `FR-UI-*`, `ADR-15`) |
 | [concept/k4-screens.md](concept/k4-screens.md) | K4 on-screen config screens (extracted from the manual): per-primary spec + reusable components + CAT gaps + action list | `SCR-` (elaborates `FR-UI-19`) |
+| [requirements/k4-operating-gap-analysis.md](requirements/k4-operating-gap-analysis.md) | Operating features of the real K4 (incl. the tap/hold touch model) vs. what the app implements; prioritised gaps | — (proposes `FR-*`) |
+| [concept/station-accessories-plan.md](concept/station-accessories-plan.md) | Plan for KAT500 / KPA500 / KPA1500 support: transport, protocols, amplifier safety, phasing | — (proposes `FR-ACC/KPA/KAT-*`) |
+| [concept/cat-server-plan.md](concept/cat-server-plan.md) | Plan for a CAT server so third-party logging software can drive the radio through the app | — (proposes `FR-CATSRV-*`) |
 | [test/test-strategy.md](test/test-strategy.md) | Test approach, levels, verification methods, traceability matrix | `TC-` |
 | [user-manual.md](user-manual.md) | **User-facing** operating manual (install, connect, tune, TX, K-Pod, settings) | — |
 | [references/](references/) | Vendor documentation (Elecraft K4 Programmer's Reference, manuals) | — |
