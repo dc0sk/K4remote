@@ -5007,6 +5007,9 @@ impl App {
             } else {
                 pane_center_hz
             };
+            // `PanRow::span_hz` is the span its bins cover *after* cropping to
+            // `#SPN`, so it is the display span, not the streamed tier
+            // (FR-PAN-08). Fall back to `#SPN` until the first frame arrives.
             let pan_span_hz = if latest.span_hz > 0 {
                 latest.span_hz
             } else {

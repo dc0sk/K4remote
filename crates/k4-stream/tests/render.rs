@@ -1,7 +1,7 @@
 //! Spectrum/waterfall render-helper tests. trace: FR-PAN-02, FR-PAN-03
 use k4_stream::render::{
-    axis_ticks, db_grid_step, dbm_to_color, dbm_to_y, hz_per_bin, hz_to_x, pan_window,
-    row_scroll_px,
+    axis_ticks, crop_to_span, db_grid_step, dbm_to_color, dbm_to_y, hz_per_bin, hz_to_x,
+    pan_window, resample_peak, row_scroll_px,
 };
 
 /// dBm→y maps the top of the window to 0 and the bottom to `height`, clamping.
@@ -141,4 +141,102 @@ fn fr_pan_07_hz_per_bin() {
     assert_eq!(hz_per_bin(50_000, 0), 0.0); // no bins yet
                                             // Halving the span halves the Hz each column covers (finer resolution).
     assert_eq!(hz_per_bin(25_000, 192) * 2.0, hz_per_bin(50_000, 192));
+}
+
+/// A PAN frame's bins span the tier the radio streams, not the display span:
+/// `#SPN` shows the CENTRE crop of the tier (R-EXT-01). Cropping is a no-op
+/// when the tier already equals the display span.
+/// trace: FR-PAN-08
+#[test]
+fn fr_pan_08_crop_takes_the_centre_of_the_tier() {
+    // Half the tier → half the bins, centred.
+    assert_eq!(crop_to_span(1000, 100_000, 50_000), (250, 500));
+    // A quarter → a quarter, centred.
+    assert_eq!(crop_to_span(1000, 100_000, 25_000), (375, 250));
+    // Equal spans, or a display span wider than the tier → everything.
+    assert_eq!(crop_to_span(1000, 50_000, 50_000), (0, 1000));
+    assert_eq!(crop_to_span(1000, 50_000, 90_000), (0, 1000));
+    // Unknown spans degrade to the whole array rather than cropping to nothing.
+    assert_eq!(crop_to_span(1000, 0, 50_000), (0, 1000));
+    assert_eq!(crop_to_span(1000, 50_000, 0), (0, 1000));
+    assert_eq!(crop_to_span(0, 100_000, 50_000), (0, 0));
+    // The crop always stays in bounds and keeps at least one bin, even for an
+    // extreme zoom.
+    for display in [6_000u32, 12_500, 50_000, 368_000] {
+        let (start, len) = crop_to_span(1024, 368_000, display);
+        assert!(len >= 1 && start + len <= 1024, "{display}: {start}+{len}");
+    }
+}
+
+/// The crop is centred: it keeps the bin at the middle of the tier, which is
+/// the pan's centre frequency.
+/// trace: FR-PAN-08
+#[test]
+fn fr_pan_08_crop_is_symmetric_about_the_centre() {
+    for (total, tier, display) in [(1000usize, 100_000u32, 50_000u32), (999, 96_000, 24_000)] {
+        let (start, len) = crop_to_span(total, tier, display);
+        let before = start;
+        let after = total - (start + len);
+        assert!(
+            before.abs_diff(after) <= 1,
+            "{total}/{tier}/{display}: {before} before vs {after} after"
+        );
+    }
+}
+
+/// Resampling to the display width uses bucket peak, so a single narrow
+/// carrier survives decimation instead of being averaged into the noise.
+/// trace: FR-PAN-08
+#[test]
+fn fr_pan_08_resample_preserves_a_narrow_carrier() {
+    let mut bins = vec![-120.0f32; 1000];
+    bins[437] = -40.0; // one hot bin
+    let out = resample_peak(&bins, 192);
+    assert_eq!(out.len(), 192);
+    assert!(
+        out.iter().any(|&v| (v - -40.0).abs() < 1e-6),
+        "the carrier must survive decimation"
+    );
+    // Exactly one output column should carry it.
+    assert_eq!(out.iter().filter(|&&v| v > -100.0).count(), 1);
+}
+
+/// Resampling covers every source bin and never reads out of bounds, at both
+/// decimation and widening ratios.
+/// trace: FR-PAN-08
+#[test]
+fn fr_pan_08_resample_covers_all_bins_at_any_ratio() {
+    for n in [1usize, 7, 192, 1000, 1024] {
+        // A ramp: max of the last bucket must be the last value.
+        let bins: Vec<f32> = (0..n).map(|i| i as f32).collect();
+        for cols in [1usize, 5, 192, 800, 2048] {
+            let out = resample_peak(&bins, cols);
+            assert_eq!(out.len(), cols, "n={n} cols={cols}");
+            // The last bucket must reach the final source bin, so no tail is
+            // silently dropped.
+            assert_eq!(out[cols - 1], (n - 1) as f32, "n={n} cols={cols}: last bin");
+            // A monotonic input must stay monotonic: buckets are contiguous and
+            // in order, neither reordered nor skipped.
+            assert!(
+                out.windows(2).all(|w| w[0] <= w[1]),
+                "n={n} cols={cols}: not monotonic"
+            );
+            assert!(out.iter().all(|v| v.is_finite()), "n={n} cols={cols}");
+        }
+    }
+    assert!(resample_peak(&[], 100).is_empty());
+    assert!(resample_peak(&[1.0], 0).is_empty());
+}
+
+/// Widening repeats source bins rather than inventing detail: the output has
+/// no more distinct values than the input.
+/// trace: FR-PAN-08
+#[test]
+fn fr_pan_08_widening_invents_no_detail() {
+    let bins = [-100.0f32, -50.0, -80.0, -60.0];
+    let out = resample_peak(&bins, 40);
+    assert_eq!(out.len(), 40);
+    for v in &out {
+        assert!(bins.contains(v), "{v} is not a source value");
+    }
 }
