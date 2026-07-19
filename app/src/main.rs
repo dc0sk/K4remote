@@ -1365,7 +1365,12 @@ impl App {
                 self.send(WorkerCmd::Cat(k4_protocol::cat::set_split(is_b)));
             }
             Message::PaneQsy(is_b, hz) => {
-                // Click-to-QSY: tune the pane's VFO to the clicked frequency.
+                // Click-to-QSY: place the passband so the edge this mode
+                // anchors lands on the clicked frequency — USB the low edge,
+                // LSB the high edge, CW/AM/FM the centre (FR-PAN-05). Without
+                // this the VFO went to the raw click, which on USB/LSB put the
+                // passband a full filter-width off the signal.
+                let hz = self.pane_click_vfo(is_b, hz);
                 // (In dual view a wrapping mouse_area also selects the TX VFO.)
                 if is_b {
                     self.opt_vfo.set_b(hz);
@@ -3561,6 +3566,46 @@ impl App {
         self.send(WorkerCmd::Cat(target_rx(is_cmd, sub)));
     }
 
+    /// The mode + filter geometry for a pane: `(mode, bandwidth, IF centre
+    /// pitch, CW sidetone pitch)`. `None` until the radio has reported a mode.
+    ///
+    /// `IS` is the IF **centre pitch** (D12), so the audio passband is
+    /// `IS ± BW/2`; the mode then decides how that maps onto RF.
+    fn pane_filter_geometry(&self, is_b: bool) -> Option<(k4_protocol::Mode, u32, u16, u16)> {
+        let r = &self.ui.radio;
+        let (mode, bw, is) = if is_b {
+            (r.mode_b, r.sub_bandwidth_hz, r.sub_shift_hz)
+        } else {
+            (r.mode_a, r.bandwidth_hz, r.shift_hz)
+        };
+        // Defaults keep the overlay sane before the first BW/IS/CW read-back.
+        Some((
+            mode?,
+            bw.unwrap_or(2_700),
+            is.unwrap_or(1_500),
+            r.cw_pitch.unwrap_or(600),
+        ))
+    }
+
+    /// RF passband edges (absolute Hz) to shade on a pane's panadapter.
+    fn pane_passband_hz(&self, is_b: bool, vfo_hz: u64) -> Option<(u64, u64)> {
+        let (mode, bw, is, pitch) = self.pane_filter_geometry(is_b)?;
+        Some(k4_protocol::cat::rf_passband_hz(
+            vfo_hz, mode, bw, is, pitch,
+        ))
+    }
+
+    /// The VFO frequency a panadapter click at `clicked_hz` should tune to.
+    /// Falls back to the raw click while the mode is still unknown.
+    fn pane_click_vfo(&self, is_b: bool, clicked_hz: u64) -> u64 {
+        match self.pane_filter_geometry(is_b) {
+            Some((mode, bw, is, pitch)) => {
+                k4_protocol::cat::vfo_for_click(clicked_hz, mode, bw, is, pitch)
+            }
+            None => clicked_hz,
+        }
+    }
+
     /// Load the local slider values (BW/AF/RF/SQL/shift/notch-pitch) from the
     /// active RX VFO's radio state, so they reflect A or B after a view switch.
     fn sync_locals(&mut self) {
@@ -4947,6 +4992,12 @@ impl App {
             } else {
                 (&self.ui.spectrum_latest, &self.ui.waterfall)
             };
+            let pane_center_hz = if p.is_b() {
+                self.ui.vfo_b_hz
+            } else {
+                self.ui.vfo_a_hz
+            }
+            .unwrap_or(0);
             let plot: Element<Message> = if latest.is_empty() {
                 Container::new(
                     Text::new("spectrum + waterfall — waiting for data")
@@ -4964,19 +5015,9 @@ impl App {
                     top_dbm: -30.0,
                     range_db: 100.0,
                     is_b: p.is_b(),
-                    center_hz: if p.is_b() {
-                        self.ui.vfo_b_hz
-                    } else {
-                        self.ui.vfo_a_hz
-                    }
-                    .unwrap_or(0),
+                    center_hz: pane_center_hz,
                     span_hz: self.ui.radio.pan_span_hz.unwrap_or(0),
-                    bw_hz: if p.is_b() {
-                        self.ui.radio.sub_bandwidth_hz
-                    } else {
-                        self.ui.radio.bandwidth_hz
-                    }
-                    .unwrap_or(0),
+                    passband_hz: self.pane_passband_hz(p.is_b(), pane_center_hz),
                     on_qsy: Message::PaneQsy,
                     on_wheel: Message::PaneWheel,
                 })

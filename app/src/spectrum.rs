@@ -25,8 +25,9 @@ pub struct Spectrum<'a, Message> {
     /// click-to-QSY. `span_hz == 0` disables QSY (span unknown / fixed-tune).
     pub center_hz: u64,
     pub span_hz: u32,
-    /// Active RX filter bandwidth (Hz), for the passband overlay. `0` = none.
-    pub bw_hz: u32,
+    /// RF passband edges `(lo, hi)` in absolute Hz for the overlay, from
+    /// `k4_protocol::cat::rf_passband_hz`. `None` = mode/filter not yet known.
+    pub passband_hz: Option<(u64, u64)>,
     /// Left-click → tune this VFO to the clicked frequency.
     pub on_qsy: fn(bool, u64) -> Message,
     /// Wheel scroll → step this VFO up (`+1`) / down (`-1`).
@@ -131,17 +132,27 @@ impl<Message> canvas::Program<Message> for Spectrum<'_, Message> {
             );
         }
 
-        // Passband overlay: a translucent band of width BW centred on the VFO
-        // (assumes a VFO-centred pan) plus the VFO centre line.
-        // trace: FR-FIL-03
-        if self.span_hz > 0 && self.bw_hz > 0 {
-            let half_px = (self.bw_hz as f32 / 2.0 / self.span_hz as f32 * w).min(w / 2.0);
+        // Passband overlay: the *RF* passband, in absolute Hz, as computed by
+        // `k4_protocol::cat::rf_passband_hz` — asymmetric about the VFO on
+        // USB/LSB/CW, symmetric on AM/FM. Drawn by frequency rather than
+        // assumed centred, so it agrees with click-to-QSY by construction.
+        // trace: FR-FIL-03, FR-PAN-05
+        if let (true, Some((lo, hi))) = (self.span_hz > 0, self.passband_hz) {
+            let x_of = |hz: u64| {
+                let frac = (hz as f64 - self.center_hz as f64) / self.span_hz as f64 + 0.5;
+                (frac as f32).clamp(0.0, 1.0) * w
+            };
+            let (x_lo, x_hi) = (x_of(lo), x_of(hi));
+            if x_hi > x_lo {
+                frame.fill_rectangle(
+                    Point::new(x_lo, 0.0),
+                    Size::new(x_hi - x_lo, spec_h),
+                    Color::from_rgba8(0x3D, 0x7E, 0xFF, 0.12),
+                );
+            }
+            // The VFO carrier line sits at the pane centre, which for USB/LSB
+            // is an *edge* of the shaded band rather than its middle.
             let cx = w / 2.0;
-            frame.fill_rectangle(
-                Point::new(cx - half_px, 0.0),
-                Size::new(half_px * 2.0, spec_h),
-                Color::from_rgba8(0x3D, 0x7E, 0xFF, 0.12),
-            );
             frame.stroke(
                 &Path::line(Point::new(cx, 0.0), Point::new(cx, spec_h)),
                 Stroke::default()

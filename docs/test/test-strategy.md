@@ -1,8 +1,8 @@
 ---
 title: "Test Strategy & Traceability"
 status: Draft
-version: "1.25"
-updated: 2026-07-07
+version: "1.45"
+updated: 2026-07-19
 authors:
   - Simon Keimer (DC0SK)
 owns: [TC]
@@ -138,6 +138,7 @@ Maintained partly by hand (design intent) and verified/augmented by `xtask trace
 | FR-PAN-01 | STK-09 | ARC-10 | TC-PAN-02 (PAN decode: meta + bins, dBm=byte−146) | L3 | V\* |
 | FR-PAN-02 | STK-09 | ARC-11 | TC-PAN-03 (dbm→y scaling) + canvas (L4) | L1 | Impl |
 | FR-PAN-03 | STK-09 | ARC-11 | TC-PAN-04 (waterfall colormap) + canvas (L4) | L1 | Impl |
+| FR-PAN-05 | STK-09 | ARC-04 | TC-PAN-05 (mode-aware passband: anchor per mode, RF passband sideband sense, click round-trip, 0 Hz saturation) | L1 | V\* |
 | FR-UI-04 | STK-08/11 | ARC-08 | TC-UI-01 (arm/e-stop affordances) | L4 | P |
 | FR-UI-07 | STK-11 | ARC-08 | TC-UI-02 (no UI block under load) | L5 | P |
 | FR-UI-08 | STK-11 | ARC-15 | TC-UI-03 (ViewMode cycle + pane visibility) | L1 | V\* |
@@ -343,3 +344,4 @@ FR-SES-MULTI, FR-DIAG-02, etc. — get `TC` IDs when promoted to `Approved`.)*
 | 2026-07-14 | 1.42 | DC0SK | **In-app MENU value editing** (FR-MENU-01): the MENU screen previously only opened an item on the radio (`MO`) — values couldn't be changed in the app (a deferred follow-up). Now tapping an item **selects** it and queries its value (`ME<id>`); the current value shows inline and in an editor below, where you **Set** a typed value (`ME<id>.<value>`) or **± nudge** a numeric one, then it reads back. The `ME<id>.<value>` responses were already parsed into `RadioState.menu_values`; this wires the UI. Removed the now-unused `MenuOpen` message. 162 tests. |
 | 2026-07-14 | 1.43 | DC0SK | Website refresh: swapped in real screenshots — Step 1 now uses `step1_connect.png` (connection dialog) and Step 4 `step4_arm_tx.png` (armed TX), plus the updated hero `main.png`. No app/test change. 162 tests. |
 | 2026-07-14 | 1.44 | DC0SK | Release **0.2.3**: version bumped 0.2.2 → 0.2.3 (workspace). Patch release rolling up the band-follows-transmit-VFO fix (1.40/1.41), in-app MENU value editing (1.42), and the snappier 100 ms UI tick. Refreshed README status + user-manual version. 162 tests. |
+| 2026-07-19 | 1.45 | DC0SK | Mode-aware panadapter click-to-QSY + passband overlay (FR-PAN-05). New pure helpers `click_anchor`/`rf_passband_hz`/`vfo_for_click` in `k4-protocol::cat` map the K4's audio-domain filter (`BW` + `IS` **centre pitch**, D12) onto RF per mode: USB/DATA anchor the passband's low edge on the click, LSB/DATA-REV its high edge, CW/CW-REV/AM/FM its centre (CW offset by the `CW` sidetone pitch). The canvas overlay is now positioned by absolute frequency instead of being assumed symmetric about the VFO, so overlay and click agree by construction. 4 new tests sabotage-verified (swapped USB/LSB anchor → 2 fail; dropped CW pitch → 1 fail). 166 tests. |

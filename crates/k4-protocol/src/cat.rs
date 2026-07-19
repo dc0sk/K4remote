@@ -2,6 +2,7 @@
 //! Source: K4 Programmer's Reference rev. D12.
 
 use crate::frame::PayloadType;
+use crate::state::Mode;
 
 /// Max buffer for the serial line decoder before reset (malformed-input guard).
 const MAX_LINE_BUFFER: usize = 64 * 1024;
@@ -252,6 +253,103 @@ pub fn passband_edges(bw_hz: u32, center_hz: u16) -> (u16, u16) {
     let lo = (center_hz as i64 - half).max(0) as u16;
     let hi = (center_hz as i64 + half) as u16;
     (lo, hi)
+}
+
+/// Where a panadapter click anchors the passband, per mode.
+///
+/// The K4 describes its filter in the **audio** domain via `BW` + `IS` (D12
+/// names `IS` "IF Center Pitch", not IF shift). Which part of the resulting RF
+/// passband a user is pointing at when they click depends on the mode's
+/// sideband sense: on USB the passband extends upward from the click, on LSB
+/// downward, and on the carrier-centred / tone-centred modes it straddles it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClickAnchor {
+    /// Clicked frequency is the low edge of the passband (USB, DATA).
+    LowEdge,
+    /// Clicked frequency is the high edge of the passband (LSB, DATA-REV).
+    HighEdge,
+    /// Clicked frequency is the centre of the passband (CW, CW-REV, AM, FM).
+    Center,
+}
+
+/// The passband anchor a panadapter click uses in `mode`.
+///
+/// trace: FR-PAN-05
+pub fn click_anchor(mode: Mode) -> ClickAnchor {
+    match mode {
+        Mode::Usb | Mode::Data => ClickAnchor::LowEdge,
+        Mode::Lsb | Mode::DataRev => ClickAnchor::HighEdge,
+        Mode::Cw | Mode::CwRev | Mode::Am | Mode::Fm => ClickAnchor::Center,
+    }
+}
+
+/// Passband edges as signed offsets `(lo, hi)` in Hz **relative to the VFO**.
+///
+/// The audio passband is `IS ± BW/2`; the mode maps audio onto RF:
+///
+/// | Mode | RF of an audio tone `a` | Passband |
+/// |---|---|---|
+/// | USB, DATA | `vfo + a` | above the VFO |
+/// | LSB, DATA-REV | `vfo − a` | below the VFO |
+/// | CW | `vfo + (a − pitch)` | straddles the VFO (a signal *at* the VFO sounds at the sidetone pitch) |
+/// | CW-REV | `vfo − (a − pitch)` | mirrored |
+/// | AM, FM | `vfo ± a` | symmetric about the carrier |
+///
+/// AM/FM ignore `if_center_hz`: those modes are carrier-centred, so the
+/// passband is `±BW/2` about the VFO regardless of the IF centre pitch.
+fn passband_offsets_hz(mode: Mode, bw_hz: u32, if_center_hz: u16, cw_pitch_hz: u16) -> (i64, i64) {
+    let half = i64::from(bw_hz / 2);
+    let center = i64::from(if_center_hz);
+    let pitch = i64::from(cw_pitch_hz);
+    let (a_lo, a_hi) = (center - half, center + half);
+    match mode {
+        Mode::Usb | Mode::Data => (a_lo, a_hi),
+        Mode::Lsb | Mode::DataRev => (-a_hi, -a_lo),
+        Mode::Cw => (a_lo - pitch, a_hi - pitch),
+        Mode::CwRev => (pitch - a_hi, pitch - a_lo),
+        Mode::Am | Mode::Fm => (-half, half),
+    }
+}
+
+/// RF passband edges `(lo, hi)` in absolute Hz for a VFO/mode/filter
+/// combination — what the panadapter overlay should shade.
+///
+/// trace: FR-PAN-05
+pub fn rf_passband_hz(
+    vfo_hz: u64,
+    mode: Mode,
+    bw_hz: u32,
+    if_center_hz: u16,
+    cw_pitch_hz: u16,
+) -> (u64, u64) {
+    let (lo, hi) = passband_offsets_hz(mode, bw_hz, if_center_hz, cw_pitch_hz);
+    let at = |off: i64| (vfo_hz as i64 + off).max(0) as u64;
+    (at(lo), at(hi))
+}
+
+/// The VFO frequency placing `clicked_hz` at `mode`'s [`ClickAnchor`] — the
+/// inverse of [`rf_passband_hz`], used for click-to-QSY on the panadapter.
+///
+/// Round-trips with [`rf_passband_hz`]: tuning here puts the passband edge (or
+/// centre) the mode anchors on exactly at the clicked frequency, so the shaded
+/// overlay lands under the cursor.
+///
+/// trace: FR-PAN-05
+pub fn vfo_for_click(
+    clicked_hz: u64,
+    mode: Mode,
+    bw_hz: u32,
+    if_center_hz: u16,
+    cw_pitch_hz: u16,
+) -> u64 {
+    let (lo, hi) = passband_offsets_hz(mode, bw_hz, if_center_hz, cw_pitch_hz);
+    let off = match click_anchor(mode) {
+        ClickAnchor::LowEdge => lo,
+        ClickAnchor::HighEdge => hi,
+        // Round toward the low edge so an odd-width passband is deterministic.
+        ClickAnchor::Center => (lo + hi).div_euclid(2),
+    };
+    (clicked_hz as i64 - off).max(0) as u64
 }
 
 /// The `BW` + `IS` command pair realising the passband `[lo, hi]` Hz:
