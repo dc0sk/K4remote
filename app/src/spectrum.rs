@@ -7,14 +7,16 @@ use iced::mouse;
 use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke, Text};
 use iced::{Color, Pixels, Point, Rectangle, Renderer, Size, Theme};
 
-use k4_stream::render::{dbm_to_color, dbm_to_y};
+use crate::worker::PanRow;
+use k4_stream::render::{dbm_to_color, dbm_to_y, row_scroll_px};
 
 /// Canvas program drawing a spectrum trace (top) and waterfall (bottom).
 pub struct Spectrum<'a, Message> {
     /// Latest trace, downsampled dBm bins.
     pub latest: &'a [f32],
-    /// Waterfall rows, newest first, downsampled dBm bins.
-    pub waterfall: &'a [Vec<f32>],
+    /// Waterfall rows, newest first, each carrying the pan geometry it was
+    /// sampled at so the history can scroll with the VFO (FR-PAN-06).
+    pub waterfall: &'a [PanRow],
     /// dBm at the top of the spectrum window.
     pub top_dbm: f32,
     /// dB span of the spectrum window.
@@ -25,6 +27,9 @@ pub struct Spectrum<'a, Message> {
     /// click-to-QSY. `span_hz == 0` disables QSY (span unknown / fixed-tune).
     pub center_hz: u64,
     pub span_hz: u32,
+    /// This pane's VFO frequency (Hz), for the carrier line. Equals
+    /// `center_hz` when the pan tracks the VFO, but not under `#FXT`.
+    pub vfo_hz: u64,
     /// RF passband edges `(lo, hi)` in absolute Hz for the overlay, from
     /// `k4_protocol::cat::rf_passband_hz`. `None` = mode/filter not yet known.
     pub passband_hz: Option<(u64, u64)>,
@@ -150,9 +155,11 @@ impl<Message> canvas::Program<Message> for Spectrum<'_, Message> {
                     Color::from_rgba8(0x3D, 0x7E, 0xFF, 0.12),
                 );
             }
-            // The VFO carrier line sits at the pane centre, which for USB/LSB
-            // is an *edge* of the shaded band rather than its middle.
-            let cx = w / 2.0;
+            // The VFO carrier line, at its real position in the pan: under
+            // fixed-tune (`#FXT`) the pan centre and the VFO diverge, so this
+            // is not necessarily mid-canvas. For USB/LSB it marks an *edge* of
+            // the shaded band rather than its middle.
+            let cx = x_of(self.vfo_hz);
             frame.stroke(
                 &Path::line(Point::new(cx, 0.0), Point::new(cx, spec_h)),
                 Stroke::default()
@@ -184,19 +191,45 @@ impl<Message> canvas::Program<Message> for Spectrum<'_, Message> {
         }
 
         // Waterfall (newest row at the top of its band).
+        //
+        // Each row is drawn at the offset its own centre frequency now falls
+        // at, so retuning *scrolls* the history sideways and a signal stays on
+        // one vertical line instead of smearing across the waterfall
+        // (FR-PAN-06). Rows that have scrolled fully off-canvas are skipped,
+        // and partially-visible ones are clipped per cell.
         let rows = self.waterfall.len();
         if rows > 0 {
             let row_h = (wf_h / rows as f32).max(1.0);
             let min_db = self.top_dbm - self.range_db;
             for (r, row) in self.waterfall.iter().enumerate() {
-                let cols = row.len().max(1);
-                let col_w = (w / cols as f32).max(1.0);
+                let cols = row.bins.len().max(1);
+                // A row sampled at a different span also occupies a different
+                // width; scale it so its bins keep their true frequencies.
+                let row_w = if self.span_hz > 0 && row.span_hz > 0 {
+                    w * row.span_hz as f32 / self.span_hz as f32
+                } else {
+                    w
+                };
+                let dx = row_scroll_px(row.center_hz, self.center_hz as i64, self.span_hz, w)
+                    - (row_w - w) / 2.0;
+                if dx >= w || dx + row_w <= 0.0 {
+                    continue; // scrolled out of view
+                }
+                let col_w = (row_w / cols as f32).max(1.0);
                 let y = spec_h + r as f32 * row_h;
-                for (c, &dbm) in row.iter().enumerate() {
+                for (c, &dbm) in row.bins.iter().enumerate() {
+                    let x = dx + c as f32 * col_w;
+                    if x + col_w <= 0.0 || x >= w {
+                        continue;
+                    }
+                    // Clip against the canvas so a scrolled row cannot bleed
+                    // outside the pane.
+                    let x0 = x.max(0.0);
+                    let x1 = (x + col_w + 1.0).min(w);
                     let (cr, cg, cb) = dbm_to_color(dbm, min_db, self.top_dbm);
                     frame.fill_rectangle(
-                        Point::new(c as f32 * col_w, y),
-                        Size::new(col_w + 1.0, row_h + 1.0),
+                        Point::new(x0, y),
+                        Size::new(x1 - x0, row_h + 1.0),
                         Color::from_rgb8(cr, cg, cb),
                     );
                 }

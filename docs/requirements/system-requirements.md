@@ -1,7 +1,7 @@
 ---
 title: "System Requirements Specification"
 status: Draft
-version: "0.16"
+version: "0.17"
 updated: 2026-07-19
 authors:
   - Simon Keimer (DC0SK)
@@ -10,7 +10,7 @@ owns: [FR, NFR]
 
 # System Requirements Specification (SRS)
 
-**Version:** 0.16 (Draft) · **Date:** 2026-07-19 · **Author:** DC0SK
+**Version:** 0.17 (Draft) · **Date:** 2026-07-19 · **Author:** DC0SK
 Trace: owns `FR-`, `NFR-`. Up → [stakeholder-requirements.md](stakeholder-requirements.md);
 down → [../concept/architecture.md](../concept/architecture.md) (`ARC`) and
 [../test/test-strategy.md](../test/test-strategy.md) (`TC`).
@@ -182,6 +182,7 @@ Interface Spec v1.03; Owner's Manual Rev F) for hands-on VFO selection + tuning.
 | `FR-PAN-03` | **[Phase 2]** render a scrolling waterfall with the selected colour map. | STK-09 | W2 | D | Waterfall scrolls and colours map per `#WFC`. |
 | `FR-PAN-04` | **[Phase 2]** support click/scroll on the spectrum to tune (QSY) the VFO. | STK-09 | W2 | D | Clicking a frequency sends the corresponding `FA`/`FB`. |
 | `FR-PAN-05` | place the receive passband relative to a panadapter click according to the operating mode's sideband sense — USB/DATA anchor its **low** edge on the clicked frequency, LSB/DATA-REV its **high** edge, and CW/CW-REV/AM/FM its **centre** — and shade that same RF passband as the overlay, derived from `BW` + `IS` (IF centre pitch, D12) and the CW sidetone pitch (`CW`). | STK-09 | S | T/D | `rf_passband_hz`/`vfo_for_click` round-trip so the mode's anchored edge lands exactly on the clicked frequency, and are asymmetric about the VFO on USB/LSB/CW and symmetric on AM/FM (test); the shaded overlay sits under the cursor after a click in each mode (demo). |
+| `FR-PAN-06` | retain each PAN frame's own centre frequency and span (`center_freq_hz`, `sample_rate`) per waterfall row and draw each row pinned to the absolute frequencies it was sampled at, so that retuning **scrolls** the waterfall horizontally instead of smearing a signal across it; rows scrolled off-canvas are clipped. The pan geometry from the stream takes precedence over the VFO + `#SPN`, which diverge under fixed-tune (`#FXT`). | STK-09 | S | T/D | `row_scroll_px`/`hz_to_x` shift a row by the retune delta and agree with each other, and `PanRow::from_frame` preserves the frame's centre/span (test); wheel-tuning slides the waterfall history sideways with a signal holding one vertical line (demo). |
 
 ## K. GUI Shell — `FR-UI`
 
@@ -313,3 +314,4 @@ syntax per the Programmer's Reference D12, cross-checked vs QK4 (`R-EXT-03`).*
 | 2026-07-03 | 0.13 | DC0SK | Recorded new (proposed) requirements: NFR-PORT-02 (targets: RPi OS arm64 / Linux x86_64 / Windows x86_64 / macOS) + NFR-PKG-01 (Debian .deb, Arch PKGBUILD, Windows/macOS bundles); FR-UI-23 (application settings dialog housing the connection form + audio controls); FR-AUD-DEV-01 (RX/TX audio-device selection dropdowns); FR-AUD-LVL-01 (RX volume + TX mic-level sliders). Not yet implemented. |
 | 2026-07-06 | 0.14 | DC0SK | Added FR-PWR-01 (remote power off `PS0` / restart `PS8`, guarded power-off). No power-on via CAT (D12). Control on the Fn → SWITCHES tab. |
 | 2026-07-19 | 0.16 | DC0SK | Added FR-PAN-05 (mode-aware panadapter click-to-QSY + passband overlay): the clicked frequency anchors the passband's low edge on USB/DATA, high edge on LSB/DATA-REV, and centre on CW/CW-REV/AM/FM. Overlay is now drawn from the true RF passband (`BW` + `IS` centre pitch + CW pitch) instead of being assumed symmetric about the VFO. |
+| 2026-07-19 | 0.17 | DC0SK | Added FR-PAN-06 (frequency-aligned waterfall scrolling). The PAN frame's `center_freq_hz`/`sample_rate` were decoded and then discarded, with the display reconstructing geometry from the VFO + `#SPN`; they are now retained per row so retuning scrolls the history rather than smearing it, and the pan stays correct under fixed-tune (`#FXT`) where pan centre and VFO diverge. |

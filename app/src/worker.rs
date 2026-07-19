@@ -30,6 +30,44 @@ const SPECTRUM_WIDTH: usize = 192;
 /// Waterfall history depth (rows).
 const WATERFALL_ROWS: usize = 64;
 
+/// One decoded pan row: the display bins plus the pan geometry they were
+/// sampled at.
+///
+/// Keeping the geometry *per row* is what lets the waterfall scroll: a row
+/// stays pinned to the absolute frequencies it was sampled at, so retuning
+/// slides the history sideways instead of smearing a signal across it
+/// (FR-PAN-06). Taken from `PanFrame` (`center_freq_hz`, `sample_rate`), which
+/// is authoritative for the pan even under fixed-tune (`#FXT`), where the pan
+/// centre and the VFO diverge.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PanRow {
+    /// Downsampled dBm bins, low frequency first.
+    pub bins: Vec<f32>,
+    /// Pan centre frequency (Hz) when this row was sampled.
+    pub center_hz: i64,
+    /// Pan span (Hz) when this row was sampled.
+    pub span_hz: u32,
+}
+
+impl PanRow {
+    /// Build a row from a decoded frame and its downsampled bins, retaining
+    /// the frame's own centre/span.
+    ///
+    /// The app previously dropped both and reconstructed the geometry from the
+    /// VFO plus the CAT `#SPN` value, which is wrong under fixed-tune (`#FXT`)
+    /// and cannot express a per-row centre at all — so the waterfall could not
+    /// scroll (FR-PAN-06).
+    ///
+    /// trace: FR-PAN-06
+    pub fn from_frame(frame: &PanFrame, bins: Vec<f32>) -> Self {
+        Self {
+            bins,
+            center_hz: frame.center_freq_hz,
+            span_hz: frame.span_hz().clamp(0, i64::from(u32::MAX)) as u32,
+        }
+    }
+}
+
 /// Bucket-peak downsample of a bin array to `target` columns.
 fn downsample(bins: &[f32], target: usize) -> Vec<f32> {
     if bins.is_empty() || target == 0 {
@@ -158,13 +196,13 @@ pub struct UiSnapshot {
     /// Bin count of the most recent spectrum frame.
     pub spectrum_bins: usize,
     /// Latest spectrum trace for the main RX / VFO A (downsampled dBm bins).
-    pub spectrum_latest: Vec<f32>,
+    pub spectrum_latest: PanRow,
     /// Latest spectrum trace for the sub RX / VFO B.
-    pub spectrum_sub: Vec<f32>,
+    pub spectrum_sub: PanRow,
     /// Waterfall history (main RX / VFO A), newest row first.
-    pub waterfall: Vec<Vec<f32>>,
+    pub waterfall: Vec<PanRow>,
     /// Waterfall history for the sub RX / VFO B.
-    pub waterfall_sub: Vec<Vec<f32>>,
+    pub waterfall_sub: Vec<PanRow>,
     /// Latest mini-pan trace (0x03), empty if disabled.
     pub mini_pan: Vec<f32>,
     /// Recent diagnostic log lines (FR-DIAG-01/02).
@@ -274,8 +312,8 @@ struct WorkerState {
     spectrum_bins: usize,
     // Per-receiver spectrum/waterfall, indexed by `PanFrame.receiver` (0=main/A,
     // 1=sub/B), so a dual-pan view shows each RX's own trace (FR-PAN-02).
-    spectrum_latest: [Vec<f32>; 2],
-    waterfall: [VecDeque<Vec<f32>>; 2],
+    spectrum_latest: [PanRow; 2],
+    waterfall: [VecDeque<PanRow>; 2],
     // Latest mini-pan (0x03) trace, if enabled (FR-UI-14).
     mini_pan: Vec<f32>,
     diag: DiagLog,
@@ -316,7 +354,7 @@ impl WorkerState {
             tx_seq: 0,
             audio_frames: 0,
             spectrum_bins: 0,
-            spectrum_latest: [Vec::new(), Vec::new()],
+            spectrum_latest: [PanRow::default(), PanRow::default()],
             waterfall: [VecDeque::new(), VecDeque::new()],
             mini_pan: Vec::new(),
             // Debug level so the raw CAT console shows traffic; bounded ring.
@@ -351,7 +389,7 @@ impl WorkerState {
         self.audio_frames = 0;
         self.spectrum_bins = 0;
         for rx in 0..2 {
-            self.spectrum_latest[rx].clear();
+            self.spectrum_latest[rx] = PanRow::default();
             self.waterfall[rx].clear();
         }
         self.mini_pan.clear();
@@ -659,13 +697,14 @@ fn service(ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnapshot>>) {
         // Spectrum → downsampled trace + waterfall history (FR-PAN-02/03).
         for payload in &inbound.spectrum {
             if let Some(frame) = PanFrame::decode(payload) {
-                let row = downsample(&frame.bins_dbm, SPECTRUM_WIDTH);
+                let bins = downsample(&frame.bins_dbm, SPECTRUM_WIDTH);
                 if frame.mini {
-                    ws.mini_pan = row; // mini-pan overview (FR-UI-14)
+                    ws.mini_pan = bins; // mini-pan overview (FR-UI-14)
                     continue;
                 }
                 let rx = usize::from(frame.receiver.min(1)); // 0=main/A, 1=sub/B
                 ws.spectrum_bins = frame.bins_dbm.len();
+                let row = PanRow::from_frame(&frame, bins);
                 ws.spectrum_latest[rx] = row.clone();
                 ws.waterfall[rx].push_front(row);
                 while ws.waterfall[rx].len() > WATERFALL_ROWS {
@@ -1183,5 +1222,57 @@ mod kpod {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a PAN payload with a known centre frequency and sample rate.
+    fn pan_payload(center_hz: i64, sample_rate_khz: i32, bins: &[u8]) -> Vec<u8> {
+        let mut p = vec![0x02, 0, 0, 0x02, 0];
+        p.extend_from_slice(&(bins.len() as u16).to_le_bytes()); // data_len
+        p.extend_from_slice(&[0; 4]); // reserved
+        p.extend_from_slice(&center_hz.to_le_bytes());
+        p.extend_from_slice(&sample_rate_khz.to_le_bytes());
+        p.extend_from_slice(&0i32.to_le_bytes()); // noise floor
+        p.extend_from_slice(bins);
+        p
+    }
+
+    /// A row keeps the centre/span of the frame it came from, so the waterfall
+    /// can pin it to absolute frequency. Regression guard: these two fields
+    /// were decoded and then discarded, which is what prevented scrolling.
+    /// trace: FR-PAN-06
+    #[test]
+    fn fr_pan_06_row_retains_frame_centre_and_span() {
+        let payload = pan_payload(14_200_000, 50, &[100, 120, 140, 160]);
+        let frame = PanFrame::decode(&payload).expect("decodes");
+        let row = PanRow::from_frame(&frame, downsample(&frame.bins_dbm, 2));
+
+        assert_eq!(row.center_hz, 14_200_000);
+        assert_eq!(row.span_hz, 50_000); // sample rate ×1000
+        assert_eq!(row.bins.len(), 2);
+    }
+
+    /// Consecutive frames at different centres yield rows that differ, so the
+    /// history records where each row actually sat.
+    /// trace: FR-PAN-06
+    #[test]
+    fn fr_pan_06_retuning_changes_successive_row_centres() {
+        let bins = [90, 110, 130, 150];
+        let a = PanFrame::decode(&pan_payload(14_200_000, 50, &bins)).unwrap();
+        let b = PanFrame::decode(&pan_payload(14_212_500, 50, &bins)).unwrap();
+        let (ra, rb) = (
+            PanRow::from_frame(&a, downsample(&a.bins_dbm, 4)),
+            PanRow::from_frame(&b, downsample(&b.bins_dbm, 4)),
+        );
+
+        assert_ne!(ra.center_hz, rb.center_hz);
+        assert_eq!(rb.center_hz - ra.center_hz, 12_500);
+        // Identical energy, different place: exactly the case that used to
+        // smear across the waterfall instead of scrolling.
+        assert_eq!(ra.bins, rb.bins);
     }
 }

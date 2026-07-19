@@ -4998,7 +4998,21 @@ impl App {
                 self.ui.vfo_a_hz
             }
             .unwrap_or(0);
-            let plot: Element<Message> = if latest.is_empty() {
+            // Pan geometry comes from the stream itself (FR-PAN-06), which is
+            // authoritative and stays right under fixed-tune where the pan
+            // centre and the VFO diverge. Fall back to the VFO + `#SPN` only
+            // until the first frame arrives.
+            let pan_center_hz = if latest.center_hz > 0 {
+                latest.center_hz as u64
+            } else {
+                pane_center_hz
+            };
+            let pan_span_hz = if latest.span_hz > 0 {
+                latest.span_hz
+            } else {
+                self.ui.radio.pan_span_hz.unwrap_or(0)
+            };
+            let plot: Element<Message> = if latest.bins.is_empty() {
                 Container::new(
                     Text::new("spectrum + waterfall — waiting for data")
                         .size(12)
@@ -5010,13 +5024,14 @@ impl App {
                 .into()
             } else {
                 Canvas::new(spectrum::Spectrum {
-                    latest,
+                    latest: &latest.bins,
                     waterfall,
                     top_dbm: -30.0,
                     range_db: 100.0,
                     is_b: p.is_b(),
-                    center_hz: pane_center_hz,
-                    span_hz: self.ui.radio.pan_span_hz.unwrap_or(0),
+                    center_hz: pan_center_hz,
+                    span_hz: pan_span_hz,
+                    vfo_hz: pane_center_hz,
                     passband_hz: self.pane_passband_hz(p.is_b(), pane_center_hz),
                     on_qsy: Message::PaneQsy,
                     on_wheel: Message::PaneWheel,

@@ -17,6 +17,38 @@ pub fn dbm_to_y(dbm: f32, top_dbm: f32, range_db: f32, height: f32) -> f32 {
     frac * height
 }
 
+/// Horizontal position (px) of an absolute frequency `hz` in a pan view
+/// centred on `center_hz` spanning `span_hz`, over a canvas `width` px wide.
+/// The view centre maps to `width / 2`. Not clamped: callers that need the
+/// on-screen position clamp, while the waterfall relies on off-screen values
+/// to know a row has scrolled out of view.
+///
+/// trace: FR-PAN-06
+pub fn hz_to_x(hz: f64, center_hz: f64, span_hz: u32, width: f32) -> f32 {
+    if span_hz == 0 {
+        return width / 2.0;
+    }
+    (((hz - center_hz) / f64::from(span_hz)) as f32 + 0.5) * width
+}
+
+/// Horizontal offset (px) at which to draw a waterfall row that was captured
+/// while the pan was centred on `row_center_hz`, in a view now centred on
+/// `view_center_hz`.
+///
+/// This is what makes the history *scroll*: each row is pinned to the absolute
+/// frequencies it was sampled at, so retuning slides older rows sideways and a
+/// signal stays on one vertical line instead of smearing across the waterfall.
+/// A row whose offset exceeds ±`width` has scrolled out of view entirely.
+///
+/// trace: FR-PAN-06
+pub fn row_scroll_px(row_center_hz: i64, view_center_hz: i64, span_hz: u32, width: f32) -> f32 {
+    if span_hz == 0 {
+        return 0.0;
+    }
+    let delta = (row_center_hz - view_center_hz) as f64;
+    (delta / f64::from(span_hz)) as f32 * width
+}
+
 /// Waterfall colormap: map a dBm level within `[min_db, max_db]` to an RGB
 /// colour along a black → blue → green → yellow → red gradient. Out-of-range
 /// values clamp to the endpoints.
