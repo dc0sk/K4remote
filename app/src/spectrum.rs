@@ -10,7 +10,7 @@ use iced::{Color, Pixels, Point, Rectangle, Renderer, Size, Theme};
 
 use crate::worker::PanRow;
 use k4_stream::render::{
-    axis_ticks, column_to_bin, db_grid_step, dbm_to_color, dbm_to_y, hz_per_bin,
+    axis_ticks, bin_to_x, column_to_bin, db_grid_step, dbm_to_color, dbm_to_y, hz_per_bin,
 };
 
 /// Upper bound on the rasterised waterfall width, in texels.
@@ -280,7 +280,7 @@ impl<Message> canvas::Program<Message> for Spectrum<'_, Message> {
             let n = self.latest.len();
             let trace = Path::new(|b| {
                 for (i, &dbm) in self.latest.iter().enumerate() {
-                    let x = i as f32 / (n - 1) as f32 * w;
+                    let x = bin_to_x(i, n, w);
                     let y = dbm_to_y(dbm, self.top_dbm, self.range_db, spec_h);
                     if i == 0 {
                         b.move_to(Point::new(x, y));
@@ -360,7 +360,7 @@ impl<Message> canvas::Program<Message> for MiniPan<'_> {
             let n = self.latest.len();
             let trace = Path::new(|b| {
                 for (i, &dbm) in self.latest.iter().enumerate() {
-                    let x = i as f32 / (n - 1) as f32 * w;
+                    let x = bin_to_x(i, n, w);
                     let y = dbm_to_y(dbm, self.top_dbm, self.range_db, h);
                     if i == 0 {
                         b.move_to(Point::new(x, y));

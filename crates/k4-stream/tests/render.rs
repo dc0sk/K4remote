@@ -1,7 +1,7 @@
 //! Spectrum/waterfall render-helper tests. trace: FR-PAN-02, FR-PAN-03
 use k4_stream::render::{
-    axis_ticks, column_to_bin, crop_to_span, db_grid_step, dbm_to_color, dbm_to_y, hz_per_bin,
-    hz_to_x, pan_wheel_step_hz, pan_window, resample_peak, row_scroll_px,
+    axis_ticks, bin_to_x, column_to_bin, crop_to_span, db_grid_step, dbm_to_color, dbm_to_y,
+    hz_per_bin, hz_to_x, pan_wheel_step_hz, pan_window, resample_peak, row_scroll_px,
 };
 
 /// dBm→y maps the top of the window to 0 and the bottom to `height`, clamping.
@@ -452,4 +452,70 @@ fn fr_pan_ctl_01_fixed_tune_places_the_vfo_off_centre() {
             "a fixed pan's rows stay fully in view"
         );
     }
+}
+
+/// The trace and the waterfall must land on the same pixels: both treat a bin
+/// as a cell sampled at its centre.
+///
+/// The trace used `i / (n - 1) × width`, pinning the first and last bins to
+/// the canvas edges, which stretches it by `n / (n - 1)` against the waterfall
+/// beneath. Invisible at 1024 bins, 1.7% plus a half-bin offset at 60 — and
+/// two panes cropped to different bin counts stretched by different amounts,
+/// which is what made A and B look unlike each other at a 6 kHz span.
+/// trace: FR-PAN-11
+#[test]
+fn fr_pan_11_trace_and_waterfall_share_a_convention() {
+    let (w, span) = (800.0_f32, 50_000_u32);
+    let (center, n) = (14_200_000_i64, 60_usize);
+
+    for i in 0..n {
+        let x = bin_to_x(i, n, w);
+        // The waterfall column at that x must resolve to the same bin.
+        let col = (x.floor() as usize).min(799);
+        let got = column_to_bin(col, 800, center, span, center, span, n).expect("in view");
+        assert_eq!(got, i, "bin {i} at x={x} resolved to {got}");
+    }
+}
+
+/// Bins are cells: the first sits half a cell in, the last half a cell from
+/// the end, and none is pinned to an edge.
+/// trace: FR-PAN-11
+#[test]
+fn fr_pan_11_bins_are_cells_not_points() {
+    let w = 800.0_f32;
+    assert_eq!(bin_to_x(0, 4, w), 100.0, "first bin is centred in its cell");
+    assert_eq!(
+        bin_to_x(3, 4, w),
+        700.0,
+        "last bin is not pinned to the edge"
+    );
+    // Even spacing, and the whole width used symmetrically.
+    assert_eq!(bin_to_x(1, 4, w) - bin_to_x(0, 4, w), 200.0);
+    assert_eq!(w - bin_to_x(3, 4, w), bin_to_x(0, 4, w));
+    // Degenerate input does not panic.
+    assert_eq!(bin_to_x(0, 0, w), 0.0);
+}
+
+/// The stretch that caused the bug: the old convention scales differently for
+/// different bin counts, the new one does not.
+/// trace: FR-PAN-11
+#[test]
+fn fr_pan_11_scaling_is_independent_of_bin_count() {
+    let w = 800.0_f32;
+    // Midpoint of the view must land at the same pixel whatever the density.
+    for n in [60usize, 120, 192, 1024] {
+        let mid = bin_to_x(n / 2, n, w);
+        assert!(
+            (mid - w / 2.0).abs() <= w / n as f32,
+            "n={n}: midpoint {mid} drifted from {}",
+            w / 2.0
+        );
+    }
+    // The old formula did drift: i/(n-1) puts bin n/2 progressively off-centre
+    // as n shrinks. Guard that we did not reintroduce it.
+    let old = |i: usize, n: usize| i as f32 / (n - 1) as f32 * w;
+    assert!(
+        (old(30, 60) - old(512, 1024)).abs() > 3.0,
+        "the old convention really did scale with bin count"
+    );
 }
