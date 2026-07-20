@@ -313,8 +313,9 @@ troubleshooting.
 - **Filter** — type any text to show only log lines containing it (case-insensitive) — e.g. type
   `RO` to watch just RIT/XIT traffic, or `kpod` for K-Pod events.
 - **COPY** — copy the currently-visible (filtered) lines to the clipboard, to paste elsewhere.
-- **Selecting text** — the log is a read-only text area: drag to select and press **Ctrl+C** to copy
-  just the selection. Turn **AUTOSCROLL off** first so the buffer holds still while you select.
+- **Selecting text** — the log is a read-only text area: drag to select, then use **COPY**. Turn
+  **AUTOSCROLL off** first so the buffer holds still while you select. (**`Ctrl+C` will not copy** —
+  it is the emergency stop, see [Keyboard shortcuts](#11-keyboard-shortcuts).)
 - **Raw CAT** — type a command (e.g. `IF;`) and **Send** to issue it directly and see the reply.
 
 The log keeps several thousand recent lines; the header shows how many are currently visible.
@@ -348,8 +349,17 @@ The **theme** (dark / light / high-contrast / follow-system) cycles from the hea
 
 | Key | Action |
 |---|---|
+| **`Ctrl+C`** | **EMERGENCY STOP** — cease transmission immediately |
 | **PTT hotkey** (default `Ctrl+Space`) | Transmit — toggle or hold-to-talk (configurable) |
-| **ESC** | Close the Settings or About dialog / cancel hotkey capture |
+| **ESC** | Close a control popup, then the Settings or About dialog / cancel hotkey capture |
+
+> ⚠️ **`Ctrl+C` is the emergency stop, not copy.** It is handled before everything else — dialogs,
+> hotkey capture, and text fields included — so that it works wherever the keyboard focus happens
+> to be. That reliability is the point: a stop that only works when focus is in the right place is
+> no use in an emergency, and a stop triggered by accident merely takes you off the air.
+>
+> The consequence is that **`Ctrl+C` no longer copies anywhere in the app.** To copy from the
+> diagnostics log, use its **COPY** button.
 
 ---
 

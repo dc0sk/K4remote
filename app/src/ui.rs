@@ -458,6 +458,29 @@ pub fn is_hold(elapsed: Option<std::time::Duration>) -> bool {
     matches!(elapsed, Some(d) if d >= HOLD_THRESHOLD)
 }
 
+/// Whether a key press is the **emergency-stop hotkey** (`Ctrl+C`).
+///
+/// Deliberately unconditional: it fires wherever focus happens to be,
+/// including inside a text field, and therefore **takes `Ctrl+C` away from
+/// copy** throughout the app. That trade was made on purpose. A safety control
+/// that works only when focus is somewhere particular is not a safety control,
+/// and the failure directions are not symmetric — a spurious trigger merely
+/// *stops* transmission, whereas a missed one leaves the radio keyed. The
+/// diagnostics console keeps its COPY button for the case this displaces.
+///
+/// Either Ctrl (or the Mac Command key, which iced folds into `command()`)
+/// counts, and other modifiers alongside it are ignored so `Ctrl+Shift+C`
+/// stops too rather than falling through to nothing.
+///
+/// trace: FR-TX-SAFE-05
+pub fn is_estop_hotkey(key: &iced::keyboard::Key, mods: iced::keyboard::Modifiers) -> bool {
+    let is_c = match key {
+        iced::keyboard::Key::Character(c) => c.as_str().eq_ignore_ascii_case("c"),
+        _ => false,
+    };
+    is_c && (mods.control() || mods.command())
+}
+
 /// Whether the radio is **on air** by any route.
 ///
 /// Not the same as the mic path being open. A tune emits a carrier without
@@ -1277,6 +1300,57 @@ impl OptVfo {
     }
 }
 
+/// Optimistic override for a **level** the operator just set — the attenuator
+/// (FR-UI-POPUP-01), same confirm-or-expire contract as [`OptVfo`].
+///
+/// Without this, a read-back that was already in flight when the level was set
+/// reports the *previous* level, and the next resync copies it over the
+/// operator's choice: the slider jumps back, intermittently, depending purely
+/// on whether a poll happened to be in the air. Holding until the radio
+/// **confirms** fixes that; expiring on staleness means a level the radio
+/// rejects still falls back to reality rather than sticking forever.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct OptLevel {
+    pending: Option<u8>,
+    age: u8,
+}
+
+impl OptLevel {
+    /// Ticks to hold an unconfirmed value. Longer than [`OptVfo::STALE_TICKS`]:
+    /// the attenuator is reconciled by the ~3 s resync rather than by a
+    /// per-tick read-back, so it needs to outlive one resync interval.
+    pub const STALE_TICKS: u8 = 40;
+
+    /// Record a locally-set level, restarting the staleness clock.
+    pub fn set(&mut self, v: u8) {
+        self.pending = Some(v);
+        self.age = 0;
+    }
+
+    /// Whether a local value is currently being held (so the resync must not
+    /// overwrite the mirror).
+    pub fn is_pending(&self) -> bool {
+        self.pending.is_some()
+    }
+
+    /// Reconcile one tick against the radio's reported level: drop the
+    /// override once the radio agrees, and expire it if it never does.
+    pub fn reconcile(&mut self, snapshot: Option<u8>) {
+        if self.pending.is_some() && self.pending == snapshot {
+            self.pending = None;
+            self.age = 0;
+            return;
+        }
+        if self.pending.is_some() {
+            self.age = self.age.saturating_add(1);
+            if self.age > Self::STALE_TICKS {
+                self.pending = None;
+                self.age = 0;
+            }
+        }
+    }
+}
+
 /// "Adopt on genuine change" reconciler (the `last_split` / `last_pwr_range`
 /// pattern): update `last` and return the value to adopt only when the snapshot
 /// has genuinely changed. A static or absent read-back returns `None`, so a
@@ -1874,6 +1948,137 @@ mod tests {
 
         assert_eq!(Pane::A.label(), "A");
         assert_eq!(Pane::B.label(), "B");
+    }
+}
+
+#[cfg(test)]
+mod opt_level_tests {
+    use super::*;
+
+    /// The reported fault: a read-back that predates the operator's change
+    /// must not be adopted. Here the radio is still reporting 21 dB when the
+    /// operator sets 6 — the override has to survive that tick.
+    /// trace: FR-UI-POPUP-01
+    #[test]
+    fn fr_ui_popup_01_stale_readback_does_not_revert_the_operator() {
+        let mut o = OptLevel::default();
+        o.set(6);
+        o.reconcile(Some(21)); // in-flight reply, from before the set
+        assert!(o.is_pending(), "a stale 21 dB must not clear the override");
+        o.reconcile(Some(21));
+        assert!(o.is_pending(), "still held while the radio disagrees");
+    }
+
+    /// Once the radio confirms, the override is dropped so the radio is
+    /// authoritative again — including when the operator changes it at the rig.
+    /// trace: FR-UI-POPUP-01
+    #[test]
+    fn fr_ui_popup_01_confirmation_releases_the_override() {
+        let mut o = OptLevel::default();
+        o.set(6);
+        o.reconcile(Some(6));
+        assert!(!o.is_pending(), "confirmed → the radio drives again");
+
+        // And a later radio-side change is not blocked by a stale override.
+        o.reconcile(Some(12));
+        assert!(!o.is_pending());
+    }
+
+    /// A level the radio never accepts must not stick forever — it expires,
+    /// so the UI ends up showing what the radio actually has.
+    /// trace: FR-UI-POPUP-01
+    #[test]
+    fn fr_ui_popup_01_unconfirmed_override_expires() {
+        let mut o = OptLevel::default();
+        o.set(9);
+        for _ in 0..=OptLevel::STALE_TICKS {
+            o.reconcile(Some(21)); // radio rejects it, keeps reporting 21
+        }
+        assert!(
+            !o.is_pending(),
+            "an override the radio never confirms must expire"
+        );
+    }
+
+    /// The hold must outlive one resync interval, or the very read-back it
+    /// exists to survive would arrive after it expired.
+    /// trace: FR-UI-POPUP-01
+    #[test]
+    fn fr_ui_popup_01_hold_outlives_a_resync_interval() {
+        // The tick is 100 ms; the settings resync runs about every 3 s.
+        let hold_ms = u32::from(OptLevel::STALE_TICKS) * 100;
+        assert!(
+            hold_ms > 3_000,
+            "hold is {hold_ms} ms, shorter than the ~3 s resync it must survive"
+        );
+    }
+
+    /// Setting again restarts the clock — a drag is many sets, and the last
+    /// one deserves a full hold rather than inheriting the first one's age.
+    /// trace: FR-UI-POPUP-01
+    #[test]
+    fn fr_ui_popup_01_setting_again_restarts_the_clock() {
+        let mut o = OptLevel::default();
+        o.set(3);
+        for _ in 0..OptLevel::STALE_TICKS {
+            o.reconcile(Some(21));
+        }
+        o.set(9); // the operator moves it again, just before expiry
+        o.reconcile(Some(21));
+        assert!(o.is_pending(), "the new value must get a full hold");
+    }
+}
+
+#[cfg(test)]
+mod estop_hotkey_tests {
+    use super::*;
+    use iced::keyboard::{key::Named, Key, Modifiers};
+
+    fn c() -> Key {
+        Key::Character("c".into())
+    }
+
+    /// Ctrl+C fires the emergency stop, in either letter case.
+    /// trace: FR-TX-SAFE-05
+    #[test]
+    fn fr_tx_safe_05_ctrl_c_is_the_estop() {
+        assert!(is_estop_hotkey(&c(), Modifiers::CTRL));
+        assert!(
+            is_estop_hotkey(&Key::Character("C".into()), Modifiers::CTRL),
+            "a shifted C must still stop"
+        );
+        assert!(is_estop_hotkey(&c(), Modifiers::COMMAND), "Cmd+C on macOS");
+        assert!(
+            is_estop_hotkey(&c(), Modifiers::CTRL | Modifiers::SHIFT),
+            "extra modifiers must not swallow the stop"
+        );
+    }
+
+    /// A bare `C` must not stop the transmitter — typing the letter in a
+    /// callsign or a CAT macro cannot be an emergency action.
+    /// trace: FR-TX-SAFE-05
+    #[test]
+    fn fr_tx_safe_05_bare_c_does_not_stop() {
+        assert!(!is_estop_hotkey(&c(), Modifiers::empty()));
+        assert!(!is_estop_hotkey(&c(), Modifiers::SHIFT));
+        assert!(!is_estop_hotkey(&c(), Modifiers::ALT));
+    }
+
+    /// Other Ctrl chords are not the emergency stop.
+    /// trace: FR-TX-SAFE-05
+    #[test]
+    fn fr_tx_safe_05_other_ctrl_chords_are_not_the_estop() {
+        for ch in ["a", "v", "x", "z", "b", "d"] {
+            assert!(
+                !is_estop_hotkey(&Key::Character(ch.into()), Modifiers::CTRL),
+                "Ctrl+{ch} must not stop"
+            );
+        }
+        assert!(!is_estop_hotkey(
+            &Key::Named(Named::Escape),
+            Modifiers::CTRL
+        ));
+        assert!(!is_estop_hotkey(&Key::Named(Named::Space), Modifiers::CTRL));
     }
 }
 

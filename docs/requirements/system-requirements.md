@@ -1,7 +1,7 @@
 ---
 title: "System Requirements Specification"
 status: Draft
-version: "0.29"
+version: "0.30"
 updated: 2026-07-20
 authors:
   - Simon Keimer (DC0SK)
@@ -10,7 +10,7 @@ owns: [FR, NFR]
 
 # System Requirements Specification (SRS)
 
-**Version:** 0.29 (Draft) · **Date:** 2026-07-20 · **Author:** DC0SK
+**Version:** 0.30 (Draft) · **Date:** 2026-07-20 · **Author:** DC0SK
 Trace: owns `FR-`, `NFR-`. Up → [stakeholder-requirements.md](stakeholder-requirements.md);
 down → [../concept/architecture.md](../concept/architecture.md) (`ARC`) and
 [../test/test-strategy.md](../test/test-strategy.md) (`TC`).
@@ -153,6 +153,7 @@ Interface Spec v1.03; Owner's Manual Rev F) for hands-on VFO selection + tuning.
 | `FR-TX-SAFE-02` | configure and rely on the radio-side CW fail-safe timeout (`KZF`, 1–10 min) so a stalled stream cannot hold the key down indefinitely. | STK-08 | M | T | `KZF` is set on connect; value configurable. |
 | `FR-TX-SAFE-03` | provide an explicit, unmistakable TX **arm** control in the UI; transmit is impossible while disarmed. | STK-08/13 | M | T | With TX disarmed, all TX triggers are inert (no `TX;`/`KZ` emitted). |
 | `FR-TX-SAFE-04` | provide an always-available emergency "stop transmit / unkey" action. | STK-08 | M | T | Emergency stop emits `RX;` and clears keying regardless of UI focus. |
+| `FR-TX-SAFE-05` | bind the emergency stop (`FR-TX-SAFE-04`) to **`Ctrl+C`**, handled **before any other key handling** — ahead of dialogs, hotkey capture, and text entry — so it fires wherever focus happens to be. This deliberately overrides `Ctrl+C` as *copy* throughout the application: an emergency control that only works when focus is in the right place is not one, and the failure directions are asymmetric — a spurious stop merely ceases transmission, a missed stop leaves the radio keyed. Keyboard copy is displaced; the diagnostics console's **COPY** button remains. | STK-08/13 | M | T/D | `is_estop_hotkey` accepts `Ctrl+C` and `Cmd+C` in either case and with extra modifiers, and rejects a bare `C` and every other Ctrl chord (test); pressing `Ctrl+C` with focus in a text field stops transmission on a radio (demo). |
 | `FR-TX-PTT-01` | provide a configurable **PTT keyboard hotkey** (default `Ctrl+Space`) for push-to-talk; if pressed while disarmed, blink the ARM control ~3× instead of keying. | STK-06 | C | D | The Settings hotkey captures a combo; pressing it keys while armed, blinks ARM while disarmed. |
 
 ## I. Audio Streaming — `FR-AUD`
@@ -344,3 +345,4 @@ syntax per the Programmer's Reference D12, cross-checked vs QK4 (`R-EXT-03`).*
 | 2026-07-20 | 0.27 | DC0SK | Added FR-PAN-11 (one horizontal convention for trace and waterfall). Raised from hardware testing: at a 6 kHz span the two panes' waterfalls looked unlike each other despite identical scales. The trace mapped bin `i` to `i/(n−1)×width`, pinning the end bins to the canvas edges and stretching it by `n/(n−1)` against the waterfall, which samples cell centres. That is 0.1% at 1024 bins and 1.7% plus a half-bin offset at 60 — and panes cropped to different bin counts stretched by different amounts. |
 | 2026-07-20 | 0.28 | DC0SK | Added FR-UI-POPUP-01 (right-click settings popups). FR-UI-HOLD-01 was only half of what the gap analysis asked for — it specified *"hold = open that control's settings (levels, config)"*, but with no panel to open, the holds shipped as blind value-steppers (attenuator +3 dB, NB filter mode). The popup is that panel, on a right-click so the existing tap and hold keep their meanings: ATT/PRE/AGC/NB/NR/NOTCH/APF each open the paired switch's controls, as D14 describes for the attenuator (p.1318) and noise blanker (p.1368). Also fixed malformed frontmatter in this file — a duplicated `version:` key (0.27 / 0.21) and a duplicated header line, which broke the project's one-frontmatter-block rule. |
 | 2026-07-20 | 0.29 | DC0SK | Extended FR-UI-POPUP-01 after operator feedback on the first cut: the popup must open **at the control** (it was centred on the window, which is a long mouse trip from the chip you just clicked), and a popup slider must track the drag from a local mirror without re-querying mid-drag. The attenuator slider had been reading radio state directly *and* emitting a set **plus an `RA;` query per drag event**, so every read-back yanked it back to the level the radio last reported — reported from the air as "jumps back to 21". |
+| 2026-07-20 | 0.30 | DC0SK | Added FR-TX-SAFE-05 (`Ctrl+C` emergency stop), completing FR-TX-SAFE-04's "always available" with an actual keyboard route. Deliberately global: it is handled before dialogs, hotkey capture and text entry, and so **takes `Ctrl+C` away from copy** across the app. The trade was made explicitly — the two failure directions are not symmetric (a spurious stop only ceases transmission; a missed stop leaves the radio keyed), so reliability beats preserving the editing shortcut. The diagnostics console's COPY button covers the displaced case. |
