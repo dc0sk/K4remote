@@ -7,6 +7,7 @@ use std::io;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use k4_protocol::cat::TuneAction;
 use k4_protocol::cat::{decode_cat_text, encode_cat_payload};
 use k4_protocol::cw::KeyElement::{Dah, Dit};
 use k4_protocol::state::{connect_state_seed, Mode};
@@ -292,4 +293,80 @@ fn fr_stream_02_pump_demuxes_cat_audio_and_spectrum() {
     assert_eq!(inbound.cat, vec!["FA00014074000;"]); // CAT surfaced for diagnostics
     assert_eq!(inbound.audio.len(), 1); // audio routed out
     assert_eq!(inbound.spectrum.len(), 1); // spectrum routed out
+}
+
+/// A tune keys the transmitter, so it is gated by the TX arm exactly like
+/// voice and CW: nothing is sent while disarmed (FR-TX-TUNE-01, FR-TX-SAFE-03).
+/// trace: FR-TX-TUNE-01
+#[test]
+fn fr_tx_tune_01_tune_is_arm_gated() {
+    let (link, _clock, mut s) = build();
+    for action in [
+        TuneAction::Tune,
+        TuneAction::TuneLp,
+        TuneAction::AtuTune,
+        TuneAction::AtuExtended,
+    ] {
+        assert!(!s.tune(action).unwrap(), "{action:?} must refuse disarmed");
+    }
+    assert!(link.sent().is_empty(), "nothing on air while disarmed");
+    assert!(!s.is_tuning());
+
+    s.arm_tx();
+    assert!(s.tune(TuneAction::AtuTune).unwrap());
+    assert_eq!(link.last_sent().as_deref(), Some("TU3;"));
+    assert!(s.is_tuning());
+}
+
+/// Stopping a tune is never gated — the operator must always be able to stop
+/// transmitting, armed or not.
+/// trace: FR-TX-TUNE-01
+#[test]
+fn fr_tx_tune_01_exit_is_never_gated() {
+    let (link, _clock, mut s) = build();
+    assert!(
+        s.tune(TuneAction::Exit).unwrap(),
+        "exit must always be sent"
+    );
+    assert_eq!(link.last_sent().as_deref(), Some("TU0;"));
+    assert!(!s.is_tuning());
+}
+
+/// A tune carrier must not open the mic path: the K4 generates the carrier
+/// itself, so streaming TX audio over it would put the operator's microphone
+/// on air unannounced (FR-AUD-TX-01, FR-TX-SAFE-03).
+/// trace: FR-TX-TUNE-01
+#[test]
+fn fr_tx_tune_01_tune_does_not_open_the_mic_path() {
+    let (_link, _clock, mut s) = build();
+    s.arm_tx();
+    s.tune(TuneAction::Tune).unwrap();
+
+    assert!(s.is_tuning());
+    assert!(
+        !s.is_transmitting(),
+        "a tune must not set the sustained TX flag"
+    );
+    assert!(
+        !s.send_tx_audio(&[1, 2, 3]).unwrap(),
+        "mic audio must not stream during a tune"
+    );
+}
+
+/// Emergency stop ends a tune as well as a transmit, and disarms
+/// (FR-TX-SAFE-04). The radio auto-returns `TU0` when it drops transmit, but
+/// the stop sends it explicitly rather than relying on that.
+/// trace: FR-TX-TUNE-01
+#[test]
+fn fr_tx_tune_01_emergency_stop_ends_a_tune() {
+    let (link, _clock, mut s) = build();
+    s.arm_tx();
+    s.tune(TuneAction::Tune).unwrap();
+
+    s.emergency_stop().unwrap();
+    assert!(!s.is_tuning());
+    assert!(!s.is_tx_armed());
+    let sent = link.sent();
+    assert!(sent.contains(&"TU0;".to_string()), "tune stopped: {sent:?}");
+    assert_eq!(link.last_sent().as_deref(), Some("RX;"));
 }
