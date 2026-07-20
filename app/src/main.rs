@@ -182,6 +182,9 @@ struct App {
     // Diagnostics log: show/hide + follow-newest (auto-scroll).
     show_log: bool,
     log_autoscroll: bool,
+    // Divider for the log-editor rebuild, which is far too expensive to run at
+    // the 10 Hz tick rate (it re-shapes the whole visible buffer).
+    log_refresh_div: u8,
     // The log is rendered in a read-only `text_editor` so lines can be selected
     // and copied natively (Ctrl+C). `log_content` holds the editor buffer;
     // `log_text` is the text it was built from, so it's only rebuilt when the
@@ -860,6 +863,7 @@ impl App {
             diag_enabled,
             show_log: false,
             log_autoscroll: true,
+            log_refresh_div: 0,
             log_content: text_editor::Content::new(),
             log_text: String::new(),
             log_frozen: Vec::new(),
@@ -2460,7 +2464,19 @@ impl App {
                 // Rebuild the log editor buffer when its visible text changed;
                 // while auto-scrolling this follows the newest line (see
                 // `refresh_log_content`).
-                if self.show_log {
+                //
+                // Gated on the console window actually being **open**, and
+                // throttled well below the 10 Hz tick. The rebuild re-shapes
+                // the whole visible buffer, and under heavy CAT traffic the
+                // text differs on every tick, so this ran continuously — the
+                // cheap parts of the pipeline measure ~0.7 % of a core, so the
+                // shaping is what costs. Nothing here is worth doing at 10 Hz
+                // for a scrolling log a human is reading.
+                self.log_refresh_div = self.log_refresh_div.wrapping_add(1);
+                if self.diag_window.is_some()
+                    && self.show_log
+                    && self.log_refresh_div.is_multiple_of(3)
+                {
                     self.refresh_log_content();
                 }
             }
