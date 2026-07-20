@@ -147,6 +147,8 @@ struct App {
     // Peer cache + settings dialog (FR-CFG-04, FR-UI-23).
     peers: k4_config::PeerCache,
     settings_open: bool,
+    // The RX chip whose settings popup is open, if any (FR-UI-POPUP-01).
+    rx_popup: Option<ui::RxPopup>,
     // Encrypt cached peer passwords under a master password (vs OS keychain).
     use_master: bool,
     master_password: String,
@@ -556,6 +558,25 @@ enum Message {
     StepAtten,
     /// AGC hold: switch AGC on/off (D14 p.909).
     ToggleAgcOff,
+    /// Deliberately does nothing: swallows a click so it cannot reach a
+    /// click-away handler underneath (the RX popup card).
+    Noop,
+    /// Right-click on an RX chip: open that control's settings popup
+    /// (FR-UI-POPUP-01).
+    OpenRxPopup(ui::RxPopup),
+    /// Dismiss the open RX settings popup.
+    CloseRxPopup,
+    /// Popup: set the attenuator to an absolute level, in dB (`RA`).
+    SetAttenDb(u8),
+    /// Popup: set the preamp to an absolute level, 0 (off) to 3 (`PA`).
+    SetPreampLevel(u8),
+    /// Popup: set AGC to an absolute mode — 0 off, 1 slow, 2 fast (`GT`).
+    SetAgcMode(u8),
+    /// Popup: set the APF bandwidth — 0 = 30, 1 = 50, 2 = 150 Hz (`AP`).
+    SetApfWidth(u8),
+    /// Popup: set the NB filter mode absolutely — 0 none, 1 narrow, 2 wide
+    /// (`NB`). The chip's hold cycles the same setting.
+    SetNbFilter(u8),
     /// A press began on a tap/hold control (FR-UI-HOLD-01).
     PressDown,
     /// A press ended: run the first message if it was a tap, the second if it
@@ -790,6 +811,7 @@ impl App {
             seeded: false,
             peers,
             settings_open: false,
+            rx_popup: None,
             use_master: false,
             master_password: String::new(),
             master_key: None,
@@ -1421,6 +1443,55 @@ impl App {
                 )));
                 self.send(WorkerCmd::Cat(target_rx("RA;".into(), self.active_sub())));
             }
+            Message::Noop => {}
+            Message::OpenRxPopup(p) => self.rx_popup = Some(p),
+            Message::CloseRxPopup => self.rx_popup = None,
+            Message::SetAttenDb(db) => {
+                // The slider is free-running; the radio's ladder is not. Snap
+                // before sending, and treat 0 dB as "out" for the same reason
+                // the hold does — "on at 0" reads as engaged while doing
+                // nothing (D14 p.1318).
+                let db = ui::atten_snap(db);
+                let sub = self.active_sub();
+                self.send(WorkerCmd::Cat(target_rx(
+                    k4_protocol::cat::set_attenuator(db, db > 0),
+                    sub,
+                )));
+                self.send(WorkerCmd::Cat(target_rx("RA;".into(), sub)));
+            }
+            Message::SetPreampLevel(level) => {
+                let sub = self.active_sub();
+                self.send(WorkerCmd::Cat(target_rx(
+                    k4_protocol::cat::set_preamp(level, level != 0),
+                    sub,
+                )));
+                self.send(WorkerCmd::Cat(target_rx("PA;".into(), sub)));
+            }
+            Message::SetAgcMode(mode) => {
+                let sub = self.active_sub();
+                self.send(WorkerCmd::Cat(target_rx(
+                    k4_protocol::cat::set_agc(mode),
+                    sub,
+                )));
+                self.send(WorkerCmd::Cat(target_rx("GT;".into(), sub)));
+            }
+            Message::SetNbFilter(f) => {
+                let sub = self.active_sub();
+                self.send(WorkerCmd::Cat(target_rx(
+                    k4_protocol::cat::set_nb_level(self.nb_level, self.rx_nb_on() == Some(true), f),
+                    sub,
+                )));
+                self.send(WorkerCmd::Cat(target_rx("NB;".into(), sub)));
+            }
+            Message::SetApfWidth(w) => {
+                let sub = self.active_sub();
+                let on = self.rx_apf_on() == Some(true);
+                self.send(WorkerCmd::Cat(target_rx(
+                    k4_protocol::cat::set_apf(on, w),
+                    sub,
+                )));
+                self.send(WorkerCmd::Cat(target_rx("AP;".into(), sub)));
+            }
             Message::ToggleSplit => self.send(WorkerCmd::ToggleSplit),
             Message::CycleAgc => {
                 // Tap: slow ↔ fast only. Switching AGC off is the *hold*
@@ -1786,6 +1857,12 @@ impl App {
                 ) {
                     if self.capturing_hotkey {
                         self.capturing_hotkey = false;
+                        return Task::none();
+                    }
+                    // The RX popup sits above the modals, so it dismisses first
+                    // (FR-UI-POPUP-01).
+                    if self.rx_popup.is_some() {
+                        self.rx_popup = None;
                         return Task::none();
                     }
                     if self.settings_open {
@@ -3140,27 +3217,22 @@ impl App {
                 self.tooltips,
                 self.hover,
                 "rx.apf",
-                Button::new(Text::new("APF").size(12))
-                    .style(btn_style(if self.rx_apf_on() == Some(true) {
-                        BtnKind::Active
-                    } else {
-                        BtnKind::Plain
-                    }))
-                    .padding([5, 10])
-                    .on_press(Message::ToggleApf),
+                popup_click(
+                    ui::RxPopup::Apf,
+                    Button::new(Text::new("APF").size(12))
+                        .style(btn_style(if self.rx_apf_on() == Some(true) {
+                            BtnKind::Active
+                        } else {
+                            BtnKind::Plain
+                        }))
+                        .padding([5, 10])
+                        .on_press(Message::ToggleApf),
+                ),
             )
         };
         let apf_bw = || {
             small_btn_string(
-                format!(
-                    "APF {}",
-                    match self.rx_apf_width() {
-                        Some(0) => "30",
-                        Some(1) => "50",
-                        Some(2) => "150",
-                        _ => "—",
-                    }
-                ),
+                format!("APF {}", ui::apf_width_label(self.rx_apf_width())),
                 Message::CycleApfWidth,
             )
         };
@@ -5113,14 +5185,18 @@ impl App {
                 self.tooltips,
                 self.hover,
                 "rx.atten",
-                // Tap = in/out, hold = step the level (D14 p.1318).
-                tap_hold(
-                    Message::ToggleAtten,
-                    Message::StepAtten,
-                    two_line_btn_visual(
-                        ui::atten_button(self.rx_atten_on(), self.rx_atten_db()),
-                        self.rx_atten_on(),
-                        false,
+                // Tap = in/out, hold = step the level, right-click = the
+                // radio's attenuator panel (D14 p.1318).
+                popup_click(
+                    ui::RxPopup::Atten,
+                    tap_hold(
+                        Message::ToggleAtten,
+                        Message::StepAtten,
+                        two_line_btn_visual(
+                            ui::atten_button(self.rx_atten_on(), self.rx_atten_db()),
+                            self.rx_atten_on(),
+                            false,
+                        ),
                     ),
                 ),
             ))
@@ -5128,10 +5204,13 @@ impl App {
                 self.tooltips,
                 self.hover,
                 "rx.preamp",
-                two_line_btn(
-                    ui::preamp_button(self.rx_preamp_on(), self.ui.radio.preamp_level),
-                    self.rx_preamp_on(),
-                    Some(Message::TogglePreamp),
+                popup_click(
+                    ui::RxPopup::Preamp,
+                    two_line_btn(
+                        ui::preamp_button(self.rx_preamp_on(), self.ui.radio.preamp_level),
+                        self.rx_preamp_on(),
+                        Some(Message::TogglePreamp),
+                    ),
                 ),
             ))
             .push(tipped(
@@ -5141,13 +5220,16 @@ impl App {
                 // Tap = on/off, hold = filter mode. The K4 splits these across
                 // [NB] and its paired [LEVEL] switch (D14 p.767/1368); the app
                 // draws one control, so the hold carries the pair's function.
-                tap_hold(
-                    Message::ToggleNb,
-                    Message::CycleNbFilter,
-                    two_line_btn_visual(
-                        ui::nb_button(self.rx_nb_on(), self.ui.radio.nb_filter),
-                        self.rx_nb_on(),
-                        false,
+                popup_click(
+                    ui::RxPopup::Nb,
+                    tap_hold(
+                        Message::ToggleNb,
+                        Message::CycleNbFilter,
+                        two_line_btn_visual(
+                            ui::nb_button(self.rx_nb_on(), self.ui.radio.nb_filter),
+                            self.rx_nb_on(),
+                            false,
+                        ),
                     ),
                 ),
             ))
@@ -5155,10 +5237,13 @@ impl App {
                 self.tooltips,
                 self.hover,
                 "rx.nr",
-                two_line_btn(
-                    ui::toggle_button("NR", self.rx_nr_on()),
-                    self.rx_nr_on(),
-                    Some(Message::ToggleNr),
+                popup_click(
+                    ui::RxPopup::Nr,
+                    two_line_btn(
+                        ui::toggle_button("NR", self.rx_nr_on()),
+                        self.rx_nr_on(),
+                        Some(Message::ToggleNr),
+                    ),
                 ),
             ))
             .push(tipped(
@@ -5167,13 +5252,16 @@ impl App {
                 "rx.agc",
                 // Tap = slow/fast, hold = AGC on/off — the radio's own pair
                 // (D14 p.909, FR-UI-HOLD-01).
-                tap_hold(
-                    Message::CycleAgc,
-                    Message::ToggleAgcOff,
-                    two_line_btn_visual(
-                        ui::agc_button(self.rx_agc_mode()),
-                        None,
-                        rx_dim(ui::RxCtl::Agc),
+                popup_click(
+                    ui::RxPopup::Agc,
+                    tap_hold(
+                        Message::CycleAgc,
+                        Message::ToggleAgcOff,
+                        two_line_btn_visual(
+                            ui::agc_button(self.rx_agc_mode()),
+                            None,
+                            rx_dim(ui::RxCtl::Agc),
+                        ),
                     ),
                 ),
             ))
@@ -5202,11 +5290,14 @@ impl App {
                 self.tooltips,
                 self.hover,
                 "rx.notch",
-                two_line_btn_dim(
-                    ui::toggle_button("NOTCH", self.rx_notch_on()),
-                    self.rx_notch_on(),
-                    Some(Message::ToggleManualNotch),
-                    rx_dim(ui::RxCtl::ManualNotch),
+                popup_click(
+                    ui::RxPopup::Notch,
+                    two_line_btn_dim(
+                        ui::toggle_button("NOTCH", self.rx_notch_on()),
+                        self.rx_notch_on(),
+                        Some(Message::ToggleManualNotch),
+                        rx_dim(ui::RxCtl::ManualNotch),
+                    ),
                 ),
             ))
             .push(tipped(
@@ -5946,7 +6037,11 @@ impl App {
         let content = Container::new(scrollable(body)).width(Length::Fill);
 
         // Modal dialogs over a dimming scrim: Settings (FR-UI-23) / About.
-        if self.settings_open {
+        // The RX settings popup (FR-UI-POPUP-01) sits above both, matching the
+        // order ESC dismisses them in.
+        if let Some(p) = self.rx_popup {
+            stack![content, self.rx_popup_overlay(p)].into()
+        } else if self.settings_open {
             stack![content, settings_card].into()
         } else if self.about_open {
             stack![content, self.about_overlay()].into()
@@ -6367,6 +6462,223 @@ impl App {
             col = col.push(row);
         }
         col.into()
+    }
+
+    /// The RX chip settings popup (FR-UI-POPUP-01).
+    ///
+    /// This is the panel the radio opens on a hold — "hold [LEVEL] to bring up
+    /// the noise blanker controls (on/off, filtering mode, and level)" (D14
+    /// p.1368) — reached here by right-clicking the chip. Each popup carries
+    /// exactly the paired switch's settings, so nothing here is a new
+    /// capability: it is the adjustment that previously had nowhere to live.
+    fn rx_popup_overlay(&self, p: ui::RxPopup) -> Element<'_, Message> {
+        let dim = role_color(ui::ColorRole::Inactive);
+        let rxv = role_color(ui::ColorRole::RxValue);
+        // One of a set of mutually exclusive choices (filter mode, AGC, width).
+        let choice = |label: String, active: bool, msg: Message| -> Element<Message> {
+            Button::new(Text::new(label).size(12))
+                .style(btn_style(if active {
+                    BtnKind::Active
+                } else {
+                    BtnKind::Plain
+                }))
+                .padding([5, 10])
+                .on_press(msg)
+                .into()
+        };
+        // A labelled slider with its value, laid out like the RX gain rows.
+        let level = |label: &'static str,
+                     val: u8,
+                     max: u8,
+                     unit: &'static str,
+                     msg: fn(u8) -> Message|
+         -> Element<Message> {
+            Row::new()
+                .spacing(8)
+                .align_y(Alignment::Center)
+                .push(Text::new(label).size(11).color(dim))
+                .push(slider(0..=max, val, msg).width(Length::Fixed(160.0)))
+                .push(Text::new(format!("{val}{unit}")).size(12).color(rxv))
+                .into()
+        };
+        let on_off = |on: Option<bool>, msg: Message| -> Element<Message> {
+            choice(
+                match on {
+                    Some(true) => "ON".into(),
+                    Some(false) => "OFF".into(),
+                    None => ui::UNKNOWN.to_string(),
+                },
+                on == Some(true),
+                msg,
+            )
+        };
+        let body: Element<Message> = match p {
+            ui::RxPopup::Atten => {
+                // The slider detents on the radio's own 3 dB ladder so it
+                // cannot be dragged to a level the K4 would quantise away
+                // under the operator. `SetAttenDb` snaps regardless — the
+                // guard belongs on the send path, not on this widget.
+                let db = self.rx_atten_db().unwrap_or(0);
+                Row::new()
+                    .spacing(12)
+                    .align_y(Alignment::Center)
+                    .push(Text::new("LEVEL").size(11).color(dim))
+                    .push(
+                        slider(0..=ui::ATTEN_MAX_DB, db, Message::SetAttenDb)
+                            .step(ui::ATTEN_STEP_DB)
+                            .width(Length::Fixed(160.0)),
+                    )
+                    .push(Text::new(format!("{db} dB")).size(12).color(rxv))
+                    .push(choice("OUT".into(), db == 0, Message::SetAttenDb(0)))
+                    .into()
+            }
+            ui::RxPopup::Preamp => {
+                let cur = if self.rx_preamp_on() == Some(true) {
+                    self.ui.radio.preamp_level.unwrap_or(0)
+                } else {
+                    0
+                };
+                let mut row = Row::new()
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                    .push(Text::new("GAIN").size(11).color(dim))
+                    .push(choice("OFF".into(), cur == 0, Message::SetPreampLevel(0)));
+                for n in 1..=3u8 {
+                    row = row.push(choice(format!("{n}"), cur == n, Message::SetPreampLevel(n)));
+                }
+                row.into()
+            }
+            ui::RxPopup::Agc => {
+                let cur = self.rx_agc_mode();
+                Row::new()
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                    .push(Text::new("MODE").size(11).color(dim))
+                    .push(choice("OFF".into(), cur == Some(0), Message::SetAgcMode(0)))
+                    .push(choice(
+                        "SLOW".into(),
+                        cur == Some(1),
+                        Message::SetAgcMode(1),
+                    ))
+                    .push(choice(
+                        "FAST".into(),
+                        cur == Some(2),
+                        Message::SetAgcMode(2),
+                    ))
+                    .into()
+            }
+            ui::RxPopup::Nb => {
+                // On/off, filtering mode, and level — the three the manual
+                // names for this panel (D14 p.1368).
+                let f = self.ui.radio.nb_filter;
+                let mut modes = Row::new()
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                    .push(Text::new("FILTER").size(11).color(dim));
+                for n in 0..=2u8 {
+                    modes = modes.push(choice(
+                        ui::nb_filter_label(Some(n)).to_string(),
+                        f == Some(n),
+                        Message::SetNbFilter(n),
+                    ));
+                }
+                Column::new()
+                    .spacing(10)
+                    .push(
+                        Row::new()
+                            .spacing(12)
+                            .align_y(Alignment::Center)
+                            .push(on_off(self.rx_nb_on(), Message::ToggleNb))
+                            .push(modes),
+                    )
+                    .push(level("LEVEL", self.nb_level, 15, "", Message::SetNbLevel))
+                    .into()
+            }
+            ui::RxPopup::Nr => Row::new()
+                .spacing(12)
+                .align_y(Alignment::Center)
+                .push(on_off(self.rx_nr_on(), Message::ToggleNr))
+                .push(level("LEVEL", self.nr_level, 10, "", Message::SetNrLevel))
+                .into(),
+            ui::RxPopup::Notch => Row::new()
+                .spacing(12)
+                .align_y(Alignment::Center)
+                .push(on_off(self.rx_notch_on(), Message::ToggleManualNotch))
+                .push(
+                    Row::new()
+                        .spacing(8)
+                        .align_y(Alignment::Center)
+                        .push(Text::new("PITCH").size(11).color(dim))
+                        .push(
+                            slider(150..=5000u16, self.notch_pitch, Message::SetNotchPitch)
+                                .step(10u16)
+                                .width(Length::Fixed(160.0)),
+                        )
+                        .push(
+                            Text::new(format!("{} Hz", self.notch_pitch))
+                                .size(12)
+                                .color(rxv),
+                        ),
+                )
+                .into(),
+            ui::RxPopup::Apf => {
+                let w = self.rx_apf_width();
+                let mut row = Row::new()
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                    .push(on_off(self.rx_apf_on(), Message::ToggleApf))
+                    .push(Text::new("BW").size(11).color(dim));
+                for n in 0..=2u8 {
+                    row = row.push(choice(
+                        format!("{} Hz", ui::apf_width_label(Some(n))),
+                        w == Some(n),
+                        Message::SetApfWidth(n),
+                    ));
+                }
+                row.into()
+            }
+        };
+        // The K4 dismisses every popup with a curved-arrow button (Intro p.20);
+        // ESC and a click outside do the same here.
+        // A fixed gap, not `horizontal_space()`: a Fill-width spacer would make
+        // the whole card stretch across the window instead of shrink-wrapping
+        // its controls.
+        let header = Row::new()
+            .spacing(12)
+            .align_y(Alignment::Center)
+            .push(Text::new(p.title()).size(12).color(dim))
+            .push(Space::with_width(Length::Fixed(24.0)))
+            .push(
+                // ASCII: the bundled font has no U+21A9 curved arrow, which
+                // renders as a tofu box.
+                Button::new(Text::new("X").size(13))
+                    .style(btn_style(BtnKind::Plain))
+                    .padding([3, 9])
+                    .on_press(Message::CloseRxPopup),
+            );
+        let card = Container::new(Column::new().spacing(10).push(header).push(body))
+            .style(panel_style)
+            .padding(14);
+        // Clicks on the card itself must not reach the click-away scrim.
+        let card = MouseArea::new(card).on_press(Message::Noop);
+        MouseArea::new(
+            Container::new(card)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(Alignment::Center)
+                .align_y(Alignment::Center)
+                .style(|_t: &Theme| container::Style {
+                    // Lighter than the modal scrim: this is a transient
+                    // adjustment panel, not a dialog that owns the window.
+                    background: Some(Background::Color(Color {
+                        a: 0.35,
+                        ..Color::BLACK
+                    })),
+                    ..container::Style::default()
+                }),
+        )
+        .on_press(Message::CloseRxPopup)
+        .into()
     }
 
     /// The About overlay (FR-UI-18): author, license, and project URL, each on
@@ -6832,6 +7144,23 @@ fn tap_hold<'a>(
     MouseArea::new(content)
         .on_press(Message::PressDown)
         .on_release(Message::TapOrHold(Box::new(tap), Box::new(hold)))
+        .into()
+}
+
+/// Give a chip a **right-click** that opens its settings popup
+/// (FR-UI-POPUP-01).
+///
+/// Safe to wrap around [`tap_hold`] or a plain `Button`: a `MouseArea` only
+/// captures the events it has a handler for, and both of those handle the
+/// left button alone, so the right press falls through to this wrapper.
+///
+/// trace: FR-UI-POPUP-01
+fn popup_click<'a>(
+    popup: ui::RxPopup,
+    content: impl Into<Element<'a, Message>>,
+) -> Element<'a, Message> {
+    MouseArea::new(content)
+        .on_right_press(Message::OpenRxPopup(popup))
         .into()
 }
 

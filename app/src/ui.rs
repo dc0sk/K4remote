@@ -401,7 +401,9 @@ impl ButtonState {
     }
 }
 
-const UNKNOWN: &str = "—";
+/// Placeholder for a value the radio has not reported yet — one em dash, so a
+/// popup and the chip it opened from say "unknown" the same way.
+pub const UNKNOWN: &str = "—";
 
 /// AGC button state from the `AG`/`GT` mode code (0 off / 1 slow / 2 fast).
 /// trace: FR-UI-11
@@ -528,13 +530,84 @@ pub fn nb_filter_label(mode: Option<u8>) -> &'static str {
 ///
 /// trace: FR-UI-HOLD-01
 pub fn atten_hold(cur: Option<u8>) -> u8 {
-    const MAX: u8 = 21;
-    let cur = cur.unwrap_or(0).min(MAX);
-    let next = (cur / 3) * 3 + 3;
-    if next > MAX {
+    let cur = cur.unwrap_or(0).min(ATTEN_MAX_DB);
+    let next = (cur / ATTEN_STEP_DB) * ATTEN_STEP_DB + ATTEN_STEP_DB;
+    if next > ATTEN_MAX_DB {
         0
     } else {
         next
+    }
+}
+
+/// Attenuator ladder (`RA`), D14 p.1318: "Attenuation varies from 0 to 21 dB
+/// in 3 dB steps." One source of truth for the hold ([`atten_hold`]) and the
+/// popup slider, which must not offer a level the radio cannot hold.
+pub const ATTEN_MAX_DB: u8 = 21;
+/// Step of the attenuator ladder — see [`ATTEN_MAX_DB`].
+pub const ATTEN_STEP_DB: u8 = 3;
+
+/// Snap a free-running slider position onto the attenuator's 3 dB grid.
+///
+/// The popup's slider moves continuously under the mouse, but the radio only
+/// has the eight documented levels. Snapping to the **nearest** step (rather
+/// than truncating, as [`atten_hold`] does when leaving an off-grid state)
+/// keeps the knob feeling like it follows the pointer instead of lagging it.
+///
+/// trace: FR-UI-POPUP-01
+pub fn atten_snap(db: u8) -> u8 {
+    let db = db.min(ATTEN_MAX_DB);
+    let step = ATTEN_STEP_DB;
+    let snapped = ((db + step / 2) / step) * step;
+    snapped.min(ATTEN_MAX_DB)
+}
+
+/// Human label for an `AP` audio-peaking-filter bandwidth (D12 `AP`).
+///
+/// trace: FR-UI-POPUP-01
+pub fn apf_width_label(width: Option<u8>) -> &'static str {
+    match width {
+        Some(0) => "30",
+        Some(1) => "50",
+        Some(2) => "150",
+        _ => UNKNOWN,
+    }
+}
+
+/// A receiver chip whose K4 counterpart opens a settings panel of its own.
+///
+/// D14 puts the *adjustment* of these behind the paired switch's hold — "hold
+/// [LEVEL] to bring up the noise blanker controls (on/off, filtering mode, and
+/// level)" (p.1368), "Hold [ATTN] to bring up the attenuator controls (on/off
+/// and level)" (p.1318). The app draws one chip where the radio has two
+/// switches, so the panel is what the chip's popup shows.
+///
+/// trace: FR-UI-POPUP-01
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RxPopup {
+    Atten,
+    Preamp,
+    Agc,
+    Nb,
+    Nr,
+    Notch,
+    Apf,
+}
+
+impl RxPopup {
+    /// Title shown on the popup card — the radio's own name for the panel,
+    /// spelled out rather than abbreviated as on the chip.
+    ///
+    /// trace: FR-UI-POPUP-01
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Atten => "ATTENUATOR",
+            Self::Preamp => "PREAMP",
+            Self::Agc => "AGC",
+            Self::Nb => "NOISE BLANKER",
+            Self::Nr => "NOISE REDUCTION",
+            Self::Notch => "MANUAL NOTCH",
+            Self::Apf => "AUDIO PEAKING FILTER",
+        }
     }
 }
 
@@ -1895,6 +1968,99 @@ mod atten_hold_tests {
             seen.push(cur);
         }
         assert_eq!(seen, vec![3, 6, 9, 12, 15, 18, 21, 0]);
+    }
+}
+
+#[cfg(test)]
+mod rx_popup_tests {
+    use super::*;
+
+    /// The popup's slider can only ever land on a level the radio has
+    /// (D14 p.1318). A slider is free-running, so this is the guard that
+    /// stops it sending, say, 14 dB.
+    /// trace: FR-UI-POPUP-01
+    #[test]
+    fn fr_ui_popup_01_atten_snap_stays_on_the_radios_ladder() {
+        for raw in 0u8..=255 {
+            let v = atten_snap(raw);
+            assert!(v <= ATTEN_MAX_DB, "raw={raw} → {v} exceeds the maximum");
+            assert_eq!(v % ATTEN_STEP_DB, 0, "raw={raw} → {v} is off the grid");
+        }
+    }
+
+    /// Snapping goes to the *nearest* step, so the slider tracks the pointer
+    /// instead of trailing it by up to a whole step.
+    /// trace: FR-UI-POPUP-01
+    #[test]
+    fn fr_ui_popup_01_atten_snap_rounds_to_nearest() {
+        assert_eq!(atten_snap(0), 0);
+        assert_eq!(atten_snap(1), 0, "below the midpoint rounds down");
+        assert_eq!(atten_snap(2), 3, "at/above the midpoint rounds up");
+        assert_eq!(atten_snap(3), 3, "an on-grid value is unchanged");
+        assert_eq!(atten_snap(20), 21);
+        assert_eq!(atten_snap(21), 21, "the top of the ladder is reachable");
+    }
+
+    /// Every documented level is reachable through the slider — a snap that
+    /// skipped one would make it unsettable from the popup.
+    /// trace: FR-UI-POPUP-01
+    #[test]
+    fn fr_ui_popup_01_atten_snap_reaches_every_level() {
+        let reachable: std::collections::BTreeSet<u8> =
+            (0u8..=ATTEN_MAX_DB).map(atten_snap).collect();
+        let ladder: std::collections::BTreeSet<u8> = (0..=ATTEN_MAX_DB / ATTEN_STEP_DB)
+            .map(|n| n * ATTEN_STEP_DB)
+            .collect();
+        assert_eq!(reachable, ladder, "every 3 dB step must be selectable");
+    }
+
+    /// The hold and the popup agree on the ladder — they are the same radio
+    /// control reached two ways, so a level one can set the other must too.
+    /// trace: FR-UI-POPUP-01
+    #[test]
+    fn fr_ui_popup_01_atten_snap_and_hold_share_the_ladder() {
+        for cur in 0u8..=ATTEN_MAX_DB {
+            let held = atten_hold(Some(cur));
+            assert_eq!(
+                atten_snap(held),
+                held,
+                "the hold reached {held} dB, which the popup cannot represent"
+            );
+        }
+    }
+
+    /// APF bandwidths are the radio's three (D12 `AP`), and an unknown
+    /// read-back shows as unknown rather than defaulting to a real width.
+    /// trace: FR-UI-POPUP-01
+    #[test]
+    fn fr_ui_popup_01_apf_width_labels() {
+        assert_eq!(apf_width_label(Some(0)), "30");
+        assert_eq!(apf_width_label(Some(1)), "50");
+        assert_eq!(apf_width_label(Some(2)), "150");
+        assert_eq!(apf_width_label(None), UNKNOWN);
+        assert_eq!(apf_width_label(Some(9)), UNKNOWN, "out of range is unknown");
+    }
+
+    /// Each popup names its own panel, and no two share a title — the title
+    /// is the only thing telling the operator which chip they opened.
+    /// trace: FR-UI-POPUP-01
+    #[test]
+    fn fr_ui_popup_01_titles_are_present_and_distinct() {
+        let all = [
+            RxPopup::Atten,
+            RxPopup::Preamp,
+            RxPopup::Agc,
+            RxPopup::Nb,
+            RxPopup::Nr,
+            RxPopup::Notch,
+            RxPopup::Apf,
+        ];
+        let titles: std::collections::BTreeSet<&str> = all.iter().map(|p| p.title()).collect();
+        assert_eq!(titles.len(), all.len(), "two popups share a title");
+        assert!(
+            all.iter().all(|p| !p.title().is_empty()),
+            "a popup has no title"
+        );
     }
 }
 

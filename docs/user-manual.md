@@ -2,7 +2,7 @@
 title: "K4 Remote — User Manual"
 status: Draft
 version: "0.3.0"
-updated: 2026-07-14
+updated: 2026-07-20
 authors:
   - Simon Keimer (DC0SK)
 ---
@@ -131,6 +131,24 @@ From top to bottom:
 
 The **view mode** (A / B / A+B) picks which receiver(s) are shown; single-A or single-B also
 selects the active RX, while A+B leaves that to a click in the spectrum pane.
+
+### Control chips: tap, hold, right-click
+
+The receiver chips in the control row carry the same three gestures as the radio's own
+switches:
+
+| Gesture | What it does |
+|---|---|
+| **Tap** (left click) | The switch's white label — on/off, or the next value |
+| **Hold** (½ second) | The switch's yellow label — the K4's documented hold function |
+| **Right-click** | Opens that control's **settings popup** |
+
+The popup is the panel the K4 opens when you hold a control's paired switch — the manual's
+"hold [LEVEL] to bring up the noise blanker controls (on/off, filtering mode, and level)".
+**ATT**, **PRE**, **AGC**, **NB**, **NR**, **NOTCH**, and **APF** each have one, carrying that
+control's level, mode, and on/off in one place.
+
+Dismiss a popup by clicking outside it, pressing **ESC**, or with the **X** button.
 
 ---
 
