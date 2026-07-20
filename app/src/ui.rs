@@ -593,7 +593,34 @@ pub enum RxPopup {
     Apf,
 }
 
+/// Gap between the pointer and the popup's corner, and the minimum gap kept
+/// between the popup and the window edge.
+const POPUP_GAP: f32 = 6.0;
+
 impl RxPopup {
+    /// Approximate rendered size of this popup's card, in logical pixels.
+    ///
+    /// Used only to keep the card inside the window ([`popup_origin`]). iced
+    /// lays the card out for real, so an estimate that is slightly too large
+    /// costs a few pixels of margin, while one that is too small would let an
+    /// edge run off-screen — so these round **up**.
+    ///
+    /// trace: FR-UI-POPUP-01
+    pub fn size(self) -> (f32, f32) {
+        match self {
+            // on/off + three filter buttons, and a level slider beneath
+            Self::Nb => (440.0, 120.0),
+            // on/off + three width buttons on one row
+            Self::Apf => (420.0, 90.0),
+            // label + slider + reading + OUT
+            Self::Atten => (400.0, 90.0),
+            // on/off + label + slider + reading
+            Self::Nr | Self::Notch => (400.0, 90.0),
+            // a label and three or four buttons
+            Self::Preamp | Self::Agc => (320.0, 90.0),
+        }
+    }
+
     /// Title shown on the popup card — the radio's own name for the panel,
     /// spelled out rather than abbreviated as on the chip.
     ///
@@ -609,6 +636,29 @@ impl RxPopup {
             Self::Apf => "AUDIO PEAKING FILTER",
         }
     }
+}
+
+/// Where to put a popup opened at `cursor`, so it appears **at the control**
+/// rather than in the middle of the window, while staying fully on screen.
+///
+/// Returns the card's top-left corner. The popup is offset down-right of the
+/// pointer like a context menu; when that would push it past an edge it is
+/// pulled back inside, and a popup larger than the window is pinned to the
+/// top-left rather than being pushed off the opposite edge.
+///
+/// trace: FR-UI-POPUP-01
+pub fn popup_origin(cursor: (f32, f32), size: (f32, f32), window: (f32, f32)) -> (f32, f32) {
+    let place = |pos: f32, extent: f32, bound: f32| -> f32 {
+        // The furthest left/top edge that still leaves the card fully inside.
+        let limit = bound - extent - POPUP_GAP;
+        // `max(GAP)` last: if the card cannot fit at all, keeping the top-left
+        // corner visible beats centring the overflow across both edges.
+        (pos + POPUP_GAP).min(limit).max(POPUP_GAP)
+    };
+    (
+        place(cursor.0, size.0, window.0),
+        place(cursor.1, size.1, window.1),
+    )
 }
 
 /// Next AGC mode for a **tap** (`GT`): slow (1) and fast (2) only.
@@ -2039,6 +2089,68 @@ mod rx_popup_tests {
         assert_eq!(apf_width_label(Some(2)), "150");
         assert_eq!(apf_width_label(None), UNKNOWN);
         assert_eq!(apf_width_label(Some(9)), UNKNOWN, "out of range is unknown");
+    }
+
+    /// The popup opens *at the pointer* — the whole point of anchoring it
+    /// rather than centring it on the window.
+    /// trace: FR-UI-POPUP-01
+    #[test]
+    fn fr_ui_popup_01_origin_follows_the_pointer() {
+        let win = (1320.0, 1000.0);
+        let size = (400.0, 90.0);
+        let (x, y) = popup_origin((300.0, 250.0), size, win);
+        assert!(
+            (300.0..=320.0).contains(&x) && (250.0..=270.0).contains(&y),
+            "expected the card next to the pointer, got ({x}, {y})"
+        );
+        // A pointer further right puts the card further right.
+        let (x2, _) = popup_origin((600.0, 250.0), size, win);
+        assert!(x2 > x, "the card must track the pointer");
+    }
+
+    /// Opening near an edge pulls the card back inside instead of letting it
+    /// hang off where its controls could not be reached.
+    /// trace: FR-UI-POPUP-01
+    #[test]
+    fn fr_ui_popup_01_origin_stays_inside_the_window() {
+        let win = (1320.0, 1000.0);
+        for p in [
+            RxPopup::Atten,
+            RxPopup::Preamp,
+            RxPopup::Agc,
+            RxPopup::Nb,
+            RxPopup::Nr,
+            RxPopup::Notch,
+            RxPopup::Apf,
+        ] {
+            let (w, h) = p.size();
+            // Every corner, including well outside the window.
+            for cursor in [
+                (0.0, 0.0),
+                (1319.0, 999.0),
+                (1319.0, 0.0),
+                (0.0, 999.0),
+                (5000.0, 5000.0),
+            ] {
+                let (x, y) = popup_origin(cursor, (w, h), win);
+                assert!(x >= 0.0 && y >= 0.0, "{p:?} at {cursor:?} → ({x}, {y})");
+                assert!(
+                    x + w <= win.0 && y + h <= win.1,
+                    "{p:?} at {cursor:?} → ({x}, {y}) runs off a {win:?} window"
+                );
+            }
+        }
+    }
+
+    /// A window too small for the card keeps the card's **top-left** on
+    /// screen — the title and first control — rather than splitting the
+    /// overflow across both edges and losing both.
+    /// trace: FR-UI-POPUP-01
+    #[test]
+    fn fr_ui_popup_01_origin_degrades_gracefully_when_too_small() {
+        let (x, y) = popup_origin((100.0, 100.0), (400.0, 90.0), (200.0, 60.0));
+        assert!(x >= 0.0 && y >= 0.0, "({x}, {y}) is off the top-left");
+        assert!(x <= POPUP_GAP && y <= POPUP_GAP, "expected a pinned corner");
     }
 
     /// Each popup names its own panel, and no two share a title — the title

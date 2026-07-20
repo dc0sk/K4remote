@@ -112,6 +112,8 @@ struct App {
     context: ui::ContextRow,
     // current window width, for responsive band layout (FR-UI-12)
     window_w: f32,
+    // current window height, to keep an anchored popup on screen (FR-UI-POPUP-01)
+    window_h: f32,
     // selected UI theme (FR-UI-17)
     theme_mode: ui::ThemeMode,
     // detected OS dark preference, for the `System` theme (FR-UI-17)
@@ -149,6 +151,10 @@ struct App {
     settings_open: bool,
     // The RX chip whose settings popup is open, if any (FR-UI-POPUP-01).
     rx_popup: Option<ui::RxPopup>,
+    // Live pointer position, and where it was when the popup was opened — the
+    // popup is anchored at the control rather than centred on the window.
+    cursor: (f32, f32),
+    rx_popup_at: (f32, f32),
     // Encrypt cached peer passwords under a master password (vs OS keychain).
     use_master: bool,
     master_password: String,
@@ -220,6 +226,10 @@ struct App {
     // RX DSP + VOX level sliders (local mirrors for smooth dragging).
     nb_level: u8,
     nr_level: u8,
+    // Attenuator level (dB). A local mirror for the same reason the levels
+    // above have one: the popup's slider must follow the drag, not the
+    // read-back it is racing (FR-UI-POPUP-01).
+    atten_db: u8,
     vox_gain: u8,
     anti_vox: u8,
     // CW sidetone pitch Hz (FR-KEY-02); full-QSK + VOX/QSK delay 10-ms (FR-TX-DLY-01).
@@ -577,6 +587,9 @@ enum Message {
     /// Popup: set the NB filter mode absolutely — 0 none, 1 narrow, 2 wide
     /// (`NB`). The chip's hold cycles the same setting.
     SetNbFilter(u8),
+    /// Popup: the attenuator slider was released — reconcile the chip with
+    /// the radio now the drag is over, rather than mid-drag.
+    QueryAtten,
     /// A press began on a tap/hold control (FR-UI-HOLD-01).
     PressDown,
     /// A press ended: run the first message if it was a tap, the second if it
@@ -672,7 +685,10 @@ enum Message {
     DxFilter(String),
     // RX config sub-screens (FR-ANT-01/FR-AUD-CFG-01, Phase D).
     Rx(RxMsg),
-    Resized(iced::window::Id, f32),
+    Resized(iced::window::Id, f32, f32),
+    /// Pointer moved, in window coordinates — remembered so a popup can open
+    /// at the control instead of the middle of the window (FR-UI-POPUP-01).
+    CursorMoved(f32, f32),
     Tick,
 }
 
@@ -792,6 +808,7 @@ impl App {
             // Start on the spectrum/waterfall, not a pre-opened BAND screen.
             context: ui::ContextRow::default(),
             window_w: 1280.0,
+            window_h: 964.0,
             theme_mode,
             system_is_dark: detect_system_dark(),
             about_open: false,
@@ -812,6 +829,8 @@ impl App {
             peers,
             settings_open: false,
             rx_popup: None,
+            cursor: (0.0, 0.0),
+            rx_popup_at: (0.0, 0.0),
             use_master: false,
             master_password: String::new(),
             master_key: None,
@@ -848,6 +867,7 @@ impl App {
             tx_pwr_range: 'H',
             nb_level: 5,
             nr_level: 5,
+            atten_db: 0,
             vox_gain: 20,
             anti_vox: 0,
             compression: 0,
@@ -1157,7 +1177,7 @@ impl App {
                     theme: Some(theme_to_str(self.theme_mode).to_string()),
                     mute_radio_mon: self.mute_mon,
                     diagnostics_window: self.diag_enabled,
-                    tooltips: self.tooltips,
+                    tooltips: self.tips_on(),
                     ptt_hotkey: self.ptt_hotkey.clone(),
                     ptt_toggle: self.ptt_toggle,
                     mode_aware_ui: self.mode_aware_ui,
@@ -1437,6 +1457,9 @@ impl App {
                 // rather than "on at 0", which the radio would show as
                 // engaged while doing nothing.
                 let next = ui::atten_hold(self.rx_atten_db());
+                // Keep the mirror with the chip, so opening the popup after a
+                // hold shows the level the hold just set.
+                self.atten_db = next;
                 self.send(WorkerCmd::Cat(target_rx(
                     k4_protocol::cat::set_attenuator(next, next > 0),
                     self.active_sub(),
@@ -1444,7 +1467,17 @@ impl App {
                 self.send(WorkerCmd::Cat(target_rx("RA;".into(), self.active_sub())));
             }
             Message::Noop => {}
-            Message::OpenRxPopup(p) => self.rx_popup = Some(p),
+            Message::OpenRxPopup(p) => {
+                // Freeze the anchor at the click: the pointer keeps moving
+                // while the popup is up, and a card that followed it would be
+                // impossible to aim at.
+                self.rx_popup_at = self.cursor;
+                // Drop the dwell, or the chip's tooltip stays up and covers
+                // the popup it just opened. `on_enter` only fires on entry, so
+                // it will not come back until the pointer leaves and returns.
+                self.hover = None;
+                self.rx_popup = Some(p);
+            }
             Message::CloseRxPopup => self.rx_popup = None,
             Message::SetAttenDb(db) => {
                 // The slider is free-running; the radio's ladder is not. Snap
@@ -1452,12 +1485,17 @@ impl App {
                 // the hold does — "on at 0" reads as engaged while doing
                 // nothing (D14 p.1318).
                 let db = ui::atten_snap(db);
+                // Write the local mirror first and do NOT query: a drag emits
+                // one of these per pixel, and querying each time made the
+                // slider snap back to the last read-back mid-drag. `RA;` comes
+                // back on the periodic resync, as it does for every other
+                // level slider.
+                self.atten_db = db;
                 let sub = self.active_sub();
                 self.send(WorkerCmd::Cat(target_rx(
                     k4_protocol::cat::set_attenuator(db, db > 0),
                     sub,
                 )));
-                self.send(WorkerCmd::Cat(target_rx("RA;".into(), sub)));
             }
             Message::SetPreampLevel(level) => {
                 let sub = self.active_sub();
@@ -1474,6 +1512,10 @@ impl App {
                     sub,
                 )));
                 self.send(WorkerCmd::Cat(target_rx("GT;".into(), sub)));
+            }
+            Message::QueryAtten => {
+                let sub = self.active_sub();
+                self.send(WorkerCmd::Cat(target_rx("RA;".into(), sub)));
             }
             Message::SetNbFilter(f) => {
                 let sub = self.active_sub();
@@ -2246,11 +2288,13 @@ impl App {
             Message::SetFnTab(t) => self.fn_tab = t,
             Message::DxFilter(q) => self.dx_filter = q,
             Message::Rx(m) => self.apply_rx(m),
-            Message::Resized(id, w) => {
+            Message::Resized(id, w, h) => {
                 if id == self.main_window {
                     self.window_w = w;
+                    self.window_h = h;
                 }
             }
+            Message::CursorMoved(x, y) => self.cursor = (x, y),
             Message::Tick => {
                 if let Ok(snap) = self.snapshot.lock() {
                     self.ui = snap.clone();
@@ -2389,15 +2433,25 @@ impl App {
         // brisk tick keeps radio-round-trip changes (band, mode, freq read-back)
         // and the spectrum/meters feeling responsive.
         let tick = iced::time::every(Duration::from_millis(100)).map(|_| Message::Tick);
-        // Track window width for the responsive band layout (FR-UI-12).
-        let resize =
-            iced::window::resize_events().map(|(id, size)| Message::Resized(id, size.width));
+        // Track window size for the responsive band layout (FR-UI-12) and for
+        // keeping an anchored popup on screen (FR-UI-POPUP-01).
+        let resize = iced::window::resize_events()
+            .map(|(id, size)| Message::Resized(id, size.width, size.height));
+        // Pointer position, for anchoring a popup where it was opened. iced
+        // already redraws on pointer movement to update hover states, so this
+        // adds a stored point rather than a new source of redraws.
+        let cursor = iced::event::listen_with(|event, _status, _id| match event {
+            iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
+                Some(Message::CursorMoved(position.x, position.y))
+            }
+            _ => None,
+        });
         // Window lifecycle: quit on main-window close; track the diag window.
         let closed = iced::window::close_events().map(Message::WindowClosed);
         // Keyboard: PTT hotkey (push-to-talk) + hotkey capture.
         let key_down = iced::keyboard::on_key_press(|k, m| Some(Message::KeyPressed(k, m)));
         let key_up = iced::keyboard::on_key_release(|k, m| Some(Message::KeyReleased(k, m)));
-        Subscription::batch([tick, resize, closed, key_down, key_up])
+        Subscription::batch([tick, resize, cursor, closed, key_down, key_up])
     }
 
     /// The effective (resolved) theme for this frame (FR-UI-17).
@@ -2636,7 +2690,7 @@ impl App {
             .push(horizontal_space())
             // Mode is clickable: tap to step through the K4's enabled modes.
             .push(tipped(
-                self.tooltips,
+                self.tips_on(),
                 self.hover,
                 "mode.cycle",
                 Button::new(
@@ -2755,7 +2809,7 @@ impl App {
                 Row::new()
                     .spacing(6)
                     .push(tipped(
-                        self.tooltips,
+                        self.tips_on(),
                         self.hover,
                         "vfo.split",
                         two_line_btn(
@@ -2765,7 +2819,7 @@ impl App {
                         ),
                     ))
                     .push(tipped(
-                        self.tooltips,
+                        self.tips_on(),
                         self.hover,
                         "vfo.rit",
                         two_line_btn(
@@ -2779,7 +2833,7 @@ impl App {
                 Row::new()
                     .spacing(6)
                     .push(tipped(
-                        self.tooltips,
+                        self.tips_on(),
                         self.hover,
                         "vfo.xit",
                         two_line_btn(
@@ -2789,7 +2843,7 @@ impl App {
                         ),
                     ))
                     .push(tipped(
-                        self.tooltips,
+                        self.tips_on(),
                         self.hover,
                         "vfo.clr",
                         two_line_btn(clr_state, None, Some(Message::ClearRitXit)),
@@ -3214,7 +3268,7 @@ impl App {
         // fit the strip (moved out of the chips row in Phase 3).
         let apf = || {
             tipped(
-                self.tooltips,
+                self.tips_on(),
                 self.hover,
                 "rx.apf",
                 popup_click(
@@ -3244,7 +3298,7 @@ impl App {
                         .push(apf())
                         .push(apf_bw())
                         .push(tipped(
-                            self.tooltips,
+                            self.tips_on(),
                             self.hover,
                             "cw.spot",
                             small_btn("SPOT", Message::Switch(42)),
@@ -3414,7 +3468,7 @@ impl App {
             .align_y(Alignment::Center)
             .push(Text::new("MON").size(10).color(dim))
             .push(tipped(
-                self.tooltips,
+                self.tips_on(),
                 self.hover,
                 "tx.mon",
                 slider(0..=100u8, mon, Message::SetMonitor)
@@ -3483,7 +3537,7 @@ impl App {
         };
         let mic_step = |c: TxConfig| {
             tipped(
-                self.tooltips,
+                self.tips_on(),
                 self.hover,
                 "tx.mic",
                 step_ctl(
@@ -3511,7 +3565,7 @@ impl App {
                 ui::ModeClass::Cw => (
                     mon_base
                         .push(tipped(
-                            self.tooltips,
+                            self.tips_on(),
                             self.hover,
                             "cw.wpm",
                             step_ctl(
@@ -3529,7 +3583,7 @@ impl App {
                         ))
                         .into(),
                     tipped(
-                        self.tooltips,
+                        self.tips_on(),
                         self.hover,
                         "cw.qsk",
                         step_ctl(
@@ -3734,7 +3788,7 @@ impl App {
                     )),
             )
             .push(tipped(
-                self.tooltips,
+                self.tips_on(),
                 self.hover,
                 "cw.pitch",
                 // CW sidetone pitch (FR-KEY-02).
@@ -3809,6 +3863,17 @@ impl App {
     /// view; otherwise VFO A (main) is the receiver being controlled.
     fn active_sub(&self) -> bool {
         self.active_rx_b
+    }
+
+    /// Whether tooltips should show right now (FR-UI-TIP-01).
+    ///
+    /// Suppressed while a settings popup is open: the popup's scrim only
+    /// captures presses, so pointer motion still reaches the controls beneath
+    /// it, and their tooltips were drawing on top of the popup.
+    ///
+    /// trace: FR-UI-POPUP-01, FR-UI-TIP-01
+    fn tips_on(&self) -> bool {
+        self.tooltips && self.rx_popup.is_none()
     }
 
     /// Short label for the active RX VFO: `A` (main) or `B` (sub).
@@ -4009,6 +4074,13 @@ impl App {
         if let Some(v) = if sub { r.sub_nb_level } else { r.nb_level } {
             self.nb_level = v;
         }
+        if let Some(v) = if sub {
+            r.sub_atten_db
+        } else {
+            self.ui.atten_db
+        } {
+            self.atten_db = v;
+        }
         if let Some(v) = if sub { r.sub_nr_level } else { r.nr_level } {
             self.nr_level = v;
         }
@@ -4055,7 +4127,7 @@ impl App {
                         Message::Tx(TxMsg::FrontBias(!c.front_bias)),
                     ))
                     .push(tipped(
-                        self.tooltips,
+                        self.tips_on(),
                         self.hover,
                         "tx.vox",
                         two_line_btn(
@@ -4066,7 +4138,7 @@ impl App {
                     )),
             )
             .push(tipped(
-                self.tooltips,
+                self.tips_on(),
                 self.hover,
                 "tx.comp",
                 // Speech compression (FR-TX-CMP-01), SSB modes.
@@ -4537,7 +4609,7 @@ impl App {
         for m in [ViewMode::SingleA, ViewMode::SingleB, ViewMode::Dual] {
             let active = self.view_mode == m;
             modes = modes.push(tipped(
-                self.tooltips,
+                self.tips_on(),
                 self.hover,
                 "pan.mode",
                 Button::new(Text::new(m.label()).size(12))
@@ -4572,7 +4644,7 @@ impl App {
             .push(Text::new("PAN").size(11).color(dim))
             .push(modes)
             .push(tipped(
-                self.tooltips,
+                self.tips_on(),
                 self.hover,
                 "pan.target",
                 Row::new()
@@ -4585,7 +4657,7 @@ impl App {
             .push(horizontal_space());
         let pal = ui::waterfall_palettes()[(d.wf_palette as usize).min(4)];
         let tip = |id: &'static str, w: Element<'static, Message>| {
-            tipped(self.tooltips, self.hover, id, w)
+            tipped(self.tips_on(), self.hover, id, w)
         };
         let peak = tip(
             "pan.peak",
@@ -4670,7 +4742,7 @@ impl App {
                         ),
                     ))
                     .push(tipped(
-                        self.tooltips,
+                        self.tips_on(),
                         self.hover,
                         "pan.wfheight",
                         disp_stepper(
@@ -4689,7 +4761,7 @@ impl App {
                     .push(freeze)
                     .push(minipan)
                     .push(tipped(
-                        self.tooltips,
+                        self.tips_on(),
                         self.hover,
                         "pan.wfpalette",
                         small_btn_string(
@@ -4746,7 +4818,7 @@ impl App {
         let mut grid = Row::new().spacing(6);
         for (label, bn) in ui::band_buttons() {
             grid = grid.push(tipped(
-                self.tooltips,
+                self.tips_on(),
                 self.hover,
                 "vfo.band.up",
                 Button::new(Text::new(*label).size(13))
@@ -4759,7 +4831,7 @@ impl App {
             .spacing(6)
             .align_y(Alignment::Center)
             .push(tipped(
-                self.tooltips,
+                self.tips_on(),
                 self.hover,
                 "vfo.band.down",
                 small_btn("BAND −", Message::Band(false)),
@@ -5057,7 +5129,7 @@ impl App {
                 .padding([5, 10])
                 .on_press(Message::CycleTheme);
         let about_btn = tipped(
-            self.tooltips,
+            self.tips_on(),
             self.hover,
             "app.about",
             Button::new(Text::new("About").size(12))
@@ -5071,7 +5143,7 @@ impl App {
         );
         // Settings dialog (FR-UI-23) — houses the connection form + peer cache.
         let settings_btn = tipped(
-            self.tooltips,
+            self.tips_on(),
             self.hover,
             "app.settings",
             Button::new(Text::new("Settings").size(12))
@@ -5171,7 +5243,7 @@ impl App {
         let chips = Row::new()
             .spacing(6)
             .push(tipped(
-                self.tooltips,
+                self.tips_on(),
                 self.hover,
                 "filter.bw",
                 two_line_btn_dim(
@@ -5182,7 +5254,7 @@ impl App {
                 ),
             ))
             .push(tipped(
-                self.tooltips,
+                self.tips_on(),
                 self.hover,
                 "rx.atten",
                 // Tap = in/out, hold = step the level, right-click = the
@@ -5201,7 +5273,7 @@ impl App {
                 ),
             ))
             .push(tipped(
-                self.tooltips,
+                self.tips_on(),
                 self.hover,
                 "rx.preamp",
                 popup_click(
@@ -5214,7 +5286,7 @@ impl App {
                 ),
             ))
             .push(tipped(
-                self.tooltips,
+                self.tips_on(),
                 self.hover,
                 "rx.nb",
                 // Tap = on/off, hold = filter mode. The K4 splits these across
@@ -5234,7 +5306,7 @@ impl App {
                 ),
             ))
             .push(tipped(
-                self.tooltips,
+                self.tips_on(),
                 self.hover,
                 "rx.nr",
                 popup_click(
@@ -5247,7 +5319,7 @@ impl App {
                 ),
             ))
             .push(tipped(
-                self.tooltips,
+                self.tips_on(),
                 self.hover,
                 "rx.agc",
                 // Tap = slow/fast, hold = AGC on/off — the radio's own pair
@@ -5266,7 +5338,7 @@ impl App {
                 ),
             ))
             .push(tipped(
-                self.tooltips,
+                self.tips_on(),
                 self.hover,
                 "rx.subrx",
                 two_line_btn(
@@ -5276,7 +5348,7 @@ impl App {
                 ),
             ))
             .push(tipped(
-                self.tooltips,
+                self.tips_on(),
                 self.hover,
                 "rx.diversity",
                 two_line_btn(
@@ -5287,7 +5359,7 @@ impl App {
             ))
             // Notch / APF for the active RX VFO, right of DIV.
             .push(tipped(
-                self.tooltips,
+                self.tips_on(),
                 self.hover,
                 "rx.notch",
                 popup_click(
@@ -5301,7 +5373,7 @@ impl App {
                 ),
             ))
             .push(tipped(
-                self.tooltips,
+                self.tips_on(),
                 self.hover,
                 "rx.autonotch",
                 two_line_btn_dim(
@@ -5316,7 +5388,7 @@ impl App {
         let mode_btn = |label: &'static str, digit: u8| -> Element<'_, Message> {
             let active = self.ui.mode_a == Some(label);
             tipped(
-                self.tooltips,
+                self.tips_on(),
                 self.hover,
                 "mode.select",
                 Button::new(Text::new(label).size(12))
@@ -5355,7 +5427,7 @@ impl App {
             )
             // Filter presets for the active RX VFO, right of SCAN.
             .push(tipped(
-                self.tooltips,
+                self.tips_on(),
                 self.hover,
                 "filter.preset",
                 small_btn_dim(
@@ -5470,7 +5542,7 @@ impl App {
                 ))
         } else {
             filter_ctl.push(tipped(
-                self.tooltips,
+                self.tips_on(),
                 self.hover,
                 "filter.shift",
                 hz_slider(
@@ -5488,19 +5560,19 @@ impl App {
             .spacing(14)
             .align_y(Alignment::Center)
             .push(tipped(
-                self.tooltips,
+                self.tips_on(),
                 self.hover,
                 "rx.afgain",
                 gain("AF", self.af_gain, 60, Message::SetAfGain, "", false),
             ))
             .push(tipped(
-                self.tooltips,
+                self.tips_on(),
                 self.hover,
                 "rx.rfgain",
                 gain("RF", self.rf_gain, 60, Message::SetRfGain, " dB", false),
             ))
             .push(tipped(
-                self.tooltips,
+                self.tips_on(),
                 self.hover,
                 "rx.squelch",
                 gain(
@@ -5854,13 +5926,13 @@ impl App {
         let mut transmit_row = Row::new()
             .spacing(8)
             .align_y(Alignment::Center)
-            .push(tipped(self.tooltips, self.hover, "tx.arm", arm))
-            .push(tipped(self.tooltips, self.hover, "tx.ptt", key))
-            .push(tipped(self.tooltips, self.hover, "tx.estop", estop));
+            .push(tipped(self.tips_on(), self.hover, "tx.arm", arm))
+            .push(tipped(self.tips_on(), self.hover, "tx.ptt", key))
+            .push(tipped(self.tips_on(), self.hover, "tx.estop", estop));
         if atu_fitted {
             transmit_row = transmit_row
-                .push(tipped(self.tooltips, self.hover, "atu.mode", atu))
-                .push(tipped(self.tooltips, self.hover, "atu.tune", tune_btn));
+                .push(tipped(self.tips_on(), self.hover, "atu.mode", atu))
+                .push(tipped(self.tips_on(), self.hover, "atu.tune", tune_btn));
         }
         let transmit_row = transmit_row
             .push(horizontal_space())
@@ -5869,7 +5941,7 @@ impl App {
             .push(range_btn("L", 'L', self.tx_pwr_range))
             .push(range_btn("X", 'X', self.tx_pwr_range))
             .push(tipped(
-                self.tooltips,
+                self.tips_on(),
                 self.hover,
                 "tx.power",
                 slider(0..=pmax, self.tx_power, Message::SetTxPower).width(Length::Fixed(110.0)),
@@ -5925,7 +5997,7 @@ impl App {
         if !self.serial_mode {
             conn_options = conn_options
                 .push(tipped(
-                    self.tooltips,
+                    self.tips_on(),
                     self.hover,
                     "conn.tls",
                     Button::new(Text::new("TLS").size(12))
@@ -5938,7 +6010,7 @@ impl App {
                         .on_press(Message::ToggleTls),
                 ))
                 .push(tipped(
-                    self.tooltips,
+                    self.tips_on(),
                     self.hover,
                     "conn.remember",
                     Button::new(Text::new("REMEMBER").size(12))
@@ -5963,7 +6035,7 @@ impl App {
         let conn_actions = Row::new()
             .spacing(6)
             .push(tipped(
-                self.tooltips,
+                self.tips_on(),
                 self.hover,
                 "conn.connect",
                 Button::new(Text::new(connect_label).size(12))
@@ -6297,7 +6369,7 @@ impl App {
                     .spacing(8)
                     .align_y(Alignment::Center)
                     .push(tipped(
-                        self.tooltips,
+                        self.tips_on(),
                         self.hover,
                         "app.diag",
                         small_btn(
@@ -6364,7 +6436,7 @@ impl App {
                     .spacing(8)
                     .align_y(Alignment::Center)
                     .push(tipped(
-                        self.tooltips,
+                        self.tips_on(),
                         self.hover,
                         "app.tooltips",
                         small_btn(
@@ -6518,7 +6590,11 @@ impl App {
                 // cannot be dragged to a level the K4 would quantise away
                 // under the operator. `SetAttenDb` snaps regardless — the
                 // guard belongs on the send path, not on this widget.
-                let db = self.rx_atten_db().unwrap_or(0);
+                //
+                // Reads the local mirror, not the radio state: the read-back
+                // lags a drag, and following it made the slider jump back to
+                // the level the radio last reported.
+                let db = self.atten_db;
                 Row::new()
                     .spacing(12)
                     .align_y(Alignment::Center)
@@ -6526,6 +6602,10 @@ impl App {
                     .push(
                         slider(0..=ui::ATTEN_MAX_DB, db, Message::SetAttenDb)
                             .step(ui::ATTEN_STEP_DB)
+                            // One query when the drag ends, not one per pixel:
+                            // the chip follows the radio again promptly without
+                            // the read-back fighting the drag.
+                            .on_release(Message::QueryAtten)
                             .width(Length::Fixed(160.0)),
                     )
                     .push(Text::new(format!("{db} dB")).size(12).color(rxv))
@@ -6661,12 +6741,22 @@ impl App {
             .padding(14);
         // Clicks on the card itself must not reach the click-away scrim.
         let card = MouseArea::new(card).on_press(Message::Noop);
+        // Anchor at the pointer position captured when the popup was opened,
+        // pulled back inside the window if it would overhang. Positioned with
+        // leading spacers because iced 0.13 has no absolute placement outside
+        // a custom overlay widget.
+        let (ox, oy) = ui::popup_origin(self.rx_popup_at, p.size(), (self.window_w, self.window_h));
+        let anchored = Column::new()
+            .push(Space::with_height(Length::Fixed(oy)))
+            .push(
+                Row::new()
+                    .push(Space::with_width(Length::Fixed(ox)))
+                    .push(card),
+            );
         MouseArea::new(
-            Container::new(card)
+            Container::new(anchored)
                 .width(Length::Fill)
                 .height(Length::Fill)
-                .align_x(Alignment::Center)
-                .align_y(Alignment::Center)
                 .style(|_t: &Theme| container::Style {
                     // Lighter than the modal scrim: this is a transient
                     // adjustment panel, not a dialog that owns the window.
