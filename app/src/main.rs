@@ -2803,11 +2803,16 @@ impl App {
                 cat::set_waterfall_height(self.display.wf_height)
             }
         };
-        // Target the chosen pan (A/B), except the global display-mode command.
-        let cmd = if cmd.starts_with("#DPM") {
-            cmd
-        } else {
+        // Only the commands the radio actually accepts a `$` on are targeted.
+        // Established on hardware: `#SPN` is per-pan (changing it with the
+        // target on A left pan B on its old span, #141), but `#REF` and `#SCL`
+        // are **global** — the bare form applies to both pans, and the `$`
+        // form does nothing at all, so targeting them made every DISPLAY
+        // control silently inert whenever TARGET was set to B.
+        let cmd = if cat_is_per_pan(&cmd) {
             target_pan(cmd, self.pan_target_b)
+        } else {
+            cmd
         };
         self.send(WorkerCmd::Cat(cmd));
     }
@@ -7135,6 +7140,29 @@ fn next_avail_ant(avail: Option<u8>, cur: Option<u8>) -> Option<u8> {
 /// `$` modifier after the 4-char `#XXX` mnemonic (e.g. `#REF-020;` →
 /// `#REF$-020;`). Unknown-to-a-pan commands are ignored by the K4, so this is
 /// safe for attributes that lack a per-pan variant.
+/// Whether a `#`-family command accepts the `$` sub-pan modifier.
+///
+/// Deliberately an allow-list of what has been **observed to work**, not a
+/// deny-list of what is known to break. D12's naming is not a reliable guide
+/// here — it documents the reference level as `#REF$`, yet on a real radio the
+/// bare `#REF` is what takes effect (for both pans) and the `$` form is inert.
+///
+/// | Command | Behaviour | Evidence |
+/// |---|---|---|
+/// | `#SPN` | per pan | changing it with TARGET on A left pan B unchanged (#141) |
+/// | `#REF`, `#SCL` | global, `$` inert | only take effect with TARGET on A, and then apply to both pans |
+/// | everything else | unverified — treated as global | — |
+///
+/// Anything unverified stays off the list: sending a bare command that turns
+/// out to be per-pan sets the wrong pan, which is visible and recoverable;
+/// sending a `$` form the radio ignores makes the control silently do nothing,
+/// which is what this fixes.
+///
+/// trace: FR-PAN-CTL-01
+fn cat_is_per_pan(cmd: &str) -> bool {
+    cmd.starts_with("#SPN")
+}
+
 fn target_pan(cmd: String, sub: bool) -> String {
     if sub && cmd.starts_with('#') && cmd.len() >= 4 && !cmd[4..].starts_with('$') {
         format!("{}${}", &cmd[..4], &cmd[4..])
@@ -7220,5 +7248,70 @@ mod tap_hold_wiring_tests {
             checked >= 3,
             "expected the AGC/ATTN/NB sites, found {checked}"
         );
+    }
+}
+
+#[cfg(test)]
+mod pan_target_tests {
+    use super::{cat_is_per_pan, target_pan};
+
+    /// Only `#SPN` is targeted. `#REF`/`#SCL` are global on a real radio: the
+    /// bare form applies to both pans and the `$` form is inert, so targeting
+    /// them made every DISPLAY control silently do nothing when TARGET was B.
+    /// trace: FR-PAN-CTL-01
+    #[test]
+    fn fr_pan_ctl_01_only_span_is_targeted() {
+        assert!(cat_is_per_pan("#SPN50000;"));
+        for cmd in [
+            "#REF-130;",
+            "#SCL70;",
+            "#AVG04;",
+            "#PKM1;",
+            "#FRZ0;",
+            "#WFC1;",
+            "#WFH060;",
+            "#DPM2;",
+        ] {
+            assert!(!cat_is_per_pan(cmd), "{cmd} must not be targeted");
+        }
+    }
+
+    /// Targeting adds `$` for pan B and leaves pan A bare; an untargeted
+    /// command is unchanged either way.
+    /// trace: FR-PAN-CTL-01
+    #[test]
+    fn fr_pan_ctl_01_target_pan_rewrites_only_for_b() {
+        assert_eq!(target_pan("#SPN50000;".into(), false), "#SPN50000;");
+        assert_eq!(target_pan("#SPN50000;".into(), true), "#SPN$50000;");
+        // Already carrying `$` is left alone rather than doubled.
+        assert_eq!(target_pan("#SPN$50000;".into(), true), "#SPN$50000;");
+    }
+
+    /// The regression this guards: a global command must reach the radio in
+    /// its bare form for **both** target settings, or it does nothing on B.
+    /// trace: FR-PAN-CTL-01
+    #[test]
+    fn fr_pan_ctl_01_global_commands_are_never_dollared() {
+        // Mirrors the call site so the composition is exercised, not just the
+        // predicate: only a per-pan command is rewritten.
+        let on_wire = |cmd: &str, target_b: bool| -> String {
+            if cat_is_per_pan(cmd) {
+                target_pan(cmd.to_string(), target_b)
+            } else {
+                cmd.to_string()
+            }
+        };
+        for cmd in ["#REF-130;", "#SCL70;", "#AVG04;", "#WFH060;"] {
+            assert_eq!(on_wire(cmd, false), cmd, "{cmd} with TARGET A");
+            assert_eq!(
+                on_wire(cmd, true),
+                cmd,
+                "{cmd} with TARGET B — a `$` here is inert on the radio, so the \
+                 control would silently do nothing"
+            );
+        }
+        // Span is still targeted, so the two panes stay independently settable.
+        assert_eq!(on_wire("#SPN50000;", false), "#SPN50000;");
+        assert_eq!(on_wire("#SPN50000;", true), "#SPN$50000;");
     }
 }
