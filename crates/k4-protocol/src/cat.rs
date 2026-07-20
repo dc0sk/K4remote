@@ -482,11 +482,22 @@ pub fn set_apf(on: bool, width: u8) -> String {
 
 /// Set the RX attenuator: `db` ∈ {0,3,6,9,12,15,18,21}, on/off (`RA`).
 ///
-/// Example: `(12, true)` → `"RA121;"`.
+/// The level is a **two-digit** field followed by the on/off digit, as the
+/// `RA` read-back parses it and as every other level command is built
+/// (`AG030`, `SQ000`, `NB{:02}`, `NR{:02}`).
+///
+/// Example: `(12, true)` → `"RA121;"`, `(3, true)` → `"RA031;"`.
+///
+/// Until 2026-07-20 this interpolated the level unpadded, so single-digit
+/// levels ran the two fields together — 3 dB went out as `RA31;`, which the
+/// radio read as a malformed level and ignored. Only 12/15/18/21 dB worked,
+/// and 0 dB worked by coincidence (`RA00;` = "level 0, off" either way). That
+/// silently broke three of the eight rungs of the attenuator ladder for both
+/// the popup slider and the `[ATTN]` hold.
 ///
 /// trace: FR-RX-02
 pub fn set_attenuator(db: u8, on: bool) -> String {
-    format!("RA{}{};", db, on as u8)
+    format!("RA{:02}{};", db.min(21), on as u8)
 }
 
 /// Select the next-higher band (`BN+`).
