@@ -153,7 +153,10 @@ struct App {
     rx_popup: Option<ui::RxPopup>,
     // Live pointer position, and where it was when the popup was opened — the
     // popup is anchored at the control rather than centred on the window.
+    // Tracking is gated on `pointer_on_chip` so the per-move cost is paid only
+    // over the controls that can open a popup (see `subscription`).
     cursor: (f32, f32),
+    pointer_on_chip: bool,
     rx_popup_at: (f32, f32),
     // Encrypt cached peer passwords under a master password (vs OS keychain).
     use_master: bool,
@@ -694,6 +697,9 @@ enum Message {
     /// Pointer moved, in window coordinates — remembered so a popup can open
     /// at the control instead of the middle of the window (FR-UI-POPUP-01).
     CursorMoved(f32, f32),
+    /// Pointer entered/left a chip that can open a popup. Gates the cursor
+    /// tracking above, which is too expensive to run app-wide.
+    PointerOnChip(bool),
     Tick,
 }
 
@@ -835,6 +841,7 @@ impl App {
             settings_open: false,
             rx_popup: None,
             cursor: (0.0, 0.0),
+            pointer_on_chip: false,
             rx_popup_at: (0.0, 0.0),
             use_master: false,
             master_password: String::new(),
@@ -1904,8 +1911,15 @@ impl App {
                 // that can be swallowed by whatever has focus is not one.
                 // ESC stops while on air (and so must be tested before the ESC
                 // dismiss chain below); Ctrl+Shift+X always stops.
-                if ui::is_estop_press(&key, mods, ui::on_air(self.ui.transmitting, self.ui.tuning))
-                {
+                if ui::is_estop_press(
+                    &key,
+                    mods,
+                    ui::on_air(
+                        self.ui.transmitting,
+                        self.ui.tuning,
+                        self.ui.radio.transmitting,
+                    ),
+                ) {
                     self.send(WorkerCmd::EmergencyStop);
                     return Task::none();
                 }
@@ -2313,6 +2327,7 @@ impl App {
                 }
             }
             Message::CursorMoved(x, y) => self.cursor = (x, y),
+            Message::PointerOnChip(on) => self.pointer_on_chip = on,
             Message::Tick => {
                 if let Ok(snap) = self.snapshot.lock() {
                     self.ui = snap.clone();
@@ -2462,15 +2477,26 @@ impl App {
         // keeping an anchored popup on screen (FR-UI-POPUP-01).
         let resize = iced::window::resize_events()
             .map(|(id, size)| Message::Resized(id, size.width, size.height));
-        // Pointer position, for anchoring a popup where it was opened. iced
-        // already redraws on pointer movement to update hover states, so this
-        // adds a stored point rather than a new source of redraws.
-        let cursor = iced::event::listen_with(|event, _status, _id| match event {
-            iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
-                Some(Message::CursorMoved(position.x, position.y))
-            }
-            _ => None,
-        });
+        // Pointer position, for anchoring a popup where it was opened.
+        //
+        // Live **only while the pointer is over a chip that can open one**.
+        // Every one of these messages costs a full `view()` rebuild across
+        // both windows, and measured on an idle, disconnected app that was
+        // already 4% → 20% of a core just from moving the mouse — with a live
+        // radio (spectrum, waterfall, a fast-filling diagnostics log) the
+        // rebuild is far more expensive. Gating it to the few chips that can
+        // actually be right-clicked keeps the cost where the feature is,
+        // instead of charging it to every pointer movement in the app.
+        let cursor = if self.pointer_on_chip {
+            iced::event::listen_with(|event, _status, _id| match event {
+                iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
+                    Some(Message::CursorMoved(position.x, position.y))
+                }
+                _ => None,
+            })
+        } else {
+            Subscription::none()
+        };
         // Window lifecycle: quit on main-window close; track the diag window.
         let closed = iced::window::close_events().map(Message::WindowClosed);
         // Keyboard: PTT hotkey (push-to-talk) + hotkey capture.
@@ -2792,7 +2818,11 @@ impl App {
     fn center_box(&self) -> Element<'_, Message> {
         // On air by any route, not just an open mic: a tune emits a carrier
         // without setting `transmitting` (FR-UI-TX-01).
-        let txing = ui::on_air(self.ui.transmitting, self.ui.tuning);
+        let txing = ui::on_air(
+            self.ui.transmitting,
+            self.ui.tuning,
+            self.ui.radio.transmitting,
+        );
         let tx_ind: Element<Message> = Container::new(
             Text::new(if txing { "● TX" } else { "TX" })
                 .size(13)
@@ -7280,6 +7310,10 @@ fn popup_click<'a>(
 ) -> Element<'a, Message> {
     MouseArea::new(content)
         .on_right_press(Message::OpenRxPopup(popup))
+        // Enable pointer tracking only while over this chip, so the popup has
+        // a fresh anchor without the app paying for every mouse move.
+        .on_enter(Message::PointerOnChip(true))
+        .on_exit(Message::PointerOnChip(false))
         .into()
 }
 
@@ -7699,7 +7733,14 @@ mod estop_wiring_tests {
         }
 
         // And it must actually send the stop, not merely test for the key.
-        let after = &src[handler + estop..(handler + estop + 300).min(src.len())];
+        // Scoped to the rest of this match arm rather than a fixed byte
+        // window — rustfmt reflows the call across lines as its arguments
+        // grow, and a magic-number window made this guard fail on formatting
+        // alone.
+        let arm_end = src[handler..]
+            .find("\n            Message::")
+            .map_or(src.len(), |n| handler + n);
+        let after = &src[handler + estop..arm_end];
         assert!(
             after.contains("WorkerCmd::EmergencyStop"),
             "the hotkey must dispatch EmergencyStop:\n{after}"

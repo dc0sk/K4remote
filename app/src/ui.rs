@@ -499,14 +499,27 @@ pub fn is_estop_press(
 /// Whether the radio is **on air** by any route.
 ///
 /// Not the same as the mic path being open. A tune emits a carrier without
-/// `transmitting` being set — deliberately, so `send_tx_audio` stays closed
-/// and the operator's microphone is not streamed over the tune (see
+/// `local_tx` being set — deliberately, so `send_tx_audio` stays closed and
+/// the operator's microphone is not streamed over the tune (see
 /// `Session::tune`). The indicator must nevertheless light, because what it
 /// answers is "is RF going out", not "is my voice going out".
 ///
-/// trace: FR-UI-TX-01
-pub fn on_air(transmitting: bool, tuning: bool) -> bool {
-    transmitting || tuning
+/// `radio_tx` is the **radio's own** report (the `IF` `t` flag), and it is the
+/// only input that covers transmission this app did not start: a front-panel
+/// PTT, VOX, the K-Pod, or a switch tap. The switch-row `TUNE`/`TUNE LP`
+/// buttons are exactly that case — they send raw switch taps rather than
+/// going through `Session::tune`, so `tuning` stays false while the radio is
+/// keyed. Judging "on air" from local intent alone left the emergency stop
+/// (`FR-TX-SAFE-05`) inert against every one of those routes, which was found
+/// on a live radio: `TUNE` from the switch row, then `ESC`, did nothing.
+///
+/// `None` means the radio has not reported yet and is treated as *not* on air
+/// — the local flags still cover anything this app initiated, so the stop is
+/// never worse than before the radio answers.
+///
+/// trace: FR-UI-TX-01, FR-TX-SAFE-05
+pub fn on_air(local_tx: bool, tuning: bool, radio_tx: Option<bool>) -> bool {
+    local_tx || tuning || radio_tx == Some(true)
 }
 
 /// Noise-blanker button: on/off plus the active filter mode, so the mode the
@@ -2497,19 +2510,52 @@ mod nb_filter_tests {
 mod on_air_tests {
     use super::on_air;
 
-    /// Any route to air lights the indicator — including a tune, which
-    /// deliberately does not set the transmit flag.
+    /// Any route to air counts — including a tune, which deliberately does
+    /// not set the transmit flag.
     /// trace: FR-UI-TX-01
     #[test]
     fn fr_ui_tx_01_any_route_to_air_counts() {
-        assert!(!on_air(false, false), "idle");
-        assert!(on_air(true, false), "PTT / voice");
+        assert!(!on_air(false, false, Some(false)), "idle");
+        assert!(on_air(true, false, Some(false)), "PTT / voice");
         assert!(
-            on_air(false, true),
+            on_air(false, true, Some(false)),
             "a tune emits a carrier without setting the transmit flag — the \
              indicator must still light, or the operator sees a dark TX box \
              while RF is going out"
         );
-        assert!(on_air(true, true));
+        assert!(on_air(true, true, Some(true)));
+    }
+
+    /// Transmission this app did **not** initiate still counts, on the
+    /// radio's own report alone.
+    ///
+    /// The case that found this: the switch-row `TUNE` sends a raw switch tap
+    /// rather than going through `Session::tune`, so both local flags stay
+    /// false while the radio is keyed. Judged on local intent alone, the
+    /// emergency stop was inert — pressing ESC during such a tune did
+    /// nothing, on a live radio. Front-panel PTT, VOX and the K-Pod are the
+    /// same shape.
+    /// trace: FR-UI-TX-01, FR-TX-SAFE-05
+    #[test]
+    fn fr_tx_safe_05_radio_reported_transmit_counts_on_its_own() {
+        assert!(
+            on_air(false, false, Some(true)),
+            "the radio says it is transmitting; nothing local does — this must \
+             still be on air, or the emergency stop cannot reach it"
+        );
+    }
+
+    /// Before the radio has reported, the local flags still decide — an
+    /// unknown state must not be read as "on air" (which would make ESC stop
+    /// dismissing dialogs on a disconnected app) nor suppress a local route.
+    /// trace: FR-UI-TX-01
+    #[test]
+    fn fr_ui_tx_01_unknown_radio_state_falls_back_to_local() {
+        assert!(
+            !on_air(false, false, None),
+            "idle and unknown is not on air"
+        );
+        assert!(on_air(true, false, None), "a local transmit still counts");
+        assert!(on_air(false, true, None), "a local tune still counts");
     }
 }
