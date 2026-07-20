@@ -40,6 +40,22 @@ const SPECTRUM_WIDTH: usize = 1024;
 /// Waterfall history depth (rows).
 const WATERFALL_ROWS: usize = 64;
 
+/// Whether a `<cmd>?;` rejection should be announced now, and what to say.
+///
+/// `None` means stay quiet: either there is no error, or it is the one already
+/// reported. A persisting rejection must be announced **once**, not on every
+/// pump — the radio keeps no "acknowledged" state, so the app decides.
+///
+/// trace: FR-CAT-03
+pub fn rejection_notice(reported: Option<&str>, current: Option<&str>) -> Option<String> {
+    match current {
+        Some(m) if Some(m) != reported => Some(format!(
+            "radio rejected `{m}` (out of range or not supported)"
+        )),
+        _ => None,
+    }
+}
+
 /// One decoded pan row: the display bins plus the pan geometry they were
 /// sampled at.
 ///
@@ -343,6 +359,9 @@ struct WorkerState {
     tx_seq: u8,
     audio_frames: u64,
     spectrum_bins: usize,
+    /// The last `<cmd>?;` rejection already reported, so a persisting error is
+    /// announced once rather than on every pump (FR-CAT-03).
+    reported_error: Option<String>,
     // Per-receiver spectrum/waterfall, indexed by `PanFrame.receiver` (0=main/A,
     // 1=sub/B), so a dual-pan view shows each RX's own trace (FR-PAN-02).
     spectrum_latest: [PanRow; 2],
@@ -387,6 +406,7 @@ impl WorkerState {
             tx_seq: 0,
             audio_frames: 0,
             spectrum_bins: 0,
+            reported_error: None,
             spectrum_latest: [PanRow::default(), PanRow::default()],
             waterfall: [VecDeque::new(), VecDeque::new()],
             mini_pan: Vec::new(),
@@ -722,6 +742,15 @@ fn service(ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnapshot>>) {
                 None => ws.audio_frames += 1,
             }
         }
+        // A `<cmd>?;` rejection is recorded in RadioState but was never read,
+        // so the operator only ever saw it as one more Debug `rx` line among
+        // the traffic. Announce it distinctly (FR-CAT-03).
+        let err_now = session.state().last_error.clone();
+        if let Some(msg) = rejection_notice(ws.reported_error.as_deref(), err_now.as_deref()) {
+            ws.diag.log(Level::Warn, "cat", &msg);
+            set_status(snapshot, msg);
+        }
+        ws.reported_error = err_now;
         // Log received CAT for the diagnostics console (skip PONG noise).
         for text in &inbound.cat {
             if !text.starts_with("PONG") {
@@ -1402,5 +1431,46 @@ mod tests {
 
         assert_eq!(wide_peaks, 1, "full tier should merge the pair");
         assert_eq!(narrow_peaks, 2, "cropped view should resolve both");
+    }
+}
+
+#[cfg(test)]
+mod rejection_tests {
+    use super::rejection_notice;
+
+    /// A new rejection is announced and names the mnemonic, so the operator
+    /// can tell which request the radio refused.
+    /// trace: FR-CAT-03
+    #[test]
+    fn fr_cat_03_announces_a_new_rejection() {
+        let msg = rejection_notice(None, Some("FA")).expect("announced");
+        assert!(msg.contains("FA"), "must name the rejected command: {msg}");
+        assert!(
+            msg.contains("rejected"),
+            "must read as a failure, not as traffic: {msg}"
+        );
+        // A different mnemonic later is a new event.
+        assert!(rejection_notice(Some("FA"), Some("MD")).is_some());
+    }
+
+    /// A persisting rejection is announced once. `last_error` is never cleared
+    /// by the radio, so without this the console would fill with the same
+    /// warning on every pump and drown the traffic it sits among.
+    /// trace: FR-CAT-03
+    #[test]
+    fn fr_cat_03_does_not_repeat_the_same_rejection() {
+        assert_eq!(rejection_notice(Some("FA"), Some("FA")), None);
+    }
+
+    /// Silence when there is nothing to report.
+    /// trace: FR-CAT-03
+    #[test]
+    fn fr_cat_03_silent_without_an_error() {
+        assert_eq!(rejection_notice(None, None), None);
+        assert_eq!(
+            rejection_notice(Some("FA"), None),
+            None,
+            "clearing is not an event"
+        );
     }
 }
