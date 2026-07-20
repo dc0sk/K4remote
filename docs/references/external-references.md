@@ -252,6 +252,20 @@ provenance classes — they are not treated the same:**
 | Dark layered theme; rounded button grids with blue "engaged" fill; big white freq readouts; proportional S-meter bar (iOS app visual language, 2026-07-02 direction) | — |
 | Tap-to-edit; mini-pan zoom tuning aid; dual-pan; vertical scale in dBm/S-units | — |
 
+### Mini-pan availability (`#MP$`) — field-established, not in the vendor docs
+
+`#MP$-1` means "the mini-pan cannot be turned on with the current radio
+settings" (D12). Neither D12 nor D14 says *which* settings. Established on a
+real K4 (2026-07-20, DC0SK):
+
+> **Dual-pan must be off when the sub receiver is disabled.** With dual-pan on
+> and no sub RX, the radio refuses with `#MP$-1`; turning dual-pan off — or
+> enabling the sub RX — allows the mini-pan.
+
+Consistent with D14 p.1489, which describes tapping an S-meter as switching to
+the mini-pan *for that receiver*: the mini-pan occupies a receiver's meter area,
+so with dual-pan on and only one receiver there is nowhere for it to go.
+
 ### Open confirmations (against the real radio — `ASM-05`)
 
 - Confirm the exact on-screen colour semantics (esp. the orange/amber transmit

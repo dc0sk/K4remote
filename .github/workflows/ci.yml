@@ -11,8 +11,11 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
     branches: [main]
+  # Run the full cross-platform set on demand without cutting a tag.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -22,6 +25,37 @@ env:
   RUSTFLAGS: "-D warnings"
 
 jobs:
+  # Cross-platform builds are slow (the Windows job builds libopus and OpenSSL
+  # from source and has taken >14 min on a cold cache). Running them on every
+  # PR buys little: the code is portable Rust and the platform-specific risk is
+  # in packaging, not in the logic. So PRs get the fast Linux path, and the full
+  # matrix runs where it actually matters — on a release tag — plus on demand.
+  targets:
+    name: Select targets
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.pick.outputs.matrix }}
+      full: ${{ steps.pick.outputs.full }}
+    steps:
+      - id: pick
+        # Values are passed via env rather than interpolated into the script,
+        # so a crafted ref name cannot inject shell.
+        env:
+          REF: ${{ github.ref }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          LINUX='{"os":"ubuntu-latest","name":"linux-x86_64"}'
+          ARM='{"os":"ubuntu-24.04-arm","name":"linux-arm64"}'
+          MAC='{"os":"macos-latest","name":"macos","features":"--features vendored-tls"}'
+          if [[ "$REF" == refs/tags/v* || "$EVENT" == workflow_dispatch ]]; then
+            echo "matrix=[$LINUX,$ARM,$MAC]" >> "$GITHUB_OUTPUT"
+            echo "full=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "matrix=[$LINUX]" >> "$GITHUB_OUTPUT"
+            echo "full=false" >> "$GITHUB_OUTPUT"
+          fi
+
   fmt-clippy:
     name: Format & Lint
     runs-on: ubuntu-latest
@@ -36,16 +70,16 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-  # Full build + test on the Linux (x86_64 + arm64) and macOS targets.
+  # Build + test. Always Linux x86_64 (which also carries the traceability
+  # gate, so it runs on every PR); arm64 (Raspberry Pi OS arch) and macOS are
+  # added on a release tag or a manual run — see the `targets` job.
   test:
     name: Test (${{ matrix.name }})
+    needs: targets
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { os: ubuntu-latest, name: linux-x86_64 }
-          - { os: ubuntu-24.04-arm, name: linux-arm64 } # Raspberry Pi OS arch
-          - { os: macos-latest, name: macos, features: "--features vendored-tls" }
+        include: ${{ fromJSON(needs.targets.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -69,6 +103,8 @@ jobs:
   # are needed — all provided below / preinstalled on the runner.
   build-windows:
     name: Build (windows-x86_64)
+    needs: targets
+    if: needs.targets.outputs.full == 'true'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
