@@ -430,6 +430,24 @@ pub fn bandwidth_button(hz: Option<u32>) -> ButtonState {
     ButtonState::new("BW", value)
 }
 
+/// Panadapter noise-blanker button (`#NB`): 0 off, 1 on, 2 auto.
+///
+/// `auto` makes the pan NB follow the radio NB on/off, with the levels still
+/// independent (D12 `#NB` NOTE), so it is worth showing distinctly from a
+/// plain "on".
+///
+/// trace: FR-PAN-CTL-01
+pub fn pan_nb_button(mode: u8) -> ButtonState {
+    ButtonState::new(
+        "PAN NB",
+        match mode {
+            0 => "Off",
+            1 => "On",
+            _ => "Auto",
+        },
+    )
+}
+
 /// Generic on/off control button (NB/NR/preamp/RIT/XIT…).
 /// trace: FR-UI-11
 /// A toggle button the radio has reported it cannot honour right now, shown as

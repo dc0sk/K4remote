@@ -109,6 +109,7 @@ pub const TIPS: &[(&str, &str)] = &[
     ("pan.wfheight", "Waterfall height as a percentage of the pan area (#WFH)."),
     ("pan.nb", "Panadapter noise blanker (#NB) — cleans the display without touching receive audio."),
     // --- Antenna ---------------------------------------------------------
+    ("pan.nblevel", "Panadapter noise-blanker level (#NBL), 0-14."),
     ("ant.tx", "Transmit antenna (AN)."),
     ("ant.rx", "Receive antenna (AR). Can differ from the transmit antenna."),
     // --- Connection / app ------------------------------------------------

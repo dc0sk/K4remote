@@ -306,6 +306,11 @@ struct DisplayState {
     freeze: bool,
     wf_palette: u8,
     wf_height: u8,
+    /// Panadapter noise blanker (`#NB`): 0 off, 1 on, 2 auto. Cleans the
+    /// display without touching receive audio.
+    pan_nb: u8,
+    /// Panadapter NB level (`#NBL`), 0–14.
+    pan_nb_level: u8,
 }
 
 impl Default for DisplayState {
@@ -319,6 +324,8 @@ impl Default for DisplayState {
             freeze: false,
             wf_palette: 1,
             wf_height: 60,
+            pan_nb: 0,
+            pan_nb_level: 5,
         }
     }
 }
@@ -335,6 +342,10 @@ enum DispMsg {
     Freeze(bool),
     Palette(u8),
     Height(u8),
+    /// Panadapter noise blanker: 0 off, 1 on, 2 auto (`#NB`).
+    PanNb(u8),
+    /// Panadapter noise-blanker level, 0–14 (`#NBL`).
+    PanNbLevel(u8),
 }
 
 /// Transmit-configuration state shown on the TX screen (FR-KEY-01/FR-AUD-CFG-01).
@@ -1416,7 +1427,7 @@ impl App {
                     self.send(WorkerCmd::SetFreqA(hz));
                 }
             }
-            Message::PaneWheel(is_b, dir) => self.step_vfo(is_b, dir > 0),
+            Message::PaneWheel(is_b, dir) => self.pan_wheel(is_b, dir > 0),
             Message::SetAfGain(v) => {
                 self.af_gain = v;
                 self.send(WorkerCmd::Cat(target_rx(
@@ -2273,6 +2284,52 @@ impl App {
     /// Step a VFO up/down by the radio's tuning rate (`VT`). When the step is
     /// known, compute the new frequency and set it optimistically (FA/FB) so the
     /// readout moves instantly; otherwise fall back to the radio's `UP/DN`.
+    /// Wheel-tune from a panadapter pane (FR-PAN-10).
+    ///
+    /// Steps by a fraction of the *displayed span* rather than the radio's
+    /// `VT` knob rate. `VT` is a front-panel setting and can be 1 MHz, so
+    /// applying it here made a single stray scroll leave the band and trigger
+    /// band-stack recalls that silently changed mode and DSP settings
+    /// (issue #130). The VFO-panel arrows still use `VT`, which is what an
+    /// operator expects of an explicit tuning control.
+    fn pan_wheel(&mut self, is_b: bool, up: bool) {
+        let span = self.pane_span_hz(is_b);
+        let step = u64::from(k4_stream::render::pan_wheel_step_hz(span));
+        let cur = if is_b {
+            self.opt_vfo.b_or(self.ui.vfo_b_hz)
+        } else {
+            self.opt_vfo.a_or(self.ui.vfo_a_hz)
+        };
+        let Some(cur) = cur else { return };
+        let new = if up {
+            cur + step
+        } else {
+            cur.saturating_sub(step)
+        };
+        if is_b {
+            self.opt_vfo.set_b(new);
+            self.send(WorkerCmd::SetFreqB(new));
+        } else {
+            self.opt_vfo.set_a(new);
+            self.send(WorkerCmd::SetFreqA(new));
+        }
+    }
+
+    /// The span a pane is currently displaying, from the stream if a frame has
+    /// arrived, else the `#SPN` read-back. `0` = not yet known.
+    fn pane_span_hz(&self, is_b: bool) -> u32 {
+        let latest = if is_b {
+            &self.ui.spectrum_sub
+        } else {
+            &self.ui.spectrum_latest
+        };
+        if latest.span_hz > 0 {
+            latest.span_hz
+        } else {
+            self.ui.radio.pan_span_hz.unwrap_or(0)
+        }
+    }
+
     fn step_vfo(&mut self, is_b: bool, up: bool) {
         let step = if is_b {
             self.ui.radio.sub_tune_step_hz
@@ -2653,6 +2710,14 @@ impl App {
             DispMsg::Palette(p) => {
                 self.display.wf_palette = p.min(4);
                 cat::set_waterfall_palette(self.display.wf_palette)
+            }
+            DispMsg::PanNb(n) => {
+                self.display.pan_nb = n.min(2);
+                cat::set_pan_nb(self.display.pan_nb)
+            }
+            DispMsg::PanNbLevel(n) => {
+                self.display.pan_nb_level = n.min(14);
+                cat::set_pan_nb_level(self.display.pan_nb_level)
             }
             DispMsg::Height(h) => {
                 self.display.wf_height = h.min(100);
@@ -4462,6 +4527,26 @@ impl App {
                         small_btn_string(
                             format!("WF: {pal}"),
                             Message::Disp(DispMsg::Palette((d.wf_palette + 1) % 5)),
+                        ),
+                    ))
+                    // Panadapter noise blanker (#NB / #NBL) — cleans the
+                    // display without touching receive audio. The encoders
+                    // existed and were tested; nothing reached them (#127).
+                    .push(tip(
+                        "pan.nb",
+                        two_line_btn(
+                            ui::pan_nb_button(d.pan_nb),
+                            Some(d.pan_nb > 0),
+                            Some(Message::Disp(DispMsg::PanNb((d.pan_nb + 1) % 3))),
+                        ),
+                    ))
+                    .push(tip(
+                        "pan.nblevel",
+                        disp_stepper(
+                            "PAN NB LVL",
+                            d.pan_nb_level.to_string(),
+                            Message::Disp(DispMsg::PanNbLevel(d.pan_nb_level.saturating_sub(1))),
+                            Message::Disp(DispMsg::PanNbLevel(d.pan_nb_level + 1)),
                         ),
                     )),
             )
