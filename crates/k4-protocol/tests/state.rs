@@ -147,9 +147,17 @@ fn fr_rx_control_responses_parse() {
     assert_eq!(s.atten_db, Some(12));
     assert_eq!(s.atten_on, Some(true));
 
-    s.apply_cat("RA00;"); // 0 dB, off
+    s.apply_cat("RA000;"); // 0 dB, off — the padded form we send and the radio emits
     assert_eq!(s.atten_db, Some(0));
     assert_eq!(s.atten_on, Some(false));
+
+    // The parser is lenient about the level's width: it takes the last digit
+    // as the flag and parses the rest. Worth pinning deliberately, because
+    // that leniency is what let a malformed *encoder* (`RA31;` for 3 dB) go
+    // unnoticed — the radio is the strict party and is not in this suite.
+    s.apply_cat("RA31;");
+    assert_eq!(s.atten_db, Some(3), "short form still parses");
+    assert_eq!(s.atten_on, Some(true));
 }
 
 /// AGC, NB, NR, preamp, RIT, XIT responses parse into state.
@@ -563,4 +571,43 @@ fn fr_pan_08_span_is_tracked_per_pan() {
         "main untouched by a sub change"
     );
     assert_eq!(s.sub_pan_span_hz, Some(6_000));
+}
+
+/// Encoder and parser agree on every rung of the attenuator ladder.
+///
+/// **This test would not have caught the 2026-07-20 encoder bug, and cannot.**
+/// Our parser is deliberately lenient — it takes the last character as the
+/// on/off flag and parses whatever precedes it — so the malformed `RA31;`
+/// round-trips as 3 dB here just as happily as the correct `RA031;`. Verified
+/// by sabotage: reverting the encoder leaves this test green.
+///
+/// That leniency is exactly what hid the bug. The radio is the strict party,
+/// and we have no copy of it in the test suite, so the real guard is
+/// `fr_rx_02_attenuator_levels_are_two_digit_fields`, which pins the wire
+/// *shape*. This test is kept for the narrower claim in its name: that the
+/// two halves of our own codec do not drift apart.
+///
+/// trace: FR-RX-02, FR-CAT-05
+#[test]
+fn fr_rx_02_attenuator_set_and_readback_agree() {
+    for db in [0u8, 3, 6, 9, 12, 15, 18, 21] {
+        let on = db > 0;
+        // The radio echoes the same field layout it accepts, so feeding our
+        // own command back through the parser is a fair round-trip.
+        let sent = k4_protocol::cat::set_attenuator(db, on);
+        let resp = sent.trim_end_matches(';');
+
+        let mut s = RadioState::new();
+        assert!(
+            s.apply_cat(&format!("{resp};")),
+            "{db} dB: {sent} not parsed"
+        );
+        assert_eq!(
+            s.atten_db,
+            Some(db),
+            "{db} dB round-tripped as {:?}",
+            s.atten_db
+        );
+        assert_eq!(s.atten_on, Some(on), "{db} dB on/off flag");
+    }
 }

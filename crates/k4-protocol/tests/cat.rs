@@ -47,7 +47,46 @@ fn fr_rx_gain_and_attenuator() {
     assert_eq!(set_af_gain(99), "AG060;"); // clamped to 60
     assert_eq!(set_rf_gain(20), "RG-20;");
     assert_eq!(set_attenuator(12, true), "RA121;");
-    assert_eq!(set_attenuator(0, false), "RA00;");
+    // Zero-padded, like `AG030;` / `SQ000;` above: this used to emit `RA00;`.
+    assert_eq!(set_attenuator(0, false), "RA000;");
+}
+
+/// Every rung of the attenuator ladder encodes as a **two-digit** level plus
+/// the on/off digit.
+///
+/// The regression this pins: single-digit levels were interpolated unpadded,
+/// so 3 dB went out as `RA31;` — read by the radio as a bad level and
+/// ignored. Only the two-digit levels worked, which is why the fault looked
+/// like "the attenuator won't leave 21 dB" rather than "the command is
+/// malformed".
+///
+/// trace: FR-RX-02
+#[test]
+fn fr_rx_02_attenuator_levels_are_two_digit_fields() {
+    let expected = [
+        (0u8, "RA000;"),
+        (3, "RA031;"),
+        (6, "RA061;"),
+        (9, "RA091;"),
+        (12, "RA121;"),
+        (15, "RA151;"),
+        (18, "RA181;"),
+        (21, "RA211;"),
+    ];
+    for (db, want) in expected {
+        let on = db > 0;
+        assert_eq!(set_attenuator(db, on), want, "{db} dB");
+    }
+    // The field widths are what make the command parseable at all, so pin the
+    // shape rather than only the eight strings above.
+    for db in 0..=21u8 {
+        let s = set_attenuator(db, true);
+        assert_eq!(s.len(), 6, "{db} dB → {s} is not `RA` + nn + m + `;`");
+        assert!(s[2..4].chars().all(|c| c.is_ascii_digit()), "{s}");
+    }
+    // An out-of-range level must not widen the field and shift the on/off
+    // digit out of place.
+    assert_eq!(set_attenuator(99, true), "RA211;");
 }
 
 /// trace: FR-RX-SQL-01
