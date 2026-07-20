@@ -154,6 +154,10 @@ pub enum WorkerCmd {
     Key(bool),
     /// Emergency stop.
     EmergencyStop,
+    /// Run or stop a tune (`TU`, FR-TX-TUNE-01). Arm-gated in the session.
+    Tune(k4_protocol::cat::TuneAction),
+    /// Toggle the ATU in/bypass (`AT/`, FR-ATU-01).
+    AtuToggle,
     /// Send an arbitrary raw CAT command (diagnostics console, FR-DIAG-02).
     SendRawCat(String),
     /// Set the 8-band RX graphic equalizer (`RE`, FR-EQ-01).
@@ -193,6 +197,9 @@ pub struct UiSnapshot {
     pub phase: ConnPhase,
     pub transmitting: bool,
     pub tx_armed: bool,
+    /// A tune carrier is on air. Separate from `transmitting`, which tracks the
+    /// mic path (FR-TX-TUNE-01).
+    pub tuning: bool,
     pub vfo_a_hz: Option<u64>,
     pub vfo_b_hz: Option<u64>,
     pub mode_a: Option<&'static str>,
@@ -456,6 +463,7 @@ fn publish(snapshot: &Arc<Mutex<UiSnapshot>>, ws: &WorkerState) {
         }
         s.transmitting = session.is_transmitting();
         s.tx_armed = session.is_tx_armed();
+        s.tuning = session.is_tuning();
         s.vfo_a_hz = st.vfo_a_hz;
         s.vfo_b_hz = st.vfo_b_hz;
         s.mode_a = st.mode_a.map(mode_label);
@@ -878,6 +886,29 @@ fn handle_cmd(cmd: WorkerCmd, ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnaps
         WorkerCmd::EmergencyStop => {
             if let Some(s) = ws.session.as_mut() {
                 let _ = s.emergency_stop();
+            }
+        }
+        WorkerCmd::Tune(action) => {
+            if let Some(s) = ws.session.as_mut() {
+                match s.tune(action) {
+                    // A refusal is silent on the wire, so say so in the console
+                    // rather than leaving the operator wondering (FR-TX-SAFE-03).
+                    Ok(false) => {
+                        ws.diag
+                            .log(Level::Warn, "tx", "tune refused: transmit is not armed")
+                    }
+                    Ok(true) => ws
+                        .diag
+                        .log(Level::Info, "tx", &k4_protocol::cat::tune(action)),
+                    Err(e) => ws.diag.log(Level::Warn, "tx", &format!("tune failed: {e}")),
+                }
+            }
+        }
+        WorkerCmd::AtuToggle => {
+            if let Some(s) = ws.session.as_mut() {
+                let _ = s.send(k4_protocol::cat::atu_toggle());
+                ws.diag
+                    .log(Level::Info, "tx", k4_protocol::cat::atu_toggle());
             }
         }
         WorkerCmd::SendRawCat(cmd) => {

@@ -1,19 +1,20 @@
 //! CAT encoding tests. trace: FR-VFO-01, FR-VFO-04, FR-VFO-06, FR-MODE-01,
 //! FR-MODE-02, FR-RX-01, FR-RX-02
 use k4_protocol::cat::{
-    band_down, band_stack_next, band_up, clear_rit_xit, click_anchor, filter_normalize, menu_open,
-    menu_query, menu_query_def, menu_set, passband_edges, rf_passband_hz, rx_eq_flat, send_text,
-    set_af_gain, set_agc, set_antivox, set_apf, set_attenuator, set_auto_notch, set_band,
-    set_band_sub, set_bandwidth_hz, set_compression, set_cw_pitch, set_diversity, set_dvr,
-    set_filter_preset, set_keyer, set_keyer_speed, set_line_in, set_line_out, set_manual_notch,
-    set_mic_gain, set_mic_input, set_mic_setup, set_mode, set_mode_sub, set_monitor, set_nb,
-    set_nb_level, set_nr, set_pan_average, set_pan_mode, set_pan_nb, set_pan_nb_level,
-    set_pan_peak, set_pan_ref, set_pan_scale, set_pan_span_hz, set_passband_edges_hz, set_pl_tone,
-    set_power, set_preamp, set_qsk_delay, set_repeater, set_rf_gain, set_rit, set_rit_offset,
-    set_rx_antenna, set_rx_antenna_sub, set_rx_eq, set_shift_hz, set_split, set_spot, set_squelch,
-    set_sub_rx, set_text_decode, set_transverter_band, set_tx_antenna, set_tx_eq, set_tx_power,
-    set_tx_power_range, set_vfo_a_hz, set_vfo_b_hz, set_vox, set_vox_gain, set_waterfall_height,
-    set_waterfall_palette, set_xit, switch, vfo_copy_swap, vfo_for_click,
+    atu_toggle, band_down, band_stack_next, band_up, clear_rit_xit, click_anchor, filter_normalize,
+    menu_open, menu_query, menu_query_def, menu_set, passband_edges, rf_passband_hz, rx_eq_flat,
+    send_text, set_af_gain, set_agc, set_antivox, set_apf, set_attenuator, set_atu_mode,
+    set_auto_notch, set_band, set_band_sub, set_bandwidth_hz, set_compression, set_cw_pitch,
+    set_diversity, set_dvr, set_filter_preset, set_keyer, set_keyer_speed, set_line_in,
+    set_line_out, set_manual_notch, set_mic_gain, set_mic_input, set_mic_setup, set_mode,
+    set_mode_sub, set_monitor, set_nb, set_nb_level, set_nr, set_pan_average, set_pan_mode,
+    set_pan_nb, set_pan_nb_level, set_pan_peak, set_pan_ref, set_pan_scale, set_pan_span_hz,
+    set_passband_edges_hz, set_pl_tone, set_power, set_preamp, set_qsk_delay, set_repeater,
+    set_rf_gain, set_rit, set_rit_offset, set_rx_antenna, set_rx_antenna_sub, set_rx_eq,
+    set_shift_hz, set_split, set_spot, set_squelch, set_sub_rx, set_text_decode,
+    set_transverter_band, set_tx_antenna, set_tx_eq, set_tx_power, set_tx_power_range,
+    set_vfo_a_hz, set_vfo_b_hz, set_vox, set_vox_gain, set_waterfall_height, set_waterfall_palette,
+    set_xit, switch, tune, vfo_copy_swap, vfo_for_click, AtuMode, TuneAction,
 };
 use k4_protocol::Mode;
 
@@ -457,4 +458,37 @@ fn fr_vfo_03_set_tune_step() {
 fn fr_vfo_03_query_tune_step_per_mode() {
     assert_eq!(k4_protocol::cat::query_tune_step(false, 3), "VTX3;");
     assert_eq!(k4_protocol::cat::query_tune_step(true, 2), "VT$X2;");
+}
+
+/// ATU mode (`AT`) and the in/bypass toggle. `AT0` (NOT INSTALLED) is not
+/// representable: D12 says it "should not be sent under normal circumstances".
+/// trace: FR-ATU-01
+#[test]
+fn fr_atu_01_atu_mode_and_toggle() {
+    assert_eq!(set_atu_mode(AtuMode::Bypass), "AT1;");
+    assert_eq!(set_atu_mode(AtuMode::Auto), "AT2;");
+    assert_eq!(atu_toggle(), "AT/;");
+}
+
+/// Tune actions (`TU`), and which of them key the transmitter.
+/// trace: FR-TX-TUNE-01
+#[test]
+fn fr_tx_tune_01_tune_actions() {
+    assert_eq!(tune(TuneAction::Exit), "TU0;");
+    assert_eq!(tune(TuneAction::Tune), "TU1;");
+    assert_eq!(tune(TuneAction::TuneLp), "TU2;");
+    assert_eq!(tune(TuneAction::AtuTune), "TU3;");
+    assert_eq!(tune(TuneAction::AtuExtended), "TU4;");
+
+    // Everything but Exit puts the radio on air — this is what the session
+    // gates on, so it must not drift.
+    assert!(!TuneAction::Exit.transmits());
+    for a in [
+        TuneAction::Tune,
+        TuneAction::TuneLp,
+        TuneAction::AtuTune,
+        TuneAction::AtuExtended,
+    ] {
+        assert!(a.transmits(), "{a:?} keys the transmitter");
+    }
 }

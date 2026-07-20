@@ -255,6 +255,80 @@ pub fn passband_edges(bw_hz: u32, center_hz: u16) -> (u16, u16) {
     (lo, hi)
 }
 
+/// ATU mode (`AT`) — D12.
+///
+/// `0` (NOT INSTALLED) is deliberately not representable: D12 states an `AT0`
+/// command "should not be sent under normal circumstances; the K4 will
+/// automatically ascertain whether a KAT4 ATU module is installed."
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AtuMode {
+    /// ATU switched out of line.
+    Bypass,
+    /// ATU in line, matching automatically.
+    Auto,
+}
+
+/// Set the ATU mode (`AT`) for the current band and antenna.
+///
+/// trace: FR-ATU-01
+pub fn set_atu_mode(mode: AtuMode) -> String {
+    let n = match mode {
+        AtuMode::Bypass => 1,
+        AtuMode::Auto => 2,
+    };
+    format!("AT{n};")
+}
+
+/// Toggle the ATU in/bypass (`AT/`) — D12.
+///
+/// trace: FR-ATU-01
+pub fn atu_toggle() -> &'static str {
+    "AT/;"
+}
+
+/// A `TU` tune action — D12.
+///
+/// **Every variant except [`TuneAction::Exit`] puts the radio on air.** `Tune`
+/// and `TuneLp` emit a carrier until stopped; `AtuTune`/`AtuExtended` run a
+/// radio-controlled match at reduced power. The K4 returns `TU0` automatically
+/// whenever it drops transmit for any reason (D12 `TU`), so an `RX;` from the
+/// emergency stop or the link-loss fail-safe also ends a tune.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TuneAction {
+    /// Exit tune (`TU0`).
+    Exit,
+    /// Carrier at the current power setting (`TU1`).
+    Tune,
+    /// Carrier at the menu-set low power (`TU2`).
+    TuneLp,
+    /// ATU match — equivalent to tapping ATU once (`TU3`).
+    AtuTune,
+    /// ATU extended search — a 2nd tap within 5 s (`TU4`).
+    AtuExtended,
+}
+
+impl TuneAction {
+    /// Whether this action keys the transmitter. Only [`TuneAction::Exit`]
+    /// does not, so callers can gate the rest behind the TX arm.
+    pub fn transmits(self) -> bool {
+        !matches!(self, TuneAction::Exit)
+    }
+}
+
+/// Encode a tune action (`TU`) — D12.
+///
+/// trace: FR-TX-TUNE-01
+pub fn tune(action: TuneAction) -> String {
+    let n = match action {
+        TuneAction::Exit => 0,
+        TuneAction::Tune => 1,
+        TuneAction::TuneLp => 2,
+        TuneAction::AtuTune => 3,
+        TuneAction::AtuExtended => 4,
+    };
+    format!("TU{n};")
+}
+
 /// Where a panadapter click anchors the passband, per mode.
 ///
 /// The K4 describes its filter in the **audio** domain via `BW` + `IS` (D12
