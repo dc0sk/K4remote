@@ -4485,15 +4485,27 @@ impl App {
                 .padding([4, 10])
                 .on_press(Message::SetPanTarget(b))
         };
+        // TARGET sits next to the PAN selector because it qualifies it: every
+        // control on this screen applies to the targeted pan only, and the two
+        // pans hold independent settings (#141). Across the row it read as an
+        // unrelated control.
         let view_row = Row::new()
             .spacing(10)
             .align_y(Alignment::Center)
             .push(Text::new("PAN").size(11).color(dim))
             .push(modes)
-            .push(horizontal_space())
-            .push(Text::new("TARGET").size(11).color(dim))
-            .push(tgt_btn("A", false, self.pan_target_b))
-            .push(tgt_btn("B", true, self.pan_target_b));
+            .push(tipped(
+                self.tooltips,
+                self.hover,
+                "pan.target",
+                Row::new()
+                    .spacing(6)
+                    .align_y(Alignment::Center)
+                    .push(Text::new("TARGET").size(11).color(dim))
+                    .push(tgt_btn("A", false, self.pan_target_b))
+                    .push(tgt_btn("B", true, self.pan_target_b)),
+            ))
+            .push(horizontal_space());
         let pal = ui::waterfall_palettes()[(d.wf_palette as usize).min(4)];
         let tip = |id: &'static str, w: Element<'static, Message>| {
             tipped(self.tooltips, self.hover, id, w)
