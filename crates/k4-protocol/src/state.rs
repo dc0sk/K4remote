@@ -188,6 +188,10 @@ pub struct RadioState {
     pub pan_ref: Option<i16>,
     /// Panadapter span, Hz (`#SPN`).
     pub pan_span_hz: Option<u32>,
+    /// Sub-pan span (`#SPN$`). The K4 keeps a span **per pan**, and the
+    /// DISPLAY controls target one at a time, so a single shared value makes
+    /// one pane crop against the other's span (issue #141).
+    pub sub_pan_span_hz: Option<u32>,
     /// Panadapter scale, dB (`#SCL`).
     pub pan_scale: Option<u16>,
     /// Panadapter mode: 0=A, 1=B, 2=dual (`#DPM`).
@@ -554,8 +558,11 @@ impl RadioState {
                 self.pan_ref = Some(v);
             }
         } else if let Some(arg) = cmd.strip_prefix("#SPN") {
-            if let Ok(v) = split_sub(arg).1.parse::<u32>() {
-                self.pan_span_hz = Some(v);
+            // Route per pan: the two pans hold independent spans and the
+            // DISPLAY controls address one at a time (#141).
+            let (sub, rest) = split_sub(arg);
+            if let Ok(v) = rest.parse::<u32>() {
+                *sub_or(&mut self.pan_span_hz, &mut self.sub_pan_span_hz, sub) = Some(v);
             }
         } else if let Some(arg) = cmd.strip_prefix("#SCL") {
             if let Ok(v) = split_sub(arg).1.parse::<u16>() {
@@ -814,6 +821,6 @@ pub fn connect_state_seed() -> &'static [&'static str] {
         "#MP$;", // mini-pan on/off
         // Configuration-screen read-back (FR-UI-19 screens):
         "RE;", "TE;", "KP;", "KS;", "MI;", "MG;", "LO;", "AN;", "AR;", "AR$;", "VXV;", "BN;",
-        "#REF;", "#SPN;", "#SCL;", "#DPM;", "#WFC;", "#WFH;", "#FXT;",
+        "#REF;", "#SPN;", "#SPN$;", "#SCL;", "#DPM;", "#WFC;", "#WFH;", "#FXT;",
     ]
 }

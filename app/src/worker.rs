@@ -760,7 +760,15 @@ fn service(ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnapshot>>) {
         // Spectrum → downsampled trace + waterfall history (FR-PAN-02/03).
         // `#SPN` is the *display* span; a frame's bins cover the wider streamed
         // tier, so rows are cropped to the centre before decimating (FR-PAN-08).
-        let display_span_hz = session.state().pan_span_hz.unwrap_or(0);
+        // Per pan: the K4 keeps a span for each, and the DISPLAY controls
+        // address one at a time, so cropping both against one value makes one
+        // pane render at the other's span (#141).
+        let span_main = session.state().pan_span_hz.unwrap_or(0);
+        let span_sub = session
+            .state()
+            .sub_pan_span_hz
+            .or(session.state().pan_span_hz)
+            .unwrap_or(0);
         for payload in &inbound.spectrum {
             if let Some(frame) = PanFrame::decode(payload) {
                 if frame.mini {
@@ -771,6 +779,7 @@ fn service(ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnapshot>>) {
                 }
                 let rx = usize::from(frame.receiver.min(1)); // 0=main/A, 1=sub/B
                 ws.spectrum_bins = frame.bins_dbm.len();
+                let display_span_hz = if rx == 1 { span_sub } else { span_main };
                 let row = PanRow::from_frame(&frame, display_span_hz, SPECTRUM_WIDTH);
                 ws.spectrum_latest[rx] = row.clone();
                 ws.waterfall[rx].push_front(row);

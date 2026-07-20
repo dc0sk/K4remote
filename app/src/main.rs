@@ -2393,6 +2393,12 @@ impl App {
         };
         if latest.span_hz > 0 {
             latest.span_hz
+        } else if is_b {
+            self.ui
+                .radio
+                .sub_pan_span_hz
+                .or(self.ui.radio.pan_span_hz)
+                .unwrap_or(0)
         } else {
             self.ui.radio.pan_span_hz.unwrap_or(0)
         }
@@ -5482,6 +5488,12 @@ impl App {
             // (FR-PAN-08). Fall back to `#SPN` until the first frame arrives.
             let pan_span_hz = if latest.span_hz > 0 {
                 latest.span_hz
+            } else if p.is_b() {
+                self.ui
+                    .radio
+                    .sub_pan_span_hz
+                    .or(self.ui.radio.pan_span_hz)
+                    .unwrap_or(0)
             } else {
                 self.ui.radio.pan_span_hz.unwrap_or(0)
             };
@@ -5600,19 +5612,20 @@ impl App {
             .padding(8)
             .width(Length::Fill)
             .height(Length::Fixed(MINI_PAN_H));
-        let spectrum_band: Element<Message> = Column::new()
+        // The slot below the mini-pan shows a menu screen when a primary
+        // softkey is active, and the spectrum otherwise (FR-UI-19). The
+        // mini-pan frame stays above it either way: it is a tuning aid, and
+        // an operator adjusting a setting on a screen is exactly when they
+        // want to keep watching the band (FR-UI-14).
+        let below: Element<Message> = match self.context.active() {
+            Some(active) => self.menu_screen(active),
+            None => band_inner,
+        };
+        let panadapter_slot: Element<Message> = Column::new()
             .spacing(10)
             .push(mini_frame)
-            .push(band_inner)
+            .push(below)
             .into();
-
-        // The spectrum frame's slot shows a menu screen when a primary softkey
-        // is active, and the spectrum otherwise (FR-UI-19). Only this slot
-        // changes — the controls box above and the panels below are untouched.
-        let panadapter_slot: Element<Message> = match self.context.active() {
-            Some(active) => self.menu_screen(active),
-            None => spectrum_band,
-        };
 
         // Primary softkey row (FR-UI-13), pinned like the K4's on-screen button
         // band. The active primary's screen shows in the spectrum slot above
