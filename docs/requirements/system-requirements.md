@@ -1,7 +1,7 @@
 ---
 title: "System Requirements Specification"
 status: Draft
-version: "0.26"
+version: "0.27"
 version: "0.21"
 updated: 2026-07-20
 authors:
@@ -11,7 +11,7 @@ owns: [FR, NFR]
 
 # System Requirements Specification (SRS)
 
-**Version:** 0.26 (Draft) · **Date:** 2026-07-20 · **Author:** DC0SK
+**Version:** 0.27 (Draft) · **Date:** 2026-07-20 · **Author:** DC0SK
 **Version:** 0.21 (Draft) · **Date:** 2026-07-20 · **Author:** DC0SK
 Trace: owns `FR-`, `NFR-`. Up → [stakeholder-requirements.md](stakeholder-requirements.md);
 down → [../concept/architecture.md](../concept/architecture.md) (`ARC`) and
@@ -189,6 +189,7 @@ Interface Spec v1.03; Owner's Manual Rev F) for hands-on VFO selection + tuning.
 | `FR-PAN-08` | treat a PAN frame's bins as covering the **tier** the radio streams (`sample_rate × 1000`), not the display span, and show the **centre** crop selected by `#SPN` — `span / tierSpan × totalBins` bins (`R-EXT-01`) — cropping before decimating so the display columns are spent on the visible window. Degrade to the whole tier when `#SPN` is unknown or not narrower. | STK-09 | S | T/D | `crop_to_span` takes a centred sub-range that degenerates to the full array when the display span is unknown or ≥ the tier, `resample_peak` uses contiguous buckets so a narrow carrier lands in exactly one column, and a cropped row reports the display span and resolves two carriers a full-tier decimation merges (test); the frequency axis, span readout and click-to-QSY agree with `#SPN` on the radio (demo). |
 | `FR-PAN-09` | rasterise the waterfall history into a single image per pane per frame rather than one filled rectangle per bin per row, so display cost is independent of the column count, and size the display width from the pane (bounded) instead of a fixed 192 columns. Scroll geometry is preserved: each row is sampled through its own centre/span, and columns no row covers are transparent. | STK-09 | S | T/D | `column_to_bin` maps an aligned row across the view, shifts and clips a retuned one, scales a row of a different span at its own rate, and never indexes past the bins; `waterfall_rgba` emits exactly `width × rows × 4` bytes, leaves scrolled-off columns transparent, and honours the `#REF`/`#SCL` window (test); the waterfall is visually unchanged and stays smooth at full pane width (demo). |
 | `FR-PAN-10` | derive the panadapter's mouse-wheel tuning step from the **displayed span**, not the radio's `VT` knob rate, so one wheel click is always small relative to what the operator can see and cannot by itself leave the band. | STK-09 | S | T/D | `pan_wheel_step_hz` yields ~1% of span snapped to the 10 Hz grid, never zero at any span in the `#SPN` 6–368 kHz range, and under 10 kHz at the widest span so a click cannot cross a band (test); wheel-tuning a pane moves a fraction of the visible window at every span (demo). |
+| `FR-PAN-11` | place the spectrum trace and the waterfall on a single horizontal convention — a display bin is a **cell** covering `[i/n, (i+1)/n]` of the view and sampled at its centre — so the two agree pixel-for-pixel at any bin count. | STK-09 | S | T/D | `bin_to_x` round-trips against `column_to_bin` for every bin, places no bin on a canvas edge, and keeps the view midpoint fixed as the bin count varies (test); the trace sits over the waterfall features it describes at both wide and narrow spans (demo). |
 
 ## J2. Antenna Tuner & Tune — `FR-ATU`, `FR-TX-TUNE`
 
@@ -341,3 +342,4 @@ syntax per the Programmer's Reference D12, cross-checked vs QK4 (`R-EXT-03`).*
 | 2026-07-20 | 0.24 | DC0SK | Added FR-PAN-10 (pan wheel step follows the displayed span). Closes #130: the pan wheel stepped by the radio's `VT`, observed at **1 MHz** on live hardware, so a stray scroll left the band and triggered band-stack recalls that silently changed mode and DSP settings. Also wires the panadapter noise blanker (`#NB`/`#NBL`) into the DISPLAY screen under the existing FR-PAN-CTL-01 — closes #127, where both encoders existed and were tested but nothing in the app called them. |
 | 2026-07-20 | 0.25 | DC0SK | Added FR-UI-HOLD-01 (tap vs hold). The gap analysis' top finding was that the K4's entire interaction grammar is tap-vs-hold — every switch carries a white tap label and a yellow hold label (D14 p.16) — and the app had no press-and-hold anywhere. Threshold is the radio's own ~½ s (D14 p.359). First control converted: AGC, where a tap selects slow/fast and a hold switches AGC off (D14 p.909); previously a tap cycled through off, so an operator could disable AGC while looking for fast. |
 | 2026-07-20 | 0.26 | DC0SK | Added FR-UI-TX-01 (TX indicator red whenever on air). Raised from hardware testing: the indicator was driven by `transmitting`, which a **tune deliberately does not set** so the mic path stays closed — so the TX box stayed dark during an ATU tune while the radio was transmitting. Now driven by `on_air` (transmit **or** tune) and coloured with a new `OnAir` red role, distinct from the amber `TxActive` used for "armed". |
+| 2026-07-20 | 0.27 | DC0SK | Added FR-PAN-11 (one horizontal convention for trace and waterfall). Raised from hardware testing: at a 6 kHz span the two panes' waterfalls looked unlike each other despite identical scales. The trace mapped bin `i` to `i/(n−1)×width`, pinning the end bins to the canvas edges and stretching it by `n/(n−1)` against the waterfall, which samples cell centres. That is 0.1% at 1024 bins and 1.7% plus a half-bin offset at 60 — and panes cropped to different bin counts stretched by different amounts. |

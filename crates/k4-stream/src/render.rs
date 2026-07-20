@@ -130,6 +130,28 @@ pub fn resample_peak(bins: &[f32], columns: usize) -> Vec<f32> {
         .collect()
 }
 
+/// Horizontal centre of display bin `i` of `n`, across a canvas `width` wide.
+///
+/// Bins are **cells, not points**: bin `i` covers `[i/n, (i+1)/n]` of the view
+/// and is sampled at its centre. This is the same convention
+/// [`column_to_bin`] uses, so the spectrum trace and the waterfall land on the
+/// same pixels.
+///
+/// The trace previously used `i / (n - 1) × width`, which pins the first and
+/// last bins to the canvas edges and so stretches the trace by `n / (n - 1)`
+/// relative to the waterfall beneath it. At 1024 bins that is 0.1% and
+/// invisible; at 60 bins — a 6 kHz view cropped from a wide tier — it is 1.7%
+/// plus a half-bin offset, and two panes with different bin counts stretch by
+/// different amounts.
+///
+/// trace: FR-PAN-11
+pub fn bin_to_x(i: usize, n: usize, width: f32) -> f32 {
+    if n == 0 {
+        return 0.0;
+    }
+    (i as f32 + 0.5) / n as f32 * width
+}
+
 /// Which bin of a waterfall row falls under output `column`, or `None` if that
 /// column lies outside the frequencies the row sampled.
 ///
