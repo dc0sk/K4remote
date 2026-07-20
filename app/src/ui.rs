@@ -458,27 +458,42 @@ pub fn is_hold(elapsed: Option<std::time::Duration>) -> bool {
     matches!(elapsed, Some(d) if d >= HOLD_THRESHOLD)
 }
 
-/// Whether a key press is the **emergency-stop hotkey** (`Ctrl+C`).
+/// Whether a key press should trigger the **emergency stop**.
 ///
-/// Deliberately unconditional: it fires wherever focus happens to be,
-/// including inside a text field, and therefore **takes `Ctrl+C` away from
-/// copy** throughout the app. That trade was made on purpose. A safety control
-/// that works only when focus is somewhere particular is not a safety control,
-/// and the failure directions are not symmetric — a spurious trigger merely
-/// *stops* transmission, whereas a missed one leaves the radio keyed. The
-/// diagnostics console keeps its COPY button for the case this displaces.
+/// Two routes, and the distinction between them matters:
 ///
-/// Either Ctrl (or the Mac Command key, which iced folds into `command()`)
-/// counts, and other modifiers alongside it are ignored so `Ctrl+Shift+C`
-/// stops too rather than falling through to nothing.
+/// * **`ESC` while on air.** The biggest, most isolated key on the board,
+///   findable without looking, universally "get me out", and colliding with
+///   nothing. Off air it keeps dismissing popups and dialogs. This is a gate
+///   on *state*, not on *focus* — which is why it is sound where a
+///   focus-dependent binding would not be: focus is unrelated to whether the
+///   operator needs to stop, whereas "not on air" is precisely the condition
+///   under which there is nothing to stop. The gate can never withhold the
+///   function at the moment it is wanted.
+///
+/// * **`Ctrl+Shift+X`, unconditional.** The backstop for the one hole in the
+///   above: if the app's idea of on-air is stale — radio keyed, snapshot not
+///   yet caught up — `ESC` would not fire. This one does not consult state at
+///   all.
+///
+/// `Ctrl+C` is deliberately *not* used: it would take copy away app-wide, and
+/// an arbitrary chord is the wrong thing to have to recall under stress.
 ///
 /// trace: FR-TX-SAFE-05
-pub fn is_estop_hotkey(key: &iced::keyboard::Key, mods: iced::keyboard::Modifiers) -> bool {
-    let is_c = match key {
-        iced::keyboard::Key::Character(c) => c.as_str().eq_ignore_ascii_case("c"),
+pub fn is_estop_press(
+    key: &iced::keyboard::Key,
+    mods: iced::keyboard::Modifiers,
+    on_air: bool,
+) -> bool {
+    use iced::keyboard::{key::Named, Key};
+    if matches!(key, Key::Named(Named::Escape)) && on_air {
+        return true;
+    }
+    let is_x = match key {
+        Key::Character(c) => c.as_str().eq_ignore_ascii_case("x"),
         _ => false,
     };
-    is_c && (mods.control() || mods.command())
+    is_x && (mods.control() || mods.command()) && mods.shift()
 }
 
 /// Whether the radio is **on air** by any route.
@@ -2034,51 +2049,96 @@ mod estop_hotkey_tests {
     use super::*;
     use iced::keyboard::{key::Named, Key, Modifiers};
 
-    fn c() -> Key {
-        Key::Character("c".into())
+    fn esc() -> Key {
+        Key::Named(Named::Escape)
+    }
+    fn ch(c: &str) -> Key {
+        Key::Character(c.into())
     }
 
-    /// Ctrl+C fires the emergency stop, in either letter case.
+    /// On air, ESC stops — whatever modifiers happen to be down.
     /// trace: FR-TX-SAFE-05
     #[test]
-    fn fr_tx_safe_05_ctrl_c_is_the_estop() {
-        assert!(is_estop_hotkey(&c(), Modifiers::CTRL));
+    fn fr_tx_safe_05_esc_stops_while_on_air() {
+        assert!(is_estop_press(&esc(), Modifiers::empty(), true));
         assert!(
-            is_estop_hotkey(&Key::Character("C".into()), Modifiers::CTRL),
-            "a shifted C must still stop"
-        );
-        assert!(is_estop_hotkey(&c(), Modifiers::COMMAND), "Cmd+C on macOS");
-        assert!(
-            is_estop_hotkey(&c(), Modifiers::CTRL | Modifiers::SHIFT),
-            "extra modifiers must not swallow the stop"
+            is_estop_press(&esc(), Modifiers::SHIFT, true),
+            "a stray modifier must not swallow the stop"
         );
     }
 
-    /// A bare `C` must not stop the transmitter — typing the letter in a
-    /// callsign or a CAT macro cannot be an emergency action.
-    /// trace: FR-TX-SAFE-05
+    /// Off air, ESC is *not* a stop — it stays the dismiss key, so closing a
+    /// popup cannot be mistaken for an emergency action.
+    /// trace: FR-TX-SAFE-05, FR-UI-POPUP-01
     #[test]
-    fn fr_tx_safe_05_bare_c_does_not_stop() {
-        assert!(!is_estop_hotkey(&c(), Modifiers::empty()));
-        assert!(!is_estop_hotkey(&c(), Modifiers::SHIFT));
-        assert!(!is_estop_hotkey(&c(), Modifiers::ALT));
+    fn fr_tx_safe_05_esc_off_air_is_not_a_stop() {
+        assert!(!is_estop_press(&esc(), Modifiers::empty(), false));
     }
 
-    /// Other Ctrl chords are not the emergency stop.
+    /// The backstop stops regardless of what the app believes about on-air
+    /// state — the case a stale snapshot would otherwise strand.
     /// trace: FR-TX-SAFE-05
     #[test]
-    fn fr_tx_safe_05_other_ctrl_chords_are_not_the_estop() {
-        for ch in ["a", "v", "x", "z", "b", "d"] {
+    fn fr_tx_safe_05_backstop_ignores_on_air_state() {
+        for on_air in [true, false] {
             assert!(
-                !is_estop_hotkey(&Key::Character(ch.into()), Modifiers::CTRL),
-                "Ctrl+{ch} must not stop"
+                is_estop_press(&ch("x"), Modifiers::CTRL | Modifiers::SHIFT, on_air),
+                "Ctrl+Shift+X must stop with on_air={on_air}"
+            );
+            assert!(
+                is_estop_press(&ch("X"), Modifiers::CTRL | Modifiers::SHIFT, on_air),
+                "shifted X reports upper-case on some layouts"
+            );
+            assert!(
+                is_estop_press(&ch("x"), Modifiers::COMMAND | Modifiers::SHIFT, on_air),
+                "Cmd+Shift+X on macOS"
             );
         }
-        assert!(!is_estop_hotkey(
-            &Key::Named(Named::Escape),
-            Modifiers::CTRL
-        ));
-        assert!(!is_estop_hotkey(&Key::Named(Named::Space), Modifiers::CTRL));
+    }
+
+    /// The backstop needs its full chord — partial presses are ordinary
+    /// editing keys (Ctrl+X is cut) and must not stop the transmitter.
+    /// trace: FR-TX-SAFE-05
+    #[test]
+    fn fr_tx_safe_05_partial_chords_do_not_stop() {
+        for on_air in [true, false] {
+            assert!(
+                !is_estop_press(&ch("x"), Modifiers::CTRL, on_air),
+                "Ctrl+X is cut"
+            );
+            assert!(!is_estop_press(&ch("x"), Modifiers::SHIFT, on_air));
+            assert!(!is_estop_press(&ch("x"), Modifiers::empty(), on_air));
+        }
+    }
+
+    /// Ordinary editing chords are left alone — in particular `Ctrl+C`, which
+    /// an earlier revision of this requirement had taken over.
+    /// trace: FR-TX-SAFE-05
+    #[test]
+    fn fr_tx_safe_05_editing_chords_are_untouched() {
+        for c in ["c", "v", "a", "z", "s"] {
+            for on_air in [true, false] {
+                assert!(
+                    !is_estop_press(&ch(c), Modifiers::CTRL, on_air),
+                    "Ctrl+{c} must remain an editing shortcut"
+                );
+                assert!(
+                    !is_estop_press(&ch(c), Modifiers::CTRL | Modifiers::SHIFT, on_air),
+                    "Ctrl+Shift+{c} must not stop"
+                );
+            }
+        }
+    }
+
+    /// Typing plain letters never stops the transmitter, even mid-transmission
+    /// (a CW `KY` message is typed while on air).
+    /// trace: FR-TX-SAFE-05
+    #[test]
+    fn fr_tx_safe_05_typing_never_stops() {
+        for c in ["a", "x", "c", "e", "q"] {
+            assert!(!is_estop_press(&ch(c), Modifiers::empty(), true));
+            assert!(!is_estop_press(&ch(c), Modifiers::SHIFT, true));
+        }
     }
 }
 

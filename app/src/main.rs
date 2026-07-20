@@ -1902,7 +1902,10 @@ impl App {
                 // Emergency stop (FR-TX-SAFE-05) is checked before *everything*
                 // — modals, hotkey capture, text entry. An emergency control
                 // that can be swallowed by whatever has focus is not one.
-                if ui::is_estop_hotkey(&key, mods) {
+                // ESC stops while on air (and so must be tested before the ESC
+                // dismiss chain below); Ctrl+Shift+X always stops.
+                if ui::is_estop_press(&key, mods, ui::on_air(self.ui.transmitting, self.ui.tuning))
+                {
                     self.send(WorkerCmd::EmergencyStop);
                     return Task::none();
                 }
@@ -7675,7 +7678,7 @@ mod estop_wiring_tests {
             .find("Message::KeyPressed(key, mods) => {")
             .expect("the KeyPressed handler must exist");
         let estop = src[handler..]
-            .find("ui::is_estop_hotkey(")
+            .find("ui::is_estop_press(")
             .expect("KeyPressed must dispatch the emergency stop (FR-TX-SAFE-05)");
         let body = &src[handler..handler + estop];
 
@@ -7691,7 +7694,7 @@ mod estop_wiring_tests {
             assert!(
                 !body.contains(barrier),
                 "`{barrier}` is handled before the emergency stop — it could \
-                 swallow Ctrl+C and leave the radio keyed:\n{body}"
+                 swallow the stop and leave the radio keyed:\n{body}"
             );
         }
 

@@ -313,9 +313,8 @@ troubleshooting.
 - **Filter** — type any text to show only log lines containing it (case-insensitive) — e.g. type
   `RO` to watch just RIT/XIT traffic, or `kpod` for K-Pod events.
 - **COPY** — copy the currently-visible (filtered) lines to the clipboard, to paste elsewhere.
-- **Selecting text** — the log is a read-only text area: drag to select, then use **COPY**. Turn
-  **AUTOSCROLL off** first so the buffer holds still while you select. (**`Ctrl+C` will not copy** —
-  it is the emergency stop, see [Keyboard shortcuts](#11-keyboard-shortcuts).)
+- **Selecting text** — the log is a read-only text area: drag to select and press **Ctrl+C** to copy
+  just the selection. Turn **AUTOSCROLL off** first so the buffer holds still while you select.
 - **Raw CAT** — type a command (e.g. `IF;`) and **Send** to issue it directly and see the reply.
 
 The log keeps several thousand recent lines; the header shows how many are currently visible.
@@ -349,17 +348,21 @@ The **theme** (dark / light / high-contrast / follow-system) cycles from the hea
 
 | Key | Action |
 |---|---|
-| **`Ctrl+C`** | **EMERGENCY STOP** — cease transmission immediately |
+| **ESC** *(while transmitting)* | **EMERGENCY STOP** — cease transmission immediately |
+| **`Ctrl+Shift+X`** | **EMERGENCY STOP** — always, whatever the app thinks it is doing |
 | **PTT hotkey** (default `Ctrl+Space`) | Transmit — toggle or hold-to-talk (configurable) |
-| **ESC** | Close a control popup, then the Settings or About dialog / cancel hotkey capture |
+| **ESC** *(not transmitting)* | Close a control popup, then the Settings or About dialog / cancel hotkey capture |
 
-> ⚠️ **`Ctrl+C` is the emergency stop, not copy.** It is handled before everything else — dialogs,
-> hotkey capture, and text fields included — so that it works wherever the keyboard focus happens
-> to be. That reliability is the point: a stop that only works when focus is in the right place is
-> no use in an emergency, and a stop triggered by accident merely takes you off the air.
+> ⚠️ **Stopping transmission.** Whenever you are **on air** — transmitting *or* running a tune —
+> **ESC** stops the radio. It is handled before everything else, so it works no matter where the
+> keyboard focus happens to be: a dialog, a text box, the CAT macro editor. When you are *not* on
+> air, ESC does its ordinary job of closing whatever is open.
 >
-> The consequence is that **`Ctrl+C` no longer copies anywhere in the app.** To copy from the
-> diagnostics log, use its **COPY** button.
+> **`Ctrl+Shift+X` always stops**, whether or not the app believes you are transmitting. Use it if
+> the display ever looks out of step with the radio.
+>
+> Note that while transmitting, ESC will **stop the radio rather than close an open popup** — close
+> it with its **X** button or by clicking outside instead.
 
 ---
 
