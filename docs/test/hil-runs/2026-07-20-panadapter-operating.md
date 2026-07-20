@@ -60,6 +60,27 @@ yet established.
    mapped both `-1` and `0` to `Some(false)`, so a refusal by the radio looked
    exactly like a normal off state and the button appeared dead.
 
-Both are fixed; see the accompanying change. **Follow-up needed on hardware:**
-confirm whether the radio was reporting `-1` (and if so, which display setting
-blocks the mini-pan), and confirm the mini-pan now renders.
+Both are fixed; see the accompanying change.
+
+### Resolved: what `#MP$-1` actually means
+
+Established on the radio by DC0SK, 2026-07-20:
+
+> **The mini-pan requires dual-pan to be OFF when the sub receiver is
+> disabled.** With dual-pan on and no sub RX, the K4 reports `#MP$-1` and the
+> mini-pan cannot be displayed. Turning dual-pan off (or enabling the sub RX)
+> allows it.
+
+This is documented in **neither** D12 nor D14 — the `#MP$` NOTE says only "based
+on current radio settings", and D14's Mini-Pan sections give no precondition at
+all. It was found by experiment.
+
+It also makes sense of the mechanism: D14 (p.1489) says tapping an S-meter
+*switches to* the mini-pan **for that receiver**, so the mini-pan occupies a
+receiver's meter area. With dual-pan on and no second receiver, there is no
+coherent place for it.
+
+Both faults in the fix above were therefore real but *neither* was the cause the
+operator hit: the radio was refusing all along, and the pre-fix UI could not say
+so. The header-size defect would have broken rendering once the refusal was
+lifted.
