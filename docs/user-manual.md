@@ -348,8 +348,21 @@ The **theme** (dark / light / high-contrast / follow-system) cycles from the hea
 
 | Key | Action |
 |---|---|
+| **ESC** *(while transmitting)* | **EMERGENCY STOP** — cease transmission immediately |
+| **`Ctrl+Shift+X`** | **EMERGENCY STOP** — always, whatever the app thinks it is doing |
 | **PTT hotkey** (default `Ctrl+Space`) | Transmit — toggle or hold-to-talk (configurable) |
-| **ESC** | Close the Settings or About dialog / cancel hotkey capture |
+| **ESC** *(not transmitting)* | Close a control popup, then the Settings or About dialog / cancel hotkey capture |
+
+> ⚠️ **Stopping transmission.** Whenever you are **on air** — transmitting *or* running a tune —
+> **ESC** stops the radio. It is handled before everything else, so it works no matter where the
+> keyboard focus happens to be: a dialog, a text box, the CAT macro editor. When you are *not* on
+> air, ESC does its ordinary job of closing whatever is open.
+>
+> **`Ctrl+Shift+X` always stops**, whether or not the app believes you are transmitting. Use it if
+> the display ever looks out of step with the radio.
+>
+> Note that while transmitting, ESC will **stop the radio rather than close an open popup** — close
+> it with its **X** button or by clicking outside instead.
 
 ---
 

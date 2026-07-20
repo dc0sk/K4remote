@@ -230,6 +230,11 @@ struct App {
     // above have one: the popup's slider must follow the drag, not the
     // read-back it is racing (FR-UI-POPUP-01).
     atten_db: u8,
+    // Optimistic override for the mirror above. A read-back already in flight
+    // when the level was set reports the *previous* one, and the resync would
+    // copy it over the operator's choice — the intermittent "jumps back to the
+    // old value". Held until the radio confirms, expired if it never does.
+    opt_atten: ui::OptLevel,
     vox_gain: u8,
     anti_vox: u8,
     // CW sidetone pitch Hz (FR-KEY-02); full-QSK + VOX/QSK delay 10-ms (FR-TX-DLY-01).
@@ -868,6 +873,7 @@ impl App {
             nb_level: 5,
             nr_level: 5,
             atten_db: 0,
+            opt_atten: ui::OptLevel::default(),
             vox_gain: 20,
             anti_vox: 0,
             compression: 0,
@@ -1460,6 +1466,7 @@ impl App {
                 // Keep the mirror with the chip, so opening the popup after a
                 // hold shows the level the hold just set.
                 self.atten_db = next;
+                self.opt_atten.set(next);
                 self.send(WorkerCmd::Cat(target_rx(
                     k4_protocol::cat::set_attenuator(next, next > 0),
                     self.active_sub(),
@@ -1491,6 +1498,7 @@ impl App {
                 // back on the periodic resync, as it does for every other
                 // level slider.
                 self.atten_db = db;
+                self.opt_atten.set(db);
                 let sub = self.active_sub();
                 self.send(WorkerCmd::Cat(target_rx(
                     k4_protocol::cat::set_attenuator(db, db > 0),
@@ -1891,6 +1899,16 @@ impl App {
                 self.push_kpod_buttons();
             }
             Message::KeyPressed(key, mods) => {
+                // Emergency stop (FR-TX-SAFE-05) is checked before *everything*
+                // — modals, hotkey capture, text entry. An emergency control
+                // that can be swallowed by whatever has focus is not one.
+                // ESC stops while on air (and so must be tested before the ESC
+                // dismiss chain below); Ctrl+Shift+X always stops.
+                if ui::is_estop_press(&key, mods, ui::on_air(self.ui.transmitting, self.ui.tuning))
+                {
+                    self.send(WorkerCmd::EmergencyStop);
+                    return Task::none();
+                }
                 // ESC dismisses an open modal (Settings / About, FR-UI-23) or
                 // cancels an in-progress hotkey capture, before other key handling.
                 if matches!(
@@ -2395,6 +2413,13 @@ impl App {
                 // confirms our value, or after a staleness timeout (~2 s) so a
                 // clamped/rejected set falls back to the radio's real value.
                 self.opt_vfo.reconcile(self.ui.vfo_a_hz, self.ui.vfo_b_hz);
+                // Same contract for the attenuator level the operator just set.
+                let atten_snap = if self.active_sub() {
+                    self.ui.radio.sub_atten_db
+                } else {
+                    self.ui.atten_db
+                };
+                self.opt_atten.reconcile(atten_snap);
                 // Expire the momentary switch-tap highlight.
                 if self.switch_flash_ticks > 0 {
                     self.switch_flash_ticks -= 1;
@@ -4074,12 +4099,16 @@ impl App {
         if let Some(v) = if sub { r.sub_nb_level } else { r.nb_level } {
             self.nb_level = v;
         }
-        if let Some(v) = if sub {
-            r.sub_atten_db
-        } else {
-            self.ui.atten_db
-        } {
-            self.atten_db = v;
+        // Skipped while an optimistic level is pending: the read-back this
+        // would copy may predate the operator's change (FR-UI-POPUP-01).
+        if !self.opt_atten.is_pending() {
+            if let Some(v) = if sub {
+                r.sub_atten_db
+            } else {
+                self.ui.atten_db
+            } {
+                self.atten_db = v;
+            }
         }
         if let Some(v) = if sub { r.sub_nr_level } else { r.nr_level } {
             self.nr_level = v;
@@ -7624,6 +7653,57 @@ mod band_target_tests {
         assert_eq!(target_rx("BN+;".to_string(), true), "BN$+;");
         assert_eq!(target_rx("BN-;".to_string(), true), "BN$-;");
         assert_eq!(target_rx("BN^;".to_string(), true), "BN$^;");
+    }
+}
+
+#[cfg(test)]
+mod estop_wiring_tests {
+    /// The emergency-stop hotkey must be dispatched **first** in
+    /// `Message::KeyPressed`, before ESC/modal handling, hotkey capture, and
+    /// text entry.
+    ///
+    /// Structural, like the tap/hold guard below, and for the same reason: the
+    /// pure predicate (`ui::is_estop_hotkey`) is thoroughly unit-tested, but
+    /// nothing in the suite proves it is *wired*. Verified by sabotage —
+    /// disabling the dispatch left all 266 tests green, which for a safety
+    /// control is not an acceptable place to leave it. Anything inserted above
+    /// this check could swallow the stop when focus is in a text field, which
+    /// is exactly the case the requirement exists to cover.
+    ///
+    /// trace: FR-TX-SAFE-05
+    #[test]
+    fn fr_tx_safe_05_estop_is_dispatched_before_all_other_key_handling() {
+        let src = include_str!("main.rs");
+        let handler = src
+            .find("Message::KeyPressed(key, mods) => {")
+            .expect("the KeyPressed handler must exist");
+        let estop = src[handler..]
+            .find("ui::is_estop_press(")
+            .expect("KeyPressed must dispatch the emergency stop (FR-TX-SAFE-05)");
+        let body = &src[handler..handler + estop];
+
+        // Nothing that consumes a key press may precede it.
+        for barrier in [
+            "self.capturing_hotkey",
+            "self.ptt_hotkey",
+            "self.settings_open",
+            "self.about_open",
+            "self.rx_popup",
+            "Named::Escape",
+        ] {
+            assert!(
+                !body.contains(barrier),
+                "`{barrier}` is handled before the emergency stop — it could \
+                 swallow the stop and leave the radio keyed:\n{body}"
+            );
+        }
+
+        // And it must actually send the stop, not merely test for the key.
+        let after = &src[handler + estop..(handler + estop + 300).min(src.len())];
+        assert!(
+            after.contains("WorkerCmd::EmergencyStop"),
+            "the hotkey must dispatch EmergencyStop:\n{after}"
+        );
     }
 }
 

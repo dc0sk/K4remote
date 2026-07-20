@@ -458,6 +458,44 @@ pub fn is_hold(elapsed: Option<std::time::Duration>) -> bool {
     matches!(elapsed, Some(d) if d >= HOLD_THRESHOLD)
 }
 
+/// Whether a key press should trigger the **emergency stop**.
+///
+/// Two routes, and the distinction between them matters:
+///
+/// * **`ESC` while on air.** The biggest, most isolated key on the board,
+///   findable without looking, universally "get me out", and colliding with
+///   nothing. Off air it keeps dismissing popups and dialogs. This is a gate
+///   on *state*, not on *focus* — which is why it is sound where a
+///   focus-dependent binding would not be: focus is unrelated to whether the
+///   operator needs to stop, whereas "not on air" is precisely the condition
+///   under which there is nothing to stop. The gate can never withhold the
+///   function at the moment it is wanted.
+///
+/// * **`Ctrl+Shift+X`, unconditional.** The backstop for the one hole in the
+///   above: if the app's idea of on-air is stale — radio keyed, snapshot not
+///   yet caught up — `ESC` would not fire. This one does not consult state at
+///   all.
+///
+/// `Ctrl+C` is deliberately *not* used: it would take copy away app-wide, and
+/// an arbitrary chord is the wrong thing to have to recall under stress.
+///
+/// trace: FR-TX-SAFE-05
+pub fn is_estop_press(
+    key: &iced::keyboard::Key,
+    mods: iced::keyboard::Modifiers,
+    on_air: bool,
+) -> bool {
+    use iced::keyboard::{key::Named, Key};
+    if matches!(key, Key::Named(Named::Escape)) && on_air {
+        return true;
+    }
+    let is_x = match key {
+        Key::Character(c) => c.as_str().eq_ignore_ascii_case("x"),
+        _ => false,
+    };
+    is_x && (mods.control() || mods.command()) && mods.shift()
+}
+
 /// Whether the radio is **on air** by any route.
 ///
 /// Not the same as the mic path being open. A tune emits a carrier without
@@ -1277,6 +1315,57 @@ impl OptVfo {
     }
 }
 
+/// Optimistic override for a **level** the operator just set — the attenuator
+/// (FR-UI-POPUP-01), same confirm-or-expire contract as [`OptVfo`].
+///
+/// Without this, a read-back that was already in flight when the level was set
+/// reports the *previous* level, and the next resync copies it over the
+/// operator's choice: the slider jumps back, intermittently, depending purely
+/// on whether a poll happened to be in the air. Holding until the radio
+/// **confirms** fixes that; expiring on staleness means a level the radio
+/// rejects still falls back to reality rather than sticking forever.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct OptLevel {
+    pending: Option<u8>,
+    age: u8,
+}
+
+impl OptLevel {
+    /// Ticks to hold an unconfirmed value. Longer than [`OptVfo::STALE_TICKS`]:
+    /// the attenuator is reconciled by the ~3 s resync rather than by a
+    /// per-tick read-back, so it needs to outlive one resync interval.
+    pub const STALE_TICKS: u8 = 40;
+
+    /// Record a locally-set level, restarting the staleness clock.
+    pub fn set(&mut self, v: u8) {
+        self.pending = Some(v);
+        self.age = 0;
+    }
+
+    /// Whether a local value is currently being held (so the resync must not
+    /// overwrite the mirror).
+    pub fn is_pending(&self) -> bool {
+        self.pending.is_some()
+    }
+
+    /// Reconcile one tick against the radio's reported level: drop the
+    /// override once the radio agrees, and expire it if it never does.
+    pub fn reconcile(&mut self, snapshot: Option<u8>) {
+        if self.pending.is_some() && self.pending == snapshot {
+            self.pending = None;
+            self.age = 0;
+            return;
+        }
+        if self.pending.is_some() {
+            self.age = self.age.saturating_add(1);
+            if self.age > Self::STALE_TICKS {
+                self.pending = None;
+                self.age = 0;
+            }
+        }
+    }
+}
+
 /// "Adopt on genuine change" reconciler (the `last_split` / `last_pwr_range`
 /// pattern): update `last` and return the value to adopt only when the snapshot
 /// has genuinely changed. A static or absent read-back returns `None`, so a
@@ -1874,6 +1963,182 @@ mod tests {
 
         assert_eq!(Pane::A.label(), "A");
         assert_eq!(Pane::B.label(), "B");
+    }
+}
+
+#[cfg(test)]
+mod opt_level_tests {
+    use super::*;
+
+    /// The reported fault: a read-back that predates the operator's change
+    /// must not be adopted. Here the radio is still reporting 21 dB when the
+    /// operator sets 6 — the override has to survive that tick.
+    /// trace: FR-UI-POPUP-01
+    #[test]
+    fn fr_ui_popup_01_stale_readback_does_not_revert_the_operator() {
+        let mut o = OptLevel::default();
+        o.set(6);
+        o.reconcile(Some(21)); // in-flight reply, from before the set
+        assert!(o.is_pending(), "a stale 21 dB must not clear the override");
+        o.reconcile(Some(21));
+        assert!(o.is_pending(), "still held while the radio disagrees");
+    }
+
+    /// Once the radio confirms, the override is dropped so the radio is
+    /// authoritative again — including when the operator changes it at the rig.
+    /// trace: FR-UI-POPUP-01
+    #[test]
+    fn fr_ui_popup_01_confirmation_releases_the_override() {
+        let mut o = OptLevel::default();
+        o.set(6);
+        o.reconcile(Some(6));
+        assert!(!o.is_pending(), "confirmed → the radio drives again");
+
+        // And a later radio-side change is not blocked by a stale override.
+        o.reconcile(Some(12));
+        assert!(!o.is_pending());
+    }
+
+    /// A level the radio never accepts must not stick forever — it expires,
+    /// so the UI ends up showing what the radio actually has.
+    /// trace: FR-UI-POPUP-01
+    #[test]
+    fn fr_ui_popup_01_unconfirmed_override_expires() {
+        let mut o = OptLevel::default();
+        o.set(9);
+        for _ in 0..=OptLevel::STALE_TICKS {
+            o.reconcile(Some(21)); // radio rejects it, keeps reporting 21
+        }
+        assert!(
+            !o.is_pending(),
+            "an override the radio never confirms must expire"
+        );
+    }
+
+    /// The hold must outlive one resync interval, or the very read-back it
+    /// exists to survive would arrive after it expired.
+    /// trace: FR-UI-POPUP-01
+    #[test]
+    fn fr_ui_popup_01_hold_outlives_a_resync_interval() {
+        // The tick is 100 ms; the settings resync runs about every 3 s.
+        let hold_ms = u32::from(OptLevel::STALE_TICKS) * 100;
+        assert!(
+            hold_ms > 3_000,
+            "hold is {hold_ms} ms, shorter than the ~3 s resync it must survive"
+        );
+    }
+
+    /// Setting again restarts the clock — a drag is many sets, and the last
+    /// one deserves a full hold rather than inheriting the first one's age.
+    /// trace: FR-UI-POPUP-01
+    #[test]
+    fn fr_ui_popup_01_setting_again_restarts_the_clock() {
+        let mut o = OptLevel::default();
+        o.set(3);
+        for _ in 0..OptLevel::STALE_TICKS {
+            o.reconcile(Some(21));
+        }
+        o.set(9); // the operator moves it again, just before expiry
+        o.reconcile(Some(21));
+        assert!(o.is_pending(), "the new value must get a full hold");
+    }
+}
+
+#[cfg(test)]
+mod estop_hotkey_tests {
+    use super::*;
+    use iced::keyboard::{key::Named, Key, Modifiers};
+
+    fn esc() -> Key {
+        Key::Named(Named::Escape)
+    }
+    fn ch(c: &str) -> Key {
+        Key::Character(c.into())
+    }
+
+    /// On air, ESC stops — whatever modifiers happen to be down.
+    /// trace: FR-TX-SAFE-05
+    #[test]
+    fn fr_tx_safe_05_esc_stops_while_on_air() {
+        assert!(is_estop_press(&esc(), Modifiers::empty(), true));
+        assert!(
+            is_estop_press(&esc(), Modifiers::SHIFT, true),
+            "a stray modifier must not swallow the stop"
+        );
+    }
+
+    /// Off air, ESC is *not* a stop — it stays the dismiss key, so closing a
+    /// popup cannot be mistaken for an emergency action.
+    /// trace: FR-TX-SAFE-05, FR-UI-POPUP-01
+    #[test]
+    fn fr_tx_safe_05_esc_off_air_is_not_a_stop() {
+        assert!(!is_estop_press(&esc(), Modifiers::empty(), false));
+    }
+
+    /// The backstop stops regardless of what the app believes about on-air
+    /// state — the case a stale snapshot would otherwise strand.
+    /// trace: FR-TX-SAFE-05
+    #[test]
+    fn fr_tx_safe_05_backstop_ignores_on_air_state() {
+        for on_air in [true, false] {
+            assert!(
+                is_estop_press(&ch("x"), Modifiers::CTRL | Modifiers::SHIFT, on_air),
+                "Ctrl+Shift+X must stop with on_air={on_air}"
+            );
+            assert!(
+                is_estop_press(&ch("X"), Modifiers::CTRL | Modifiers::SHIFT, on_air),
+                "shifted X reports upper-case on some layouts"
+            );
+            assert!(
+                is_estop_press(&ch("x"), Modifiers::COMMAND | Modifiers::SHIFT, on_air),
+                "Cmd+Shift+X on macOS"
+            );
+        }
+    }
+
+    /// The backstop needs its full chord — partial presses are ordinary
+    /// editing keys (Ctrl+X is cut) and must not stop the transmitter.
+    /// trace: FR-TX-SAFE-05
+    #[test]
+    fn fr_tx_safe_05_partial_chords_do_not_stop() {
+        for on_air in [true, false] {
+            assert!(
+                !is_estop_press(&ch("x"), Modifiers::CTRL, on_air),
+                "Ctrl+X is cut"
+            );
+            assert!(!is_estop_press(&ch("x"), Modifiers::SHIFT, on_air));
+            assert!(!is_estop_press(&ch("x"), Modifiers::empty(), on_air));
+        }
+    }
+
+    /// Ordinary editing chords are left alone — in particular `Ctrl+C`, which
+    /// an earlier revision of this requirement had taken over.
+    /// trace: FR-TX-SAFE-05
+    #[test]
+    fn fr_tx_safe_05_editing_chords_are_untouched() {
+        for c in ["c", "v", "a", "z", "s"] {
+            for on_air in [true, false] {
+                assert!(
+                    !is_estop_press(&ch(c), Modifiers::CTRL, on_air),
+                    "Ctrl+{c} must remain an editing shortcut"
+                );
+                assert!(
+                    !is_estop_press(&ch(c), Modifiers::CTRL | Modifiers::SHIFT, on_air),
+                    "Ctrl+Shift+{c} must not stop"
+                );
+            }
+        }
+    }
+
+    /// Typing plain letters never stops the transmitter, even mid-transmission
+    /// (a CW `KY` message is typed while on air).
+    /// trace: FR-TX-SAFE-05
+    #[test]
+    fn fr_tx_safe_05_typing_never_stops() {
+        for c in ["a", "x", "c", "e", "q"] {
+            assert!(!is_estop_press(&ch(c), Modifiers::empty(), true));
+            assert!(!is_estop_press(&ch(c), Modifiers::SHIFT, true));
+        }
     }
 }
 
