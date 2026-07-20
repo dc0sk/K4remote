@@ -430,6 +430,57 @@ pub fn bandwidth_button(hz: Option<u32>) -> ButtonState {
     ButtonState::new("BW", value)
 }
 
+/// How long a press must last to count as a **hold** rather than a tap.
+///
+/// D14 p.359: "A tap is a brief press, while a hold is any press longer than
+/// about 1/2 second." Matching the radio matters more than picking a nicer
+/// number — an operator's muscle memory is calibrated on the front panel
+/// (FR-UI-HOLD-01).
+pub const HOLD_THRESHOLD: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// Whether a press of `elapsed` duration is a hold.
+///
+/// A press with no recorded start is a **tap**, not a hold: losing the press
+/// time must never silently promote a tap into the destructive-er of the two
+/// actions.
+///
+/// trace: FR-UI-HOLD-01
+pub fn is_hold(elapsed: Option<std::time::Duration>) -> bool {
+    matches!(elapsed, Some(d) if d >= HOLD_THRESHOLD)
+}
+
+/// Next AGC mode for a **tap** (`GT`): slow (1) and fast (2) only.
+///
+/// D14 p.909: "Selects AGC slow (AGC-S) or fast (AGC-F) for the current
+/// operating mode." A tap therefore never lands on off — turning AGC off is
+/// the hold function, and reaching it by accident while cycling would leave
+/// the receiver wide open with no indication of why.
+///
+/// trace: FR-UI-HOLD-01
+pub fn agc_tap(cur: Option<u8>) -> u8 {
+    if cur == Some(1) {
+        2
+    } else {
+        1
+    }
+}
+
+/// Next AGC mode for a **hold** (`GT`): on/off, restoring slow when switching
+/// back on.
+///
+/// D14 p.909: "Holding this button turns AGC on or off (AGC-)." With AGC off
+/// the K4 falls back to an audio limiter (D14 p.911), so this is a real
+/// operating mode rather than a mistake — but it belongs behind the hold.
+///
+/// trace: FR-UI-HOLD-01
+pub fn agc_hold(cur: Option<u8>) -> u8 {
+    if cur == Some(0) {
+        1
+    } else {
+        0
+    }
+}
+
 /// Panadapter noise-blanker button (`#NB`): 0 off, 1 on, 2 auto.
 ///
 /// `auto` makes the pan NB follow the radio NB on/off, with the levels still
@@ -1611,5 +1662,90 @@ mod tests {
 
         assert_eq!(Pane::A.label(), "A");
         assert_eq!(Pane::B.label(), "B");
+    }
+}
+
+#[cfg(test)]
+mod taphold_tests {
+    use super::*;
+    use std::time::Duration;
+
+    /// The threshold is the radio's own: about half a second (D14 p.359).
+    /// trace: FR-UI-HOLD-01
+    #[test]
+    fn fr_ui_hold_01_threshold_matches_the_radio() {
+        assert_eq!(HOLD_THRESHOLD, Duration::from_millis(500));
+    }
+
+    /// A press at or past the threshold is a hold; anything shorter is a tap.
+    /// trace: FR-UI-HOLD-01
+    #[test]
+    fn fr_ui_hold_01_classifies_press_duration() {
+        assert!(!is_hold(Some(Duration::from_millis(0))));
+        assert!(!is_hold(Some(Duration::from_millis(120))), "a normal click");
+        assert!(!is_hold(Some(Duration::from_millis(499))));
+        assert!(
+            is_hold(Some(Duration::from_millis(500))),
+            "boundary is a hold"
+        );
+        assert!(is_hold(Some(Duration::from_millis(900))));
+        assert!(is_hold(Some(Duration::from_secs(5))), "a very long press");
+    }
+
+    /// A lost press time degrades to a tap. Holds carry the more surprising
+    /// action (AGC off, ATU bypass), so an unknown duration must never be
+    /// promoted into one.
+    /// trace: FR-UI-HOLD-01
+    #[test]
+    fn fr_ui_hold_01_unknown_press_is_a_tap() {
+        assert!(!is_hold(None));
+    }
+}
+
+#[cfg(test)]
+mod agc_taphold_tests {
+    use super::*;
+
+    /// A tap only ever selects slow or fast — never off (D14 p.909).
+    /// trace: FR-UI-HOLD-01
+    #[test]
+    fn fr_ui_hold_01_agc_tap_never_reaches_off() {
+        assert_eq!(agc_tap(Some(1)), 2, "slow → fast");
+        assert_eq!(agc_tap(Some(2)), 1, "fast → slow");
+        assert_eq!(agc_tap(Some(0)), 1, "off → slow, i.e. tapping restores AGC");
+        assert_eq!(agc_tap(None), 1, "unknown → slow");
+        // The property that matters: no tap can turn AGC off.
+        for cur in [None, Some(0), Some(1), Some(2), Some(9)] {
+            assert_ne!(agc_tap(cur), 0, "cur={cur:?} must not tap into AGC off");
+        }
+    }
+
+    /// A hold toggles AGC off and back on, restoring slow.
+    /// trace: FR-UI-HOLD-01
+    #[test]
+    fn fr_ui_hold_01_agc_hold_toggles_off() {
+        assert_eq!(agc_hold(Some(1)), 0, "slow → off");
+        assert_eq!(agc_hold(Some(2)), 0, "fast → off");
+        assert_eq!(agc_hold(Some(0)), 1, "off → slow");
+        assert_eq!(agc_hold(None), 0);
+    }
+
+    /// Tap and hold are different actions whenever AGC is on — the point of
+    /// the convention.
+    ///
+    /// They deliberately coincide from the **off** state: D14's tap "selects
+    /// slow or fast" and its hold "turns AGC on", and both of those mean slow
+    /// when starting from off. So an operator who cannot remember which
+    /// gesture restores AGC gets it back either way, which is the forgiving
+    /// direction.
+    /// trace: FR-UI-HOLD-01
+    #[test]
+    fn fr_ui_hold_01_tap_and_hold_differ_while_agc_is_on() {
+        for cur in [Some(1), Some(2)] {
+            assert_ne!(agc_tap(cur), agc_hold(cur), "cur={cur:?}");
+        }
+        // From off, both restore AGC rather than one of them being inert.
+        assert_eq!(agc_tap(Some(0)), agc_hold(Some(0)));
+        assert_ne!(agc_tap(Some(0)), 0, "neither gesture leaves AGC off");
     }
 }

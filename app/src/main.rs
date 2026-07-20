@@ -258,6 +258,8 @@ struct App {
     /// tooltip has no delay of its own, so the 100 ms UI tick drives it
     /// (FR-UI-TIP-01).
     hover: Option<(&'static str, std::time::Instant)>,
+    /// When the current press began, for tap-vs-hold (FR-UI-HOLD-01).
+    press_at: Option<std::time::Instant>,
     /// Whether tooltips are shown at all (persisted preference).
     tooltips: bool,
     /// Result of the last About-box update check (FR-UI-UPD-01).
@@ -548,6 +550,13 @@ enum Message {
     StartCaptureHotkey,
     ToggleKey,
     EmergencyStop,
+    /// AGC hold: switch AGC on/off (D14 p.909).
+    ToggleAgcOff,
+    /// A press began on a tap/hold control (FR-UI-HOLD-01).
+    PressDown,
+    /// A press ended: run the first message if it was a tap, the second if it
+    /// was held past [`ui::HOLD_THRESHOLD`].
+    TapOrHold(Box<Message>, Box<Message>),
     /// Pointer entered a control (tooltip hover tracking, FR-UI-TIP-01).
     HoverEnter(&'static str),
     /// Pointer left the control it was resting on.
@@ -835,6 +844,7 @@ impl App {
             hotkey_keyed: false,
             arm_flash: 0,
             hover: None,
+            press_at: None,
             tooltips,
             update_status: update::UpdateStatus::Idle,
             decode_on: false,
@@ -1381,8 +1391,10 @@ impl App {
             }
             Message::ToggleSplit => self.send(WorkerCmd::ToggleSplit),
             Message::CycleAgc => {
+                // Tap: slow ↔ fast only. Switching AGC off is the *hold*
+                // (D14 p.909), so a tap can never land on it by accident.
                 let sub = self.active_sub();
-                let next = (self.rx_agc_mode().unwrap_or(0) + 1) % 3;
+                let next = ui::agc_tap(self.rx_agc_mode());
                 self.send(WorkerCmd::Cat(target_rx(
                     k4_protocol::cat::set_agc(next),
                     sub,
@@ -1787,6 +1799,28 @@ impl App {
             }
             Message::ToggleKey => self.send(WorkerCmd::Key(!self.ui.transmitting)),
             Message::EmergencyStop => self.send(WorkerCmd::EmergencyStop),
+            Message::ToggleAgcOff => {
+                // Hold: AGC on/off, restoring slow (D14 p.909). With AGC off
+                // the radio falls back to its own audio limiter.
+                let sub = self.active_sub();
+                let next = ui::agc_hold(self.rx_agc_mode());
+                self.send(WorkerCmd::Cat(target_rx(
+                    k4_protocol::cat::set_agc(next),
+                    sub,
+                )));
+                self.send(WorkerCmd::Cat(target_rx("GT;".into(), sub)));
+            }
+            Message::PressDown => self.press_at = Some(std::time::Instant::now()),
+            Message::TapOrHold(tap, hold) => {
+                // The radio's own convention: tap and hold are different
+                // actions on the same control (D14 p.359). A press whose start
+                // we never saw counts as a tap — holds carry the more
+                // surprising action, so an unknown duration must not become one.
+                let held = ui::is_hold(self.press_at.map(|t| t.elapsed()));
+                self.press_at = None;
+                let next = if held { hold } else { tap };
+                return self.update(*next);
+            }
             Message::HoverEnter(id) => {
                 // Restart the dwell timer only when moving to a *different*
                 // control, so re-entering the same one mid-hover does not
@@ -5060,11 +5094,17 @@ impl App {
                 self.tooltips,
                 self.hover,
                 "rx.agc",
-                two_line_btn_dim(
-                    ui::agc_button(self.rx_agc_mode()),
-                    None,
-                    Some(Message::CycleAgc),
-                    rx_dim(ui::RxCtl::Agc),
+                // Tap = slow/fast, hold = AGC on/off — the radio's own pair
+                // (D14 p.909, FR-UI-HOLD-01).
+                tap_hold(
+                    Message::CycleAgc,
+                    Message::ToggleAgcOff,
+                    two_line_btn_dim(
+                        ui::agc_button(self.rx_agc_mode()),
+                        None,
+                        Some(Message::CycleAgc),
+                        rx_dim(ui::RxCtl::Agc),
+                    ),
                 ),
             ))
             .push(tipped(
@@ -6641,6 +6681,23 @@ fn tipped<'a>(
     MouseArea::new(inner)
         .on_enter(Message::HoverEnter(id))
         .on_exit(Message::HoverExit)
+        .into()
+}
+
+/// Give a control the radio's tap/hold pair (FR-UI-HOLD-01).
+///
+/// Every K4 switch carries a white tap function and a yellow hold function
+/// (D14 p.16); this reproduces that on a control the app already draws. The
+/// inner widget keeps its own `on_press` for the visual affordance, but the
+/// action is decided here on release, from how long the button was down.
+fn tap_hold<'a>(
+    tap: Message,
+    hold: Message,
+    content: impl Into<Element<'a, Message>>,
+) -> Element<'a, Message> {
+    MouseArea::new(content)
+        .on_press(Message::PressDown)
+        .on_release(Message::TapOrHold(Box::new(tap), Box::new(hold)))
         .into()
 }
 
