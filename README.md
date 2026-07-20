@@ -9,15 +9,18 @@ stakeholder needs down to individual tests, enforced by a build gate.
 
 ![K4 Remote main window](docs/screenshots/main.png)
 
-> **Status:** v0.2.3 — feature-complete; hardware bring-up in progress.
-> 162 hardware-free tests pass · clippy/fmt clean · traceability gate green · CI green on Linux/macOS/Windows.
-> VFO tuning, RIT/XIT, split, band, and the K-Pod (incl. F1–F8 tap/hold macros) are validated against a
-> real K4; audio / PTT / spectrum / serial bring-up is ongoing.
+> **Status:** v0.2.4 — feature-complete; hardware bring-up in progress.
+> 214 hardware-free tests pass · clippy/fmt clean · traceability gate green · CI green on Linux/macOS/Windows.
+> VFO tuning, RIT/XIT, split, band, panadapter click-to-QSY, and the K-Pod (incl. F1–F8 tap/hold macros)
+> are validated against a real K4; audio / PTT / waterfall rendering / serial bring-up is ongoing.
 >
 > **In 0.2.x:** Elecraft K-Pod support (rocker + encoder tuning, and configurable F1–F8 tap/hold
 > macros), a filterable + selectable diagnostics console, and RIT/XIT sync fixes; K-Pod tap/hold
 > discrimination and hold-while-tuning fixes (0.2.1); a **Windows `setup.exe` installer** (0.2.2);
-> band buttons following the transmit VFO and **in-app MENU value editing** (0.2.3).
+> band buttons following the transmit VFO and **in-app MENU value editing** (0.2.3); a
+> **mode-aware panadapter** — click-to-QSY that places the passband by sideband sense, a waterfall
+> that scrolls with the VFO, labelled frequency/level scales synced to the radio — plus **ATU and
+> TUNE control**, an About-box **update check**, and **switchable control tooltips** (0.2.4).
 >
 > 🌐 **[Project website](https://dc0sk.github.io/K4remote/)** · 📖 **New here? Start with the [User Manual](docs/user-manual.md).**
 >
