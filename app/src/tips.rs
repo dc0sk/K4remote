@@ -71,7 +71,7 @@ pub const TIPS: &[(&str, &str)] = &[
     ("rx.autonotch", "Automatic notch (NA) — tracks and nulls steady carriers by itself."),
     ("rx.apf", "Audio peaking filter (AP) — a narrow CW peak around the sidetone pitch."),
     ("rx.preamp", "Preamp (PA). Use on the quiet bands; switch off when the band is noisy."),
-    ("rx.atten", "Attenuator (RA). Backs off strong signals that would overload the front end."),
+    ("rx.atten", "Attenuator (RA): tap for in/out, hold to step the level 0-21 dB in 3 dB steps. Backs off strong signals that would overload the front end."),
     ("rx.afgain", "AF gain — receiver volume (AG). Local only; does not change the radio's own audio."),
     ("rx.rfgain", "RF gain (RG). Reduces receiver gain ahead of the AGC."),
     ("rx.squelch", "Squelch threshold (SQ). 0 leaves the receiver open."),
