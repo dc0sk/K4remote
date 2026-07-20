@@ -2539,26 +2539,46 @@ impl App {
             .push(
                 Row::new()
                     .spacing(6)
-                    .push(two_line_btn(
-                        ui::toggle_button("SPLIT", self.ui.split),
-                        self.ui.split,
-                        Some(Message::ToggleSplit),
+                    .push(tipped(
+                        self.tooltips,
+                        self.hover,
+                        "vfo.split",
+                        two_line_btn(
+                            ui::toggle_button("SPLIT", self.ui.split),
+                            self.ui.split,
+                            Some(Message::ToggleSplit),
+                        ),
                     ))
-                    .push(two_line_btn(
-                        ui::toggle_button("RIT", self.ui.rit_on),
-                        self.ui.rit_on,
-                        Some(Message::ToggleRit),
+                    .push(tipped(
+                        self.tooltips,
+                        self.hover,
+                        "vfo.rit",
+                        two_line_btn(
+                            ui::toggle_button("RIT", self.ui.rit_on),
+                            self.ui.rit_on,
+                            Some(Message::ToggleRit),
+                        ),
                     )),
             )
             .push(
                 Row::new()
                     .spacing(6)
-                    .push(two_line_btn(
-                        ui::toggle_button("XIT", self.ui.xit_on),
-                        self.ui.xit_on,
-                        Some(Message::ToggleXit),
+                    .push(tipped(
+                        self.tooltips,
+                        self.hover,
+                        "vfo.xit",
+                        two_line_btn(
+                            ui::toggle_button("XIT", self.ui.xit_on),
+                            self.ui.xit_on,
+                            Some(Message::ToggleXit),
+                        ),
                     ))
-                    .push(two_line_btn(clr_state, None, Some(Message::ClearRitXit))),
+                    .push(tipped(
+                        self.tooltips,
+                        self.hover,
+                        "vfo.clr",
+                        two_line_btn(clr_state, None, Some(Message::ClearRitXit)),
+                    )),
             )
             // RIT/XIT offset readout + fine adjust (FR-VFO-05).
             .push({
@@ -3159,11 +3179,14 @@ impl App {
             .spacing(14)
             .align_y(Alignment::Center)
             .push(Text::new("MON").size(10).color(dim))
-            .push(
+            .push(tipped(
+                self.tooltips,
+                self.hover,
+                "tx.mon",
                 slider(0..=100u8, mon, Message::SetMonitor)
                     .step(1u8)
                     .width(Length::Fixed(120.0)),
-            )
+            ))
             .push(Text::new(format!("{mon}")).size(10).color(rxv));
         // Compact ± stepper for the TX mode strip.
         let step_ctl = |label: &'static str,
@@ -3461,7 +3484,10 @@ impl App {
                         Message::Tx(TxMsg::IambicB(!c.iambic_b)),
                     )),
             )
-            .push(
+            .push(tipped(
+                self.tooltips,
+                self.hover,
+                "cw.pitch",
                 // CW sidetone pitch (FR-KEY-02).
                 Row::new()
                     .spacing(6)
@@ -3477,7 +3503,7 @@ impl App {
                             .size(11)
                             .color(rxv),
                     ),
-            )
+            ))
             .push(
                 // Full break-in QSK + VOX/QSK delay for the current mode (FR-TX-DLY-01).
                 Row::new()
@@ -3779,13 +3805,21 @@ impl App {
                         format!("BIAS: {}", if c.front_bias { "On" } else { "Off" }),
                         Message::Tx(TxMsg::FrontBias(!c.front_bias)),
                     ))
-                    .push(two_line_btn(
-                        ui::toggle_button("VOX", Some(c.vox)),
-                        Some(c.vox),
-                        Some(Message::Tx(TxMsg::Vox(!c.vox))),
+                    .push(tipped(
+                        self.tooltips,
+                        self.hover,
+                        "tx.vox",
+                        two_line_btn(
+                            ui::toggle_button("VOX", Some(c.vox)),
+                            Some(c.vox),
+                            Some(Message::Tx(TxMsg::Vox(!c.vox))),
+                        ),
                     )),
             )
-            .push(
+            .push(tipped(
+                self.tooltips,
+                self.hover,
+                "tx.comp",
                 // Speech compression (FR-TX-CMP-01), SSB modes.
                 Row::new()
                     .spacing(6)
@@ -3801,7 +3835,7 @@ impl App {
                             .color(role_color(ui::ColorRole::RxValue)),
                     )
                     .push(Text::new("(SSB)").size(10).color(dim)),
-            )
+            ))
             .push(
                 Text::new("Front mic shown; rear-mic + button config deferred (§1.6).")
                     .size(10)
@@ -4811,60 +4845,110 @@ impl App {
             |ctl: ui::RxCtl| self.mode_aware_ui && ui::rx_ctl_vis(ctl, rx_class) != ui::Vis::Show;
         let chips = Row::new()
             .spacing(6)
-            .push(two_line_btn_dim(
-                ui::bandwidth_button(Some(self.bw_hz)),
-                None,
-                Some(Message::CycleBandwidth),
-                rx_dim(ui::RxCtl::Bw),
+            .push(tipped(
+                self.tooltips,
+                self.hover,
+                "filter.bw",
+                two_line_btn_dim(
+                    ui::bandwidth_button(Some(self.bw_hz)),
+                    None,
+                    Some(Message::CycleBandwidth),
+                    rx_dim(ui::RxCtl::Bw),
+                ),
             ))
-            .push(two_line_btn(
-                ui::atten_button(self.rx_atten_on(), self.rx_atten_db()),
-                self.rx_atten_on(),
-                Some(Message::ToggleAtten),
+            .push(tipped(
+                self.tooltips,
+                self.hover,
+                "rx.atten",
+                two_line_btn(
+                    ui::atten_button(self.rx_atten_on(), self.rx_atten_db()),
+                    self.rx_atten_on(),
+                    Some(Message::ToggleAtten),
+                ),
             ))
-            .push(two_line_btn(
-                ui::preamp_button(self.rx_preamp_on(), self.ui.radio.preamp_level),
-                self.rx_preamp_on(),
-                Some(Message::TogglePreamp),
+            .push(tipped(
+                self.tooltips,
+                self.hover,
+                "rx.preamp",
+                two_line_btn(
+                    ui::preamp_button(self.rx_preamp_on(), self.ui.radio.preamp_level),
+                    self.rx_preamp_on(),
+                    Some(Message::TogglePreamp),
+                ),
             ))
-            .push(two_line_btn(
-                ui::toggle_button("NB", self.rx_nb_on()),
-                self.rx_nb_on(),
-                Some(Message::ToggleNb),
+            .push(tipped(
+                self.tooltips,
+                self.hover,
+                "rx.nb",
+                two_line_btn(
+                    ui::toggle_button("NB", self.rx_nb_on()),
+                    self.rx_nb_on(),
+                    Some(Message::ToggleNb),
+                ),
             ))
-            .push(two_line_btn(
-                ui::toggle_button("NR", self.rx_nr_on()),
-                self.rx_nr_on(),
-                Some(Message::ToggleNr),
+            .push(tipped(
+                self.tooltips,
+                self.hover,
+                "rx.nr",
+                two_line_btn(
+                    ui::toggle_button("NR", self.rx_nr_on()),
+                    self.rx_nr_on(),
+                    Some(Message::ToggleNr),
+                ),
             ))
-            .push(two_line_btn_dim(
-                ui::agc_button(self.rx_agc_mode()),
-                None,
-                Some(Message::CycleAgc),
-                rx_dim(ui::RxCtl::Agc),
+            .push(tipped(
+                self.tooltips,
+                self.hover,
+                "rx.agc",
+                two_line_btn_dim(
+                    ui::agc_button(self.rx_agc_mode()),
+                    None,
+                    Some(Message::CycleAgc),
+                    rx_dim(ui::RxCtl::Agc),
+                ),
             ))
-            .push(two_line_btn(
-                ui::toggle_button("SUB", self.ui.radio.sub_rx),
-                self.ui.radio.sub_rx,
-                Some(Message::ToggleSubRx),
+            .push(tipped(
+                self.tooltips,
+                self.hover,
+                "rx.subrx",
+                two_line_btn(
+                    ui::toggle_button("SUB", self.ui.radio.sub_rx),
+                    self.ui.radio.sub_rx,
+                    Some(Message::ToggleSubRx),
+                ),
             ))
-            .push(two_line_btn(
-                ui::toggle_button("DIV", self.ui.radio.diversity),
-                self.ui.radio.diversity,
-                Some(Message::ToggleDiversity),
+            .push(tipped(
+                self.tooltips,
+                self.hover,
+                "rx.diversity",
+                two_line_btn(
+                    ui::toggle_button("DIV", self.ui.radio.diversity),
+                    self.ui.radio.diversity,
+                    Some(Message::ToggleDiversity),
+                ),
             ))
             // Notch / APF for the active RX VFO, right of DIV.
-            .push(two_line_btn_dim(
-                ui::toggle_button("NOTCH", self.rx_notch_on()),
-                self.rx_notch_on(),
-                Some(Message::ToggleManualNotch),
-                rx_dim(ui::RxCtl::ManualNotch),
+            .push(tipped(
+                self.tooltips,
+                self.hover,
+                "rx.notch",
+                two_line_btn_dim(
+                    ui::toggle_button("NOTCH", self.rx_notch_on()),
+                    self.rx_notch_on(),
+                    Some(Message::ToggleManualNotch),
+                    rx_dim(ui::RxCtl::ManualNotch),
+                ),
             ))
-            .push(two_line_btn_dim(
-                ui::toggle_button("AUTO NCH", self.rx_auto_notch()),
-                self.rx_auto_notch(),
-                Some(Message::ToggleAutoNotch),
-                rx_dim(ui::RxCtl::AutoNotch),
+            .push(tipped(
+                self.tooltips,
+                self.hover,
+                "rx.autonotch",
+                two_line_btn_dim(
+                    ui::toggle_button("AUTO NCH", self.rx_auto_notch()),
+                    self.rx_auto_notch(),
+                    Some(Message::ToggleAutoNotch),
+                    rx_dim(ui::RxCtl::AutoNotch),
+                ),
             ));
         // APF (CW audio peak filter) is CW-only — it lives in the CW mode strip
         // (see rx_mode_strip), not the always-visible chips row (Phase 3).
@@ -5394,7 +5478,12 @@ impl App {
             .push(range_btn("H", 'H', self.tx_pwr_range))
             .push(range_btn("L", 'L', self.tx_pwr_range))
             .push(range_btn("X", 'X', self.tx_pwr_range))
-            .push(slider(0..=pmax, self.tx_power, Message::SetTxPower).width(Length::Fixed(110.0)))
+            .push(tipped(
+                self.tooltips,
+                self.hover,
+                "tx.power",
+                slider(0..=pmax, self.tx_power, Message::SetTxPower).width(Length::Fixed(110.0)),
+            ))
             .push(
                 Text::new(pval)
                     .size(11)
