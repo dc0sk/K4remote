@@ -9,20 +9,28 @@ stakeholder needs down to individual tests, enforced by a build gate.
 
 ![K4 Remote main window](docs/screenshots/main.png)
 
-> **Status:** v0.3.0 — feature-complete; hardware bring-up in progress.
-> 214 hardware-free tests pass · clippy/fmt clean · traceability gate green · CI green on Linux/macOS/Windows.
+> **Status:** v0.4.0 — feature-complete; hardware bring-up in progress.
+> 258 hardware-free tests pass · clippy/fmt clean · traceability gate green · CI green on Linux/macOS/Windows.
 > VFO tuning, RIT/XIT, split, band, panadapter click-to-QSY, and the K-Pod (incl. F1–F8 tap/hold macros)
 > are validated against a real K4; audio / PTT / waterfall rendering / serial bring-up is ongoing.
+> The 0.4.0 chip gestures (tap/hold and the right-click settings popups) are verified in the app but
+> **not yet on a radio** — see [CHANGELOG.md](CHANGELOG.md).
 >
 > **In 0.2.x:** Elecraft K-Pod support (rocker + encoder tuning, and configurable F1–F8 tap/hold
 > macros), a filterable + selectable diagnostics console, and RIT/XIT sync fixes; K-Pod tap/hold
 > discrimination and hold-while-tuning fixes (0.2.1); a **Windows `setup.exe` installer** (0.2.2);
 > band buttons following the transmit VFO and **in-app MENU value editing** (0.2.3).
 >
-> **New in 0.3.0:** a **mode-aware panadapter** — click-to-QSY that places the passband by sideband
+> **In 0.3.0:** a **mode-aware panadapter** — click-to-QSY that places the passband by sideband
 > sense, a waterfall that scrolls with the VFO, and labelled frequency/level scales synced to the
 > radio — plus **ATU and TUNE control**, an About-box **update check**, and **switchable control
 > tooltips**.
+>
+> **New in 0.4.0:** the K4's **interaction grammar** on every control chip — **tap** for the
+> switch's white function, **hold** for its yellow one, and **right-click** to open that control's
+> settings popup (level, mode and on/off together, at the chip). Plus panadapter correctness fixes
+> from operating against a live K4 — per-pan span, trace/waterfall alignment — and a protocol fix
+> that had silently made the attenuator ignore its 3, 6 and 9 dB steps.
 >
 > 🌐 **[Project website](https://dc0sk.github.io/K4remote/)** · 📖 **New here? Start with the [User Manual](docs/user-manual.md).**
 >
