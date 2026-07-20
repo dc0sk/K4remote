@@ -445,9 +445,15 @@ fn nfr_perf_ai_burst_bounded_memory() {
 /// trace: FR-PAN-07
 #[test]
 fn fr_pan_07_display_readback_accepts_the_dollar_spelling() {
+    // NOTE: `#SPN$` is deliberately absent. Hardware testing (#141) showed the
+    // two pans hold independent spans — changing one on the DISPLAY screen left
+    // the other streaming its old span — so `$` there is the sub-pan modifier,
+    // not merely part of an LCD mnemonic, and it routes to its own field. The
+    // rest are still treated as the same setting because there is no evidence
+    // either way for them yet; if REF or SCALE turn out to be per-pan too, they
+    // should follow SPAN.
     for (with, without) in [
         ("#REF$-130;", "#REF-130;"),
-        ("#SPN$50000;", "#SPN50000;"),
         ("#SCL$70;", "#SCL70;"),
         ("#DPM$2;", "#DPM2;"),
         ("#WFC$1;", "#WFC1;"),
@@ -457,7 +463,6 @@ fn fr_pan_07_display_readback_accepts_the_dollar_spelling() {
         a.apply_cat(with);
         b.apply_cat(without);
         assert_eq!(a.pan_ref, b.pan_ref, "{with}");
-        assert_eq!(a.pan_span_hz, b.pan_span_hz, "{with}");
         assert_eq!(a.pan_scale, b.pan_scale, "{with}");
         assert_eq!(a.pan_mode, b.pan_mode, "{with}");
         assert_eq!(a.wf_palette, b.wf_palette, "{with}");
@@ -467,11 +472,13 @@ fn fr_pan_07_display_readback_accepts_the_dollar_spelling() {
     // And the values actually land, rather than both spellings being no-ops.
     let mut s = RadioState::new();
     s.apply_cat("#REF$-130;");
-    s.apply_cat("#SPN$50000;");
     s.apply_cat("#SCL$70;");
     assert_eq!(s.pan_ref, Some(-130));
-    assert_eq!(s.pan_span_hz, Some(50_000));
     assert_eq!(s.pan_scale, Some(70));
+    // `#SPN$` routes to the sub pan — see the note above.
+    s.apply_cat("#SPN$50000;");
+    assert_eq!(s.sub_pan_span_hz, Some(50_000));
+    assert_eq!(s.pan_span_hz, None, "the main pan is untouched");
 }
 
 /// `#MP$-1` means the mini-pan cannot be enabled with the radio's current
@@ -530,4 +537,30 @@ fn fr_pan_ctl_01_fixed_tune_readback() {
     let mut f = RadioState::new();
     f.apply_cat("#FXT1;");
     assert_eq!(f.pan_fixed, Some(true));
+}
+
+/// The two pans hold independent spans. A single shared field made one pane
+/// crop against the other's span: changing the span with the DISPLAY target on
+/// A left B streaming its old span while both panes were labelled with the
+/// new one (#141).
+/// trace: FR-PAN-08
+#[test]
+fn fr_pan_08_span_is_tracked_per_pan() {
+    let mut s = RadioState::new();
+    s.apply_cat("#SPN100000;");
+    s.apply_cat("#SPN$50000;");
+    assert_eq!(s.pan_span_hz, Some(100_000), "main pan");
+    assert_eq!(s.sub_pan_span_hz, Some(50_000), "sub pan is independent");
+
+    // Changing one must not disturb the other — the exact failure reported.
+    s.apply_cat("#SPN50000;");
+    assert_eq!(s.pan_span_hz, Some(50_000));
+    assert_eq!(s.sub_pan_span_hz, Some(50_000));
+    s.apply_cat("#SPN$6000;");
+    assert_eq!(
+        s.pan_span_hz,
+        Some(50_000),
+        "main untouched by a sub change"
+    );
+    assert_eq!(s.sub_pan_span_hz, Some(6_000));
 }
