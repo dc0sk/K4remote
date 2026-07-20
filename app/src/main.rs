@@ -10,6 +10,7 @@
 mod meter;
 mod spectrum;
 mod ui;
+mod update;
 mod worker;
 
 use ui::ViewMode;
@@ -248,6 +249,8 @@ struct App {
     hotkey_down: bool,
     hotkey_keyed: bool,
     arm_flash: u8,
+    /// Result of the last About-box update check (FR-UI-UPD-01).
+    update_status: update::UpdateStatus,
     // Text decode (FR-TXT-01): on/off + a poll-rate divider for the TB reads.
     decode_on: bool,
     decode_tick: u8,
@@ -534,6 +537,12 @@ enum Message {
     ToggleAbout,
     /// Open a URL in the OS browser (About-box links / donate).
     OpenUrl(&'static str),
+    /// Open a URL discovered at runtime (the release page from an update check).
+    OpenUrlOwned(String),
+    /// Ask GitHub whether a newer release exists (FR-UI-UPD-01).
+    CheckUpdate,
+    /// The outcome of that check.
+    UpdateChecked(update::UpdateStatus),
     // Settings dialog + peer cache (FR-UI-23, FR-CFG-04).
     ToggleSettings,
     UseMasterToggled(bool),
@@ -794,6 +803,7 @@ impl App {
             hotkey_down: false,
             hotkey_keyed: false,
             arm_flash: 0,
+            update_status: update::UpdateStatus::Idle,
             decode_on: false,
             decode_tick: 0,
             resync_tick: 0,
@@ -1788,6 +1798,24 @@ impl App {
             }
             Message::ToggleAbout => self.about_open = !self.about_open,
             Message::OpenUrl(url) => open_url(url),
+            Message::OpenUrlOwned(url) => open_url(&url),
+            Message::CheckUpdate => {
+                // Operator-initiated only; never on a timer. The request is
+                // blocking, so it runs off the UI thread (FR-UI-UPD-01).
+                self.update_status = update::UpdateStatus::Checking;
+                let current = ui::app_version().to_string();
+                return Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || update::check_now(&current))
+                            .await
+                            .unwrap_or_else(|e| {
+                                update::UpdateStatus::Failed(format!("check did not run: {e}"))
+                            })
+                    },
+                    Message::UpdateChecked,
+                );
+            }
+            Message::UpdateChecked(status) => self.update_status = status,
             Message::ToggleSettings => self.settings_open = !self.settings_open,
             Message::UseMasterToggled(v) => self.use_master = v,
             Message::MasterPasswordChanged(v) => self.master_password = v,
@@ -5873,6 +5901,51 @@ impl App {
                 .on_press(Message::OpenUrl(url))
                 .into()
         };
+        // Update check (FR-UI-UPD-01): a button, and whatever the last check
+        // found. A newer version is shown as its version number, linking
+        // straight to that release's download page.
+        let update_row: Element<Message> = match &self.update_status {
+            update::UpdateStatus::Checking => Row::new()
+                .spacing(8)
+                .align_y(Alignment::Center)
+                .push(Text::new("Checking for updates…").size(12).color(dim))
+                .into(),
+            update::UpdateStatus::Available { version, url } => Row::new()
+                .spacing(6)
+                .align_y(Alignment::Center)
+                .push(Text::new("Update available:").size(12).color(dim))
+                .push(
+                    Button::new(Text::new(version.clone()).size(13).color(accent))
+                        .style(move |_t: &Theme, status: button::Status| button::Style {
+                            background: None,
+                            text_color: match status {
+                                button::Status::Hovered | button::Status::Pressed => Color::WHITE,
+                                _ => accent,
+                            },
+                            ..button::Style::default()
+                        })
+                        .padding(0)
+                        .on_press(Message::OpenUrlOwned(url.clone())),
+                )
+                .into(),
+            other => {
+                let (label, note) = match other {
+                    update::UpdateStatus::UpToDate => ("Check for updates", "Up to date"),
+                    update::UpdateStatus::Failed(e) => ("Check for updates", e.as_str()),
+                    _ => ("Check for updates", ""),
+                };
+                let mut r = Row::new().spacing(8).align_y(Alignment::Center).push(
+                    Button::new(Text::new(label).size(12))
+                        .style(btn_style(BtnKind::Plain))
+                        .padding([5, 10])
+                        .on_press(Message::CheckUpdate),
+                );
+                if !note.is_empty() {
+                    r = r.push(Text::new(note.to_string()).size(12).color(dim));
+                }
+                r.into()
+            }
+        };
         let card = Column::new()
             .spacing(8)
             .push(Text::new("About K4 Remote").size(18))
@@ -5884,6 +5957,7 @@ impl App {
             )
             .push(link(ui::ABOUT_LICENSE.to_string(), ui::ABOUT_LICENSE_URL))
             .push(link(ui::ABOUT_URL.to_string(), ui::ABOUT_URL))
+            .push(update_row)
             .push(
                 Button::new(Text::new("Donate via PayPal").size(13))
                     .style(btn_style(BtnKind::Active))

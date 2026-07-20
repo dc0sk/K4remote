@@ -77,6 +77,8 @@ k4-audio = { path = "../crates/k4-audio" }
 k4-config = { path = "../crates/k4-config" }
 k4-diag = { path = "../crates/k4-diag" }
 iced = { version = "0.13", features = ["tokio", "canvas", "image"] }
+ureq = { version = "3.3.0", default-features = false, features = ["rustls"] }
+tokio = { version = "1.53.0", default-features = false, features = ["rt"] }
 
 # Embed the app icon into the Windows .exe (NFR-PKG-01); no-op elsewhere.
 [target.'cfg(windows)'.build-dependencies]
