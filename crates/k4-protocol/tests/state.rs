@@ -498,3 +498,36 @@ fn fr_ui_14_mini_pan_unavailable_is_not_the_same_as_off() {
     bare.apply_cat("#MP-1;");
     assert_eq!(bare.mini_pan_available, Some(false));
 }
+
+/// `#FXT` read-back: 0 = track the VFO, 1 = fixed. Until now nothing parsed
+/// it, so the app could send fixed-tune and never learn the radio's state.
+/// trace: FR-PAN-CTL-01
+#[test]
+fn fr_pan_ctl_01_fixed_tune_readback() {
+    let mut s = RadioState::new();
+    assert_eq!(s.pan_fixed, None, "unknown until the radio reports");
+
+    s.apply_cat("#FXT1;");
+    assert_eq!(s.pan_fixed, Some(true));
+    s.apply_cat("#FXT0;");
+    assert_eq!(s.pan_fixed, Some(false));
+
+    // The `$` spelling is accepted for consistency with the rest of the `#`
+    // family, where it is part of the LCD mnemonic.
+    let mut d = RadioState::new();
+    d.apply_cat("#FXT$1;");
+    assert_eq!(d.pan_fixed, Some(true));
+
+    // A malformed value leaves the last known state rather than guessing.
+    let mut k = RadioState::new();
+    k.apply_cat("#FXT1;");
+    k.apply_cat("#FXT;");
+    assert_eq!(k.pan_fixed, Some(true), "empty arg must not clear it");
+    k.apply_cat("#FXTx;");
+    assert_eq!(k.pan_fixed, Some(true), "junk must not clear it");
+
+    // `#FXT` must not be swallowed by the `#FRZ`/`#F…` neighbours.
+    let mut f = RadioState::new();
+    f.apply_cat("#FXT1;");
+    assert_eq!(f.pan_fixed, Some(true));
+}

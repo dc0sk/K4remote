@@ -7,11 +7,11 @@ use k4_protocol::cat::{
     set_auto_notch, set_band, set_band_sub, set_bandwidth_hz, set_compression, set_cw_pitch,
     set_diversity, set_dvr, set_filter_preset, set_keyer, set_keyer_speed, set_line_in,
     set_line_out, set_manual_notch, set_mic_gain, set_mic_input, set_mic_setup, set_mode,
-    set_mode_sub, set_monitor, set_nb, set_nb_level, set_nr, set_pan_average, set_pan_mode,
-    set_pan_nb, set_pan_nb_level, set_pan_peak, set_pan_ref, set_pan_scale, set_pan_span_hz,
-    set_passband_edges_hz, set_pl_tone, set_power, set_preamp, set_qsk_delay, set_repeater,
-    set_rf_gain, set_rit, set_rit_offset, set_rx_antenna, set_rx_antenna_sub, set_rx_eq,
-    set_shift_hz, set_split, set_spot, set_squelch, set_sub_rx, set_text_decode,
+    set_mode_sub, set_monitor, set_nb, set_nb_level, set_nr, set_pan_average, set_pan_fixed,
+    set_pan_mode, set_pan_nb, set_pan_nb_level, set_pan_peak, set_pan_ref, set_pan_scale,
+    set_pan_span_hz, set_passband_edges_hz, set_pl_tone, set_power, set_preamp, set_qsk_delay,
+    set_repeater, set_rf_gain, set_rit, set_rit_offset, set_rx_antenna, set_rx_antenna_sub,
+    set_rx_eq, set_shift_hz, set_split, set_spot, set_squelch, set_sub_rx, set_text_decode,
     set_transverter_band, set_tx_antenna, set_tx_eq, set_tx_power, set_tx_power_range,
     set_vfo_a_hz, set_vfo_b_hz, set_vox, set_vox_gain, set_waterfall_height, set_waterfall_palette,
     set_xit, switch, tune, vfo_copy_swap, vfo_for_click, AtuMode, TuneAction,
@@ -491,4 +491,12 @@ fn fr_tx_tune_01_tune_actions() {
     ] {
         assert!(a.transmits(), "{a:?} keys the transmitter");
     }
+}
+
+/// Fixed-tune encodes both ways (`#FXT`) — D12: 0 track, 1 fixed.
+/// trace: FR-PAN-CTL-01
+#[test]
+fn fr_pan_ctl_01_fixed_tune_encode() {
+    assert_eq!(set_pan_fixed(true), "#FXT1;");
+    assert_eq!(set_pan_fixed(false), "#FXT0;");
 }
