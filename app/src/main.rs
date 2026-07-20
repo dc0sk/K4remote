@@ -4214,10 +4214,18 @@ impl App {
             Some(d.freeze),
             Some(Message::Disp(DispMsg::Freeze(!d.freeze))),
         );
+        // The K4 refuses the mini-pan under some display settings, reporting
+        // `#MP$-1`. Show that instead of leaving a live-looking button that
+        // silently does nothing (D12 `#MP$` NOTE).
+        let minipan_blocked = self.ui.radio.mini_pan_available == Some(false);
         let minipan = two_line_btn(
-            ui::toggle_button("MINI-PAN", self.ui.radio.mini_pan_on),
+            if minipan_blocked {
+                ui::unavailable_button("MINI-PAN")
+            } else {
+                ui::toggle_button("MINI-PAN", self.ui.radio.mini_pan_on)
+            },
             self.ui.radio.mini_pan_on,
-            Some(Message::ToggleMiniPan),
+            (!minipan_blocked).then_some(Message::ToggleMiniPan),
         );
         // Steppers laid out on a fixed 3-column grid so labels, −/+ buttons and
         // values align across rows and columns.

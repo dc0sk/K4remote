@@ -197,6 +197,12 @@ pub struct RadioState {
     pub wf_height: Option<u8>,
     /// Mini-pan display on/off (`#MP`).
     pub mini_pan_on: Option<bool>,
+    /// `false` when the radio reports `#MP$-1` — the mini-pan **cannot** be
+    /// turned on with the current radio settings (D12 `#MP$` NOTE). Distinct
+    /// from `mini_pan_on == Some(false)` (available, currently off): without
+    /// this, a refused toggle is indistinguishable from "off" and the button
+    /// appears to do nothing.
+    pub mini_pan_available: Option<bool>,
     /// ATU mode (`AT`): 1 = bypass (out of line), 2 = auto (in line).
     pub atu_mode: Option<u8>,
     /// TX antenna 1–3 (`AN`), main/sub RX antenna 0–7 (`AR`/`AR$`).
@@ -565,8 +571,13 @@ impl RadioState {
                 self.wf_height = Some(v);
             }
         } else if let Some(arg) = cmd.strip_prefix("#MP") {
-            // `#MP$n` — mini-pan on/off (n = -1/0/1). `$` optional.
+            // `#MP$n` — mini-pan state, n = -1 (unavailable), 0 (off) or
+            // 1 (displayed). `$` is part of the LCD mnemonic but accept it
+            // either way. -1 must stay distinguishable from 0, or a refused
+            // toggle looks exactly like "off".
             let (_, a) = split_sub(arg);
+            let unavailable = a.starts_with("-1");
+            self.mini_pan_available = Some(!unavailable);
             self.mini_pan_on = Some(a.starts_with('1'));
         } else if let Some(arg) = cmd.strip_prefix("ACM") {
             self.rx_ant_avail = Some(parse_ant_mask(arg));
