@@ -550,6 +550,8 @@ enum Message {
     StartCaptureHotkey,
     ToggleKey,
     EmergencyStop,
+    /// ATTN hold: step the attenuator 3 dB (D14 p.1318).
+    StepAtten,
     /// AGC hold: switch AGC on/off (D14 p.909).
     ToggleAgcOff,
     /// A press began on a tap/hold control (FR-UI-HOLD-01).
@@ -1388,6 +1390,18 @@ impl App {
             }
             Message::ToggleAtten => {
                 self.send(WorkerCmd::Cat(target_rx("RA/;".into(), self.active_sub())))
+            }
+            Message::StepAtten => {
+                // Hold: walk the 0–21 dB ladder in 3 dB steps (D14 p.1318).
+                // 0 dB means the attenuator is out, so send it off there
+                // rather than "on at 0", which the radio would show as
+                // engaged while doing nothing.
+                let next = ui::atten_hold(self.rx_atten_db());
+                self.send(WorkerCmd::Cat(target_rx(
+                    k4_protocol::cat::set_attenuator(next, next > 0),
+                    self.active_sub(),
+                )));
+                self.send(WorkerCmd::Cat(target_rx("RA;".into(), self.active_sub())));
             }
             Message::ToggleSplit => self.send(WorkerCmd::ToggleSplit),
             Message::CycleAgc => {
@@ -5054,10 +5068,15 @@ impl App {
                 self.tooltips,
                 self.hover,
                 "rx.atten",
-                two_line_btn(
-                    ui::atten_button(self.rx_atten_on(), self.rx_atten_db()),
-                    self.rx_atten_on(),
-                    Some(Message::ToggleAtten),
+                // Tap = in/out, hold = step the level (D14 p.1318).
+                tap_hold(
+                    Message::ToggleAtten,
+                    Message::StepAtten,
+                    two_line_btn(
+                        ui::atten_button(self.rx_atten_on(), self.rx_atten_db()),
+                        self.rx_atten_on(),
+                        Some(Message::ToggleAtten),
+                    ),
                 ),
             ))
             .push(tipped(

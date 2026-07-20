@@ -449,6 +449,28 @@ pub fn is_hold(elapsed: Option<std::time::Duration>) -> bool {
     matches!(elapsed, Some(d) if d >= HOLD_THRESHOLD)
 }
 
+/// Next attenuator level for a **hold** (`RA`): +3 dB, wrapping 21 → 0.
+///
+/// D14 p.1318: "Hold [ATTN] to bring up the attenuator controls (on/off and
+/// level). Attenuation varies from 0 to 21 dB in 3 dB steps." The radio opens
+/// an adjustment panel; with a mouse, stepping the level directly is the same
+/// idea in one gesture.
+///
+/// A level off the 3 dB grid (a radio in some other state, or a stale
+/// read-back) snaps up to the next valid step rather than being preserved.
+///
+/// trace: FR-UI-HOLD-01
+pub fn atten_hold(cur: Option<u8>) -> u8 {
+    const MAX: u8 = 21;
+    let cur = cur.unwrap_or(0).min(MAX);
+    let next = (cur / 3) * 3 + 3;
+    if next > MAX {
+        0
+    } else {
+        next
+    }
+}
+
 /// Next AGC mode for a **tap** (`GT`): slow (1) and fast (2) only.
 ///
 /// D14 p.909: "Selects AGC slow (AGC-S) or fast (AGC-F) for the current
@@ -1747,5 +1769,64 @@ mod agc_taphold_tests {
         // From off, both restore AGC rather than one of them being inert.
         assert_eq!(agc_tap(Some(0)), agc_hold(Some(0)));
         assert_ne!(agc_tap(Some(0)), 0, "neither gesture leaves AGC off");
+    }
+}
+
+#[cfg(test)]
+mod atten_hold_tests {
+    use super::*;
+
+    /// The hold walks the documented 0–21 dB ladder in 3 dB steps and wraps.
+    /// trace: FR-UI-HOLD-01
+    #[test]
+    fn fr_ui_hold_01_atten_hold_steps_3db() {
+        let ladder = [0u8, 3, 6, 9, 12, 15, 18, 21];
+        for pair in ladder.windows(2) {
+            assert_eq!(
+                atten_hold(Some(pair[0])),
+                pair[1],
+                "{} → {}",
+                pair[0],
+                pair[1]
+            );
+        }
+        assert_eq!(atten_hold(Some(21)), 0, "wraps at the top");
+        assert_eq!(atten_hold(None), 3, "unknown starts the ladder");
+    }
+
+    /// Every reachable level is on the documented grid and within range —
+    /// including from a level the radio should never report.
+    /// trace: FR-UI-HOLD-01
+    #[test]
+    fn fr_ui_hold_01_atten_hold_stays_on_the_grid() {
+        for cur in 0u8..=255 {
+            let n = atten_hold(Some(cur));
+            assert!(n <= 21, "cur={cur} → {n} exceeds the 21 dB maximum");
+            assert_eq!(n % 3, 0, "cur={cur} → {n} is off the 3 dB grid");
+        }
+    }
+
+    /// Off-grid input snaps up to the next valid step rather than being
+    /// carried forward.
+    /// trace: FR-UI-HOLD-01
+    #[test]
+    fn fr_ui_hold_01_atten_hold_snaps_off_grid_values() {
+        assert_eq!(atten_hold(Some(1)), 3);
+        assert_eq!(atten_hold(Some(4)), 6);
+        assert_eq!(atten_hold(Some(20)), 21);
+    }
+
+    /// Repeated holds visit the whole ladder and return to the start — no
+    /// level is unreachable and none is a dead end.
+    /// trace: FR-UI-HOLD-01
+    #[test]
+    fn fr_ui_hold_01_atten_hold_cycles_every_level() {
+        let mut seen = Vec::new();
+        let mut cur = 0u8;
+        for _ in 0..8 {
+            cur = atten_hold(Some(cur));
+            seen.push(cur);
+        }
+        assert_eq!(seen, vec![3, 6, 9, 12, 15, 18, 21, 0]);
     }
 }
