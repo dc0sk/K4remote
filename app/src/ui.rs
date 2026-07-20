@@ -432,6 +432,15 @@ pub fn bandwidth_button(hz: Option<u32>) -> ButtonState {
 
 /// Generic on/off control button (NB/NR/preamp/RIT/XIT…).
 /// trace: FR-UI-11
+/// A toggle button the radio has reported it cannot honour right now, shown as
+/// `N/A` rather than a live-looking On/Off. Used for the mini-pan, which the K4
+/// refuses under some display settings (`#MP$-1`, D12).
+///
+/// trace: FR-UI-11, FR-UI-14
+pub fn unavailable_button(label: &'static str) -> ButtonState {
+    ButtonState::new(label, "N/A")
+}
+
 pub fn toggle_button(label: &'static str, on: Option<bool>) -> ButtonState {
     let value = match on {
         Some(true) => "On",

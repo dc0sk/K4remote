@@ -473,3 +473,28 @@ fn fr_pan_07_display_readback_accepts_the_dollar_spelling() {
     assert_eq!(s.pan_span_hz, Some(50_000));
     assert_eq!(s.pan_scale, Some(70));
 }
+
+/// `#MP$-1` means the mini-pan cannot be enabled with the radio's current
+/// settings (D12 `#MP$` NOTE). It must stay distinguishable from `0` (off), or
+/// a refused toggle looks identical to "off" and the button appears dead.
+/// trace: FR-UI-14
+#[test]
+fn fr_ui_14_mini_pan_unavailable_is_not_the_same_as_off() {
+    let mut s = RadioState::new();
+    s.apply_cat("#MP$-1;");
+    assert_eq!(s.mini_pan_on, Some(false));
+    assert_eq!(s.mini_pan_available, Some(false), "-1 means unavailable");
+
+    s.apply_cat("#MP$0;");
+    assert_eq!(s.mini_pan_on, Some(false));
+    assert_eq!(s.mini_pan_available, Some(true), "0 is off but available");
+
+    s.apply_cat("#MP$1;");
+    assert_eq!(s.mini_pan_on, Some(true));
+    assert_eq!(s.mini_pan_available, Some(true));
+
+    // The `$` is part of the LCD mnemonic, but accept it either way.
+    let mut bare = RadioState::new();
+    bare.apply_cat("#MP-1;");
+    assert_eq!(bare.mini_pan_available, Some(false));
+}

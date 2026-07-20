@@ -7,10 +7,20 @@
 
 /// PAN payload type byte.
 pub const PAN_TYPE: u8 = 0x02;
-/// Mini-pan payload type byte (same header layout, wide-span overview).
+/// Mini-pan payload type byte: a wide-span overview strip. **Its header is a
+/// different, much shorter layout than the main pan's** — see
+/// [`MINI_PAN_HEADER_SIZE`].
 pub const MINI_PAN_TYPE: u8 = 0x03;
-/// Header length before the bin data.
+/// Header length before the bin data in a main-pan (`0x02`) payload.
 pub const PAN_HEADER_SIZE: usize = 27;
+/// Header length before the bin data in a mini-pan (`0x03`) payload.
+///
+/// MiniPAN carries only `type, version, sequence, reserved, receiver` and then
+/// its bins (`R-EXT-01`) — no `data_len`, centre frequency, sample rate or
+/// noise floor. Decoding it with the 27-byte main-pan header consumes 22 bins
+/// as phantom metadata and shifts the rest, or rejects the frame outright when
+/// it is shorter than 27 bytes.
+pub const MINI_PAN_HEADER_SIZE: usize = 5;
 /// Per-bin dBm offset: `dBm = raw_byte − K4_DBM_OFFSET`.
 pub const K4_DBM_OFFSET: f32 = 146.0;
 
@@ -19,11 +29,13 @@ pub const K4_DBM_OFFSET: f32 = 146.0;
 pub struct PanFrame {
     /// `0` = Main (VFO A), `1` = Sub (VFO B).
     pub receiver: u8,
-    /// Center frequency, Hz.
+    /// Centre frequency, Hz. Always `0` on a mini-pan frame, which carries no
+    /// geometry — see [`MINI_PAN_HEADER_SIZE`].
     pub center_freq_hz: i64,
-    /// Sample-rate tier (the displayed span is `sample_rate × 1000` Hz).
+    /// Sample-rate tier (the streamed span is `sample_rate × 1000` Hz).
+    /// Always `0` on a mini-pan frame, which carries no geometry.
     pub sample_rate: i32,
-    /// Noise floor, dB.
+    /// Noise floor, dB. Always `0.0` on a mini-pan frame.
     pub noise_floor_db: f32,
     /// Per-bin levels, dBm.
     pub bins_dbm: Vec<f32>,
@@ -32,21 +44,43 @@ pub struct PanFrame {
 }
 
 impl PanFrame {
-    /// Decode a PAN payload (the body of a `0x02` main-pan or `0x03` mini-pan
-    /// frame; they share the header layout). Returns `None` if the payload is
-    /// neither type or is shorter than the header.
+    /// Decode a pan payload: either a `0x02` main pan or a `0x03` mini-pan.
+    ///
+    /// The two do **not** share a header layout. The main pan carries geometry
+    /// (centre frequency, sample rate, noise floor) in a 27-byte header; the
+    /// mini-pan carries none of it and its bins start at offset 5
+    /// (`R-EXT-01`). Geometry fields are therefore `0` on a mini-pan frame.
+    ///
+    /// Returns `None` if the payload is neither type or is shorter than the
+    /// header for its type.
     ///
     /// trace: FR-PAN-01, FR-UI-14
     pub fn decode(payload: &[u8]) -> Option<Self> {
-        if payload.len() < PAN_HEADER_SIZE
-            || (payload[0] != PAN_TYPE && payload[0] != MINI_PAN_TYPE)
-        {
+        let mini = match *payload.first()? {
+            PAN_TYPE => false,
+            MINI_PAN_TYPE => true,
+            _ => return None,
+        };
+        let header = if mini {
+            MINI_PAN_HEADER_SIZE
+        } else {
+            PAN_HEADER_SIZE
+        };
+        if payload.len() < header {
             return None;
         }
-        let center_freq_hz = i64::from_le_bytes(payload[11..19].try_into().ok()?);
-        let sample_rate = i32::from_le_bytes(payload[19..23].try_into().ok()?);
-        let noise_raw = i32::from_le_bytes(payload[23..27].try_into().ok()?);
-        let bins_dbm = payload[PAN_HEADER_SIZE..]
+        // Only the main pan carries geometry; the mini-pan header ends at the
+        // receiver byte.
+        let (center_freq_hz, sample_rate, noise_raw) = if mini {
+            (0, 0, 0)
+        } else {
+            (
+                i64::from_le_bytes(payload[11..19].try_into().ok()?),
+                i32::from_le_bytes(payload[19..23].try_into().ok()?),
+                i32::from_le_bytes(payload[23..27].try_into().ok()?),
+            )
+        };
+        let bins_dbm = payload[header..]
             .iter()
             .map(|&b| b as f32 - K4_DBM_OFFSET)
             .collect();
@@ -56,7 +90,7 @@ impl PanFrame {
             sample_rate,
             noise_floor_db: noise_raw as f32 / 10.0,
             bins_dbm,
-            mini: payload[0] == MINI_PAN_TYPE,
+            mini,
         })
     }
 
