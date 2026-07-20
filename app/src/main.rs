@@ -550,6 +550,8 @@ enum Message {
     StartCaptureHotkey,
     ToggleKey,
     EmergencyStop,
+    /// NB hold: cycle the noise-blanker filter mode (D14 p.1368).
+    CycleNbFilter,
     /// ATTN hold: step the attenuator 3 dB (D14 p.1318).
     StepAtten,
     /// AGC hold: switch AGC on/off (D14 p.909).
@@ -1390,6 +1392,22 @@ impl App {
             }
             Message::ToggleAtten => {
                 self.send(WorkerCmd::Cat(target_rx("RA/;".into(), self.active_sub())))
+            }
+            Message::CycleNbFilter => {
+                // Hold: NONE → NARROW → WIDE. The paired [LEVEL] switch's
+                // "filtering mode" (D14 p.1368) — parsed into state all along
+                // but never settable until now.
+                let sub = self.active_sub();
+                let next = ui::nb_filter_hold(self.ui.radio.nb_filter);
+                self.send(WorkerCmd::Cat(target_rx(
+                    k4_protocol::cat::set_nb_level(
+                        self.nb_level,
+                        self.rx_nb_on() == Some(true),
+                        next,
+                    ),
+                    sub,
+                )));
+                self.send(WorkerCmd::Cat(target_rx("NB;".into(), sub)));
             }
             Message::StepAtten => {
                 // Hold: walk the 0–21 dB ladder in 3 dB steps (D14 p.1318).
@@ -5093,10 +5111,17 @@ impl App {
                 self.tooltips,
                 self.hover,
                 "rx.nb",
-                two_line_btn(
-                    ui::toggle_button("NB", self.rx_nb_on()),
-                    self.rx_nb_on(),
-                    Some(Message::ToggleNb),
+                // Tap = on/off, hold = filter mode. The K4 splits these across
+                // [NB] and its paired [LEVEL] switch (D14 p.767/1368); the app
+                // draws one control, so the hold carries the pair's function.
+                tap_hold(
+                    Message::ToggleNb,
+                    Message::CycleNbFilter,
+                    two_line_btn(
+                        ui::nb_button(self.rx_nb_on(), self.ui.radio.nb_filter),
+                        self.rx_nb_on(),
+                        Some(Message::ToggleNb),
+                    ),
                 ),
             ))
             .push(tipped(
