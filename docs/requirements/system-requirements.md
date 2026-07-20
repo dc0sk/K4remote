@@ -1,7 +1,7 @@
 ---
 title: "System Requirements Specification"
 status: Draft
-version: "0.23"
+version: "0.24"
 version: "0.21"
 updated: 2026-07-20
 authors:
@@ -11,7 +11,7 @@ owns: [FR, NFR]
 
 # System Requirements Specification (SRS)
 
-**Version:** 0.23 (Draft) · **Date:** 2026-07-20 · **Author:** DC0SK
+**Version:** 0.24 (Draft) · **Date:** 2026-07-20 · **Author:** DC0SK
 **Version:** 0.21 (Draft) · **Date:** 2026-07-20 · **Author:** DC0SK
 Trace: owns `FR-`, `NFR-`. Up → [stakeholder-requirements.md](stakeholder-requirements.md);
 down → [../concept/architecture.md](../concept/architecture.md) (`ARC`) and
@@ -188,6 +188,7 @@ Interface Spec v1.03; Owner's Manual Rev F) for hands-on VFO selection + tuning.
 | `FR-PAN-07` | display the panadapter's horizontal and vertical scales and keep them in sync with the radio: label each vertical grid division with its frequency and show the span and Hz-per-column; derive the vertical window from the K4's reference level (`#REF`, dBm at the bottom) and scale (`#SCL`, dB shown), treating the radio's read-back as authoritative and the local DISPLAY values as a fallback; and choose a dB grid step suited to the window. Accept the `$` spelling of the `#`-display read-back (`#REF$`/`#SPN$`/`#WFC$` are the LCD mnemonics in D12; the `$` is part of the name, not the sub-receiver modifier). | STK-09/10 | S | T/D | `pan_window` maps `#REF`/`#SCL` to a window whose bottom equals `#REF` and height equals `#SCL`, `db_grid_step` keeps 1–8 divisions across the documented 10–150 dB range, `axis_ticks`/`hz_per_bin` agree with `hz_to_x`, and both `#REF-130;` and `#REF$-130;` populate state identically (test); changing span or reference on the DISPLAY screen re-labels the axis and rescales the trace (demo). |
 | `FR-PAN-08` | treat a PAN frame's bins as covering the **tier** the radio streams (`sample_rate × 1000`), not the display span, and show the **centre** crop selected by `#SPN` — `span / tierSpan × totalBins` bins (`R-EXT-01`) — cropping before decimating so the display columns are spent on the visible window. Degrade to the whole tier when `#SPN` is unknown or not narrower. | STK-09 | S | T/D | `crop_to_span` takes a centred sub-range that degenerates to the full array when the display span is unknown or ≥ the tier, `resample_peak` uses contiguous buckets so a narrow carrier lands in exactly one column, and a cropped row reports the display span and resolves two carriers a full-tier decimation merges (test); the frequency axis, span readout and click-to-QSY agree with `#SPN` on the radio (demo). |
 | `FR-PAN-09` | rasterise the waterfall history into a single image per pane per frame rather than one filled rectangle per bin per row, so display cost is independent of the column count, and size the display width from the pane (bounded) instead of a fixed 192 columns. Scroll geometry is preserved: each row is sampled through its own centre/span, and columns no row covers are transparent. | STK-09 | S | T/D | `column_to_bin` maps an aligned row across the view, shifts and clips a retuned one, scales a row of a different span at its own rate, and never indexes past the bins; `waterfall_rgba` emits exactly `width × rows × 4` bytes, leaves scrolled-off columns transparent, and honours the `#REF`/`#SCL` window (test); the waterfall is visually unchanged and stays smooth at full pane width (demo). |
+| `FR-PAN-10` | derive the panadapter's mouse-wheel tuning step from the **displayed span**, not the radio's `VT` knob rate, so one wheel click is always small relative to what the operator can see and cannot by itself leave the band. | STK-09 | S | T/D | `pan_wheel_step_hz` yields ~1% of span snapped to the 10 Hz grid, never zero at any span in the `#SPN` 6–368 kHz range, and under 10 kHz at the widest span so a click cannot cross a band (test); wheel-tuning a pane moves a fraction of the visible window at every span (demo). |
 
 ## J2. Antenna Tuner & Tune — `FR-ATU`, `FR-TX-TUNE`
 
@@ -335,3 +336,4 @@ syntax per the Programmer's Reference D12, cross-checked vs QK4 (`R-EXT-03`).*
 | 2026-07-20 | 0.21 | DC0SK | Added section J2: FR-ATU-01 (internal ATU in/bypass via `AT`) and FR-TX-TUNE-01 (tune actions via `TU`). Closes the gap found in the operating analysis — `AT` was parsed into state but no `AT`/`TU` encoder existed, so tuner state could be observed and never changed, which is an operational hole for a remote station. Tune keys the transmitter, so it is arm-gated, kept out of the mic path, and ended by both the emergency stop and the link-loss fail-safe. |
 | 2026-07-20 | 0.22 | DC0SK | Added FR-UI-UPD-01 (About-box update check against the GitHub releases API). Operator-initiated only — a radio-control app should not make unannounced outbound connections, and a remote station may be on a metered link. Failure direction is deliberate: an unparseable version or a tag-less reply reports *not an update* / *failed*, never a spurious "upgrade available". |
 | 2026-07-20 | 0.23 | DC0SK | Added FR-UI-TIP-01 (switchable control tooltips, 500 ms dwell). Tips name the CAT command behind each control, so the panel doubles as live documentation against the diagnostics console. iced 0.13's tooltip has no delay of its own, so the dwell is tracked in app state and driven by the existing 100 ms UI tick. |
+| 2026-07-20 | 0.24 | DC0SK | Added FR-PAN-10 (pan wheel step follows the displayed span). Closes #130: the pan wheel stepped by the radio's `VT`, observed at **1 MHz** on live hardware, so a stray scroll left the band and triggered band-stack recalls that silently changed mode and DSP settings. Also wires the panadapter noise blanker (`#NB`/`#NBL`) into the DISPLAY screen under the existing FR-PAN-CTL-01 — closes #127, where both encoders existed and were tested but nothing in the app called them. |

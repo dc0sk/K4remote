@@ -1,7 +1,7 @@
 //! Spectrum/waterfall render-helper tests. trace: FR-PAN-02, FR-PAN-03
 use k4_stream::render::{
     axis_ticks, column_to_bin, crop_to_span, db_grid_step, dbm_to_color, dbm_to_y, hz_per_bin,
-    hz_to_x, pan_window, resample_peak, row_scroll_px,
+    hz_to_x, pan_wheel_step_hz, pan_window, resample_peak, row_scroll_px,
 };
 
 /// dBm→y maps the top of the window to 0 and the bottom to `height`, clamping.
@@ -363,4 +363,51 @@ fn fr_pan_09_agrees_with_row_scroll_px() {
         "last visible column {last} vs edge {}",
         dx + cols as f32
     );
+}
+
+/// A pan wheel click moves a small fraction of what the operator can see,
+/// derived from the span rather than the radio's knob rate.
+/// trace: FR-PAN-10
+#[test]
+fn fr_pan_10_wheel_step_follows_the_span() {
+    assert_eq!(pan_wheel_step_hz(100_000), 1_000); // 100 kHz view → 1 kHz
+    assert_eq!(pan_wheel_step_hz(50_000), 500);
+    assert_eq!(pan_wheel_step_hz(6_000), 60); // narrowest #SPN
+    assert_eq!(pan_wheel_step_hz(368_000), 3_680); // widest #SPN
+                                                   // Unknown span is slow, never surprising.
+    assert_eq!(pan_wheel_step_hz(0), 10);
+}
+
+/// The step is always on the 10 Hz grid and never zero, at any span the K4
+/// can be set to — a zero step would make the wheel silently inert.
+/// trace: FR-PAN-10
+#[test]
+fn fr_pan_10_wheel_step_is_gridded_and_never_zero() {
+    for span in (6_000u32..=368_000).step_by(137) {
+        let s = pan_wheel_step_hz(span);
+        assert!(s >= 10, "span {span} → {s}");
+        assert_eq!(s % 10, 0, "span {span} → {s} is off the 10 Hz grid");
+    }
+    // Absurd spans must not panic or produce a zero step either.
+    for span in [1u32, 9, 99, 999, u32::MAX] {
+        assert!(pan_wheel_step_hz(span) >= 10);
+    }
+}
+
+/// The whole point of #130: a wheel click can never cross a band by itself.
+/// Even at the widest span, one click stays far inside the visible window, and
+/// a hundred clicks only traverse it once.
+/// trace: FR-PAN-10
+#[test]
+fn fr_pan_10_a_click_cannot_leave_the_band() {
+    for span in [6_000u32, 50_000, 100_000, 368_000] {
+        let step = pan_wheel_step_hz(span);
+        assert!(
+            step * 100 <= span + 1_000,
+            "span {span}: {step} Hz/click traverses the view in <100 clicks"
+        );
+        // The narrowest amateur band segment is ~100 kHz; a single click must
+        // be orders of magnitude below that.
+        assert!(step < 10_000, "span {span}: {step} Hz/click is band-sized");
+    }
 }

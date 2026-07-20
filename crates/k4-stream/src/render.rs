@@ -170,6 +170,34 @@ pub fn column_to_bin(
     Some(((frac * row_bins as f64) as usize).min(row_bins - 1))
 }
 
+/// How far one mouse-wheel click over a panadapter should move the VFO, in Hz,
+/// for a view spanning `span_hz`.
+///
+/// Deliberately derived from the **displayed span** rather than the radio's own
+/// tune step (`VT`). `VT` is the front-panel knob rate and can be as coarse as
+/// 1 MHz; applying it to a pan wheel means one stray scroll leaves the band
+/// entirely and triggers band-stack recalls that also change mode and DSP
+/// settings, with nothing on screen warning of it (issue #130).
+///
+/// A click is 1% of the visible span, snapped to a 10 Hz grid — the finest the
+/// K4's `FA`/`FB` commands express in practice — and floored at 10 Hz so a very
+/// narrow span still tunes. That keeps a click always small relative to what
+/// the operator can see: ~1 kHz on a 100 kHz span, 60 Hz on a 6 kHz span, and
+/// never enough to cross a band boundary by accident.
+///
+/// Falls back to 10 Hz when the span is unknown, which is slow but never
+/// surprising.
+///
+/// trace: FR-PAN-10
+pub fn pan_wheel_step_hz(span_hz: u32) -> u32 {
+    if span_hz == 0 {
+        return 10;
+    }
+    let raw = span_hz / 100;
+    // Snap to the 10 Hz grid, then floor.
+    ((raw / 10) * 10).max(10)
+}
+
 /// Horizontal position (px) of an absolute frequency `hz` in a pan view
 /// centred on `center_hz` spanning `span_hz`, over a canvas `width` px wide.
 /// The view centre maps to `width / 2`. Not clamped: callers that need the
