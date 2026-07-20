@@ -163,11 +163,139 @@ fn load_waivers(root: &Path) -> BTreeSet<String> {
     ids
 }
 
+/// Every traced `pub fn` in `k4-protocol::cat` — the command encoders.
+///
+/// R5 exists because an encoder can be written, traced and unit-tested while
+/// nothing in the shipped binary ever calls it: the capability then reads as
+/// delivered in the coverage table and is unreachable to an operator. That is
+/// how the ATU family (#118) and the panadapter noise blanker (#127) both
+/// shipped.
+/// Backtick-quoted names in the first column of a waiver table. Unlike
+/// [`load_waivers`] these are function names, not requirement IDs, and a cell
+/// may hold several separated by `/`.
+fn load_named_waivers(root: &Path, rel: &str) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    let Ok(text) = fs::read_to_string(root.join(rel)) else {
+        return names;
+    };
+    for line in text.lines() {
+        let t = line.trim_start();
+        // Everything from a "Not waived" heading on is a list of known gaps,
+        // not waivers — parsing it would silently waive the very entries the
+        // document is flagging.
+        if t.starts_with("## Not waived") {
+            break;
+        }
+        if !t.starts_with("| `") {
+            continue;
+        }
+        // Only the first column, so a reason mentioning another encoder does
+        // not silently waive it too.
+        let first = t.split('|').nth(1).unwrap_or("");
+        for tok in first.split('`') {
+            let tok = tok.trim();
+            if !tok.is_empty() && tok.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                names.insert(tok.to_string());
+            }
+        }
+    }
+    names
+}
+
+fn cat_encoders(root: &Path) -> Vec<String> {
+    let path = root.join("crates/k4-protocol/src/cat.rs");
+    let Ok(text) = fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let mut traced = false;
+    for line in text.lines() {
+        let t = line.trim_start();
+        if t.starts_with("///") {
+            traced |= t.contains("trace:");
+            continue;
+        }
+        if let Some(rest) = t.strip_prefix("pub fn ") {
+            let name: String = rest
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            if !name.is_empty() && traced {
+                out.push(name);
+            }
+        }
+        if !t.is_empty() {
+            traced = false; // any non-doc line ends the doc block
+        }
+    }
+    out
+}
+
+/// Encoders with no caller outside `cat.rs` itself and outside test code.
+///
+/// "Reachable" means: named in a non-test `.rs` file under `app/` or
+/// `crates/`, other than the module that defines it. That is a deliberately
+/// loose definition — it proves a call site exists, not that a user can reach
+/// it — but it catches the case that matters, where nothing references the
+/// encoder at all.
+fn unreachable_encoders(root: &Path, encoders: &[String]) -> Vec<String> {
+    let mut callers = String::new();
+    for sub in ["crates", "app"] {
+        collect_sources(&root.join(sub), &mut callers);
+    }
+    encoders
+        .iter()
+        .filter(|name| !callers.contains(&format!("{name}(")))
+        .cloned()
+        .collect()
+}
+
+/// Concatenate non-test Rust sources, skipping the encoder module itself and
+/// anything under a `tests` directory or after a `#[cfg(test)]` marker.
+fn collect_sources(dir: &Path, out: &mut String) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            let name = path.file_name().unwrap_or_default().to_string_lossy();
+            if name != "tests" && name != "target" {
+                collect_sources(&path, out);
+            }
+            continue;
+        }
+        if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+            continue;
+        }
+        if path.ends_with("k4-protocol/src/cat.rs") {
+            continue; // the defining module does not count as a caller
+        }
+        let Ok(text) = fs::read_to_string(&path) else {
+            continue;
+        };
+        // Drop everything from the first `#[cfg(test)]` on.
+        let live = match text.find("#[cfg(test)]") {
+            Some(i) => &text[..i],
+            None => &text[..],
+        };
+        out.push_str(live);
+    }
+}
+
 fn main() {
     let root = workspace_root();
     let (declared, duplicates) = declared_requirements(&root);
     let (all_traces, test_traces) = traced_requirements(&root);
     let waivers = load_waivers(&root);
+    let encoders = cat_encoders(&root);
+    let unreached = unreachable_encoders(&root, &encoders);
+    let r5_waived = load_named_waivers(&root, "docs/test/r5-unreached-encoders.md");
+    let r5_gaps: Vec<_> = unreached
+        .iter()
+        .filter(|n| !r5_waived.contains(*n))
+        .cloned()
+        .collect();
 
     let declared_ids: BTreeSet<String> = declared.keys().cloned().collect();
     let dangling: Vec<_> = all_traces.difference(&declared_ids).cloned().collect();
@@ -194,6 +322,11 @@ fn main() {
     println!("  test-context traces:         {}", test_traces.len());
     println!("  R3 waivers:                  {}", waivers.len());
     println!("  R3 gaps (unwaived):          {}", r3_missing.len());
+    println!("  CAT encoders (traced):       {}", encoders.len());
+    println!("  R5 gaps (uncalled, unwaived):{}", r5_gaps.len());
+    for name in &r5_gaps {
+        println!("    - {name}");
+    }
     for id in &r3_missing {
         println!("    - {id}");
     }
@@ -226,6 +359,18 @@ fn main() {
         );
         for id in &stale_waivers {
             eprintln!("    ! {id}");
+        }
+        failed = true;
+    }
+    if !r5_gaps.is_empty() {
+        eprintln!(
+            "\nerror (R5): {} CAT encoder(s) have no caller outside tests, so the capability \
+             is unreachable to an operator. Wire it up, or record why in \
+             docs/test/r5-unreached-encoders.md:",
+            r5_gaps.len()
+        );
+        for name in &r5_gaps {
+            eprintln!("    ! {name}");
         }
         failed = true;
     }
