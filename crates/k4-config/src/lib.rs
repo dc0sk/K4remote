@@ -64,6 +64,11 @@ pub struct Prefs {
     /// Show the diagnostics console in a separate window. Default off.
     #[serde(default)]
     pub diagnostics_window: bool,
+    /// Show explanatory tooltips on controls after a short hover. Default on —
+    /// the panel mirrors a radio with a hundred controls, and the tips name the
+    /// CAT command behind each one (FR-UI-TIP-01).
+    #[serde(default = "default_true")]
+    pub tooltips: bool,
     /// PTT push-to-talk keyboard hotkey (e.g. `Ctrl+Space`).
     #[serde(default = "default_ptt_hotkey")]
     pub ptt_hotkey: String,
@@ -308,6 +313,7 @@ impl Default for Prefs {
             theme: None,
             mute_radio_mon: true,
             diagnostics_window: false,
+            tooltips: true,
             ptt_hotkey: default_ptt_hotkey(),
             ptt_toggle: true,
             mode_aware_ui: true,

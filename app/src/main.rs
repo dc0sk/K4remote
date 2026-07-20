@@ -9,6 +9,7 @@
 
 mod meter;
 mod spectrum;
+mod tips;
 mod ui;
 mod update;
 mod worker;
@@ -29,7 +30,10 @@ use iced::widget::{
     button, container, horizontal_space, mouse_area, pick_list, progress_bar, scrollable, slider,
     stack, text_editor, vertical_slider,
 };
-use iced::widget::{Button, Column, Container, ProgressBar, Row, Space, Text, TextInput};
+use iced::widget::{
+    tooltip, Button, Column, Container, MouseArea, ProgressBar, Row, Space, Text, TextInput,
+    Tooltip,
+};
 use iced::{Alignment, Background, Border, Color, Element, Length, Subscription, Task, Theme};
 
 thread_local! {
@@ -249,6 +253,13 @@ struct App {
     hotkey_down: bool,
     hotkey_keyed: bool,
     arm_flash: u8,
+    /// Which control the pointer is resting on, and since when. A tip appears
+    /// only once it has been there for `tips::TOOLTIP_DELAY` — iced 0.13's
+    /// tooltip has no delay of its own, so the 100 ms UI tick drives it
+    /// (FR-UI-TIP-01).
+    hover: Option<(&'static str, std::time::Instant)>,
+    /// Whether tooltips are shown at all (persisted preference).
+    tooltips: bool,
     /// Result of the last About-box update check (FR-UI-UPD-01).
     update_status: update::UpdateStatus,
     // Text decode (FR-TXT-01): on/off + a poll-rate divider for the TB reads.
@@ -524,6 +535,12 @@ enum Message {
     StartCaptureHotkey,
     ToggleKey,
     EmergencyStop,
+    /// Pointer entered a control (tooltip hover tracking, FR-UI-TIP-01).
+    HoverEnter(&'static str),
+    /// Pointer left the control it was resting on.
+    HoverExit,
+    /// Enable/disable control tooltips.
+    SetTooltips(bool),
     /// Run/stop a transmit tune (`TU`, FR-TX-TUNE-01). Distinct from
     /// [`Message::Tune`], which steps a VFO.
     TxTune(k4_protocol::cat::TuneAction),
@@ -664,6 +681,7 @@ impl App {
         let ptt_toggle = prefs.ptt_toggle;
         let mode_aware_ui = prefs.mode_aware_ui;
         let diag_enabled = prefs.diagnostics_window;
+        let tooltips = prefs.tooltips;
 
         // Open the main window; the daemon starts with none (FR-DIAG-04).
         let (main_window, open_main) = iced::window::open(iced::window::Settings {
@@ -803,6 +821,8 @@ impl App {
             hotkey_down: false,
             hotkey_keyed: false,
             arm_flash: 0,
+            hover: None,
+            tooltips,
             update_status: update::UpdateStatus::Idle,
             decode_on: false,
             decode_tick: 0,
@@ -1088,6 +1108,7 @@ impl App {
                     theme: Some(theme_to_str(self.theme_mode).to_string()),
                     mute_radio_mon: self.mute_mon,
                     diagnostics_window: self.diag_enabled,
+                    tooltips: self.tooltips,
                     ptt_hotkey: self.ptt_hotkey.clone(),
                     ptt_toggle: self.ptt_toggle,
                     mode_aware_ui: self.mode_aware_ui,
@@ -1753,6 +1774,22 @@ impl App {
             }
             Message::ToggleKey => self.send(WorkerCmd::Key(!self.ui.transmitting)),
             Message::EmergencyStop => self.send(WorkerCmd::EmergencyStop),
+            Message::HoverEnter(id) => {
+                // Restart the dwell timer only when moving to a *different*
+                // control, so re-entering the same one mid-hover does not
+                // reset it.
+                if self.hover.map(|(prev, _)| prev) != Some(id) {
+                    self.hover = Some((id, std::time::Instant::now()));
+                }
+            }
+            Message::HoverExit => self.hover = None,
+            Message::SetTooltips(on) => {
+                self.tooltips = on;
+                if !on {
+                    self.hover = None;
+                }
+                self.save_config();
+            }
             Message::TxTune(action) => {
                 // A tune keys the transmitter, so it is arm-gated in the
                 // session like any other TX path. Flash the ARM control when
@@ -4249,15 +4286,24 @@ impl App {
             .push(tgt_btn("A", false, self.pan_target_b))
             .push(tgt_btn("B", true, self.pan_target_b));
         let pal = ui::waterfall_palettes()[(d.wf_palette as usize).min(4)];
-        let peak = two_line_btn(
-            ui::toggle_button("PEAK", Some(d.peak)),
-            Some(d.peak),
-            Some(Message::Disp(DispMsg::Peak(!d.peak))),
+        let tip = |id: &'static str, w: Element<'static, Message>| {
+            tipped(self.tooltips, self.hover, id, w)
+        };
+        let peak = tip(
+            "pan.peak",
+            two_line_btn(
+                ui::toggle_button("PEAK", Some(d.peak)),
+                Some(d.peak),
+                Some(Message::Disp(DispMsg::Peak(!d.peak))),
+            ),
         );
-        let freeze = two_line_btn(
-            ui::toggle_button("FREEZE", Some(d.freeze)),
-            Some(d.freeze),
-            Some(Message::Disp(DispMsg::Freeze(!d.freeze))),
+        let freeze = tip(
+            "pan.freeze",
+            two_line_btn(
+                ui::toggle_button("FREEZE", Some(d.freeze)),
+                Some(d.freeze),
+                Some(Message::Disp(DispMsg::Freeze(!d.freeze))),
+            ),
         );
         // The K4 reports `#MP$-1` when the mini-pan cannot be turned on with the
         // current settings (D12 `#MP$` NOTE). Surface that as `N/A` so a refusal
@@ -4266,14 +4312,17 @@ impl App {
         // operator must be able to change something and retry; a disabled
         // button would be a dead end. The raw `#MP$` reply is in the
         // diagnostics console (rx, Debug) for confirmation.
-        let minipan = two_line_btn(
-            if self.ui.radio.mini_pan_available == Some(false) {
-                ui::unavailable_button("MINI-PAN")
-            } else {
-                ui::toggle_button("MINI-PAN", self.ui.radio.mini_pan_on)
-            },
-            self.ui.radio.mini_pan_on,
-            Some(Message::ToggleMiniPan),
+        let minipan = tip(
+            "pan.minipan",
+            two_line_btn(
+                if self.ui.radio.mini_pan_available == Some(false) {
+                    ui::unavailable_button("MINI-PAN")
+                } else {
+                    ui::toggle_button("MINI-PAN", self.ui.radio.mini_pan_on)
+                },
+                self.ui.radio.mini_pan_on,
+                Some(Message::ToggleMiniPan),
+            ),
         );
         // Steppers laid out on a fixed 3-column grid so labels, −/+ buttons and
         // values align across rows and columns.
@@ -4283,32 +4332,44 @@ impl App {
             .push(view_row)
             .push(
                 grid_row()
-                    .push(disp_stepper(
-                        "REF",
-                        format!("{} dBm", d.ref_db),
-                        Message::Disp(DispMsg::Ref(d.ref_db - 5)),
-                        Message::Disp(DispMsg::Ref(d.ref_db + 5)),
+                    .push(tip(
+                        "pan.ref",
+                        disp_stepper(
+                            "REF",
+                            format!("{} dBm", d.ref_db),
+                            Message::Disp(DispMsg::Ref(d.ref_db - 5)),
+                            Message::Disp(DispMsg::Ref(d.ref_db + 5)),
+                        ),
                     ))
-                    .push(disp_stepper(
-                        "SPAN",
-                        format!("{:.0} kHz", f64::from(d.span_hz) / 1000.0),
-                        Message::Disp(DispMsg::Span(d.span_hz / 2)),
-                        Message::Disp(DispMsg::Span(d.span_hz.saturating_mul(2))),
+                    .push(tip(
+                        "pan.span",
+                        disp_stepper(
+                            "SPAN",
+                            format!("{:.0} kHz", f64::from(d.span_hz) / 1000.0),
+                            Message::Disp(DispMsg::Span(d.span_hz / 2)),
+                            Message::Disp(DispMsg::Span(d.span_hz.saturating_mul(2))),
+                        ),
                     ))
-                    .push(disp_stepper(
-                        "SCALE",
-                        d.scale.to_string(),
-                        Message::Disp(DispMsg::Scale(d.scale.saturating_sub(5))),
-                        Message::Disp(DispMsg::Scale(d.scale + 5)),
+                    .push(tip(
+                        "pan.scale",
+                        disp_stepper(
+                            "SCALE",
+                            d.scale.to_string(),
+                            Message::Disp(DispMsg::Scale(d.scale.saturating_sub(5))),
+                            Message::Disp(DispMsg::Scale(d.scale + 5)),
+                        ),
                     )),
             )
             .push(
                 grid_row()
-                    .push(disp_stepper(
-                        "AVG",
-                        d.avg.to_string(),
-                        Message::Disp(DispMsg::Avg(d.avg.saturating_sub(1))),
-                        Message::Disp(DispMsg::Avg(d.avg + 1)),
+                    .push(tip(
+                        "pan.avg",
+                        disp_stepper(
+                            "AVG",
+                            d.avg.to_string(),
+                            Message::Disp(DispMsg::Avg(d.avg.saturating_sub(1))),
+                            Message::Disp(DispMsg::Avg(d.avg + 1)),
+                        ),
                     ))
                     .push(disp_stepper(
                         "WF HT",
@@ -5319,11 +5380,13 @@ impl App {
         let mut transmit_row = Row::new()
             .spacing(8)
             .align_y(Alignment::Center)
-            .push(arm)
-            .push(key)
-            .push(estop);
+            .push(tipped(self.tooltips, self.hover, "tx.arm", arm))
+            .push(tipped(self.tooltips, self.hover, "tx.ptt", key))
+            .push(tipped(self.tooltips, self.hover, "tx.estop", estop));
         if atu_fitted {
-            transmit_row = transmit_row.push(atu).push(tune_btn);
+            transmit_row = transmit_row
+                .push(tipped(self.tooltips, self.hover, "atu.mode", atu))
+                .push(tipped(self.tooltips, self.hover, "atu.tune", tune_btn));
         }
         let transmit_row = transmit_row
             .push(horizontal_space())
@@ -5803,6 +5866,29 @@ impl App {
                 Row::new()
                     .spacing(8)
                     .align_y(Alignment::Center)
+                    .push(tipped(
+                        self.tooltips,
+                        self.hover,
+                        "app.tooltips",
+                        small_btn(
+                            if self.tooltips {
+                                "Control tooltips: ON"
+                            } else {
+                                "Control tooltips: OFF"
+                            },
+                            Message::SetTooltips(!self.tooltips),
+                        ),
+                    ))
+                    .push(
+                        Text::new("explain each control, and name the CAT command behind it")
+                            .size(10)
+                            .color(dim),
+                    ),
+            )
+            .push(
+                Row::new()
+                    .spacing(8)
+                    .align_y(Alignment::Center)
                     .push(small_btn(
                         if self.kpod_enabled {
                             "K-Pod: ON"
@@ -6219,6 +6305,60 @@ fn badge(label: &'static str, role: ui::ColorRole) -> Element<'static, Message> 
 /// A two-line state button (FR-UI-11): small function label over the live
 /// value, blue-filled when the toggle is on (FR-UI-10). `msg: None` renders it
 /// as a read-only indicator (disabled).
+/// Wrap a control so that resting the pointer on it for
+/// [`tips::TOOLTIP_DELAY`] shows its tip (FR-UI-TIP-01).
+///
+/// A no-op when tooltips are switched off, or when no tip has been written for
+/// `id` — an un-written tip must render as nothing, not an empty bubble.
+///
+/// iced 0.13's `Tooltip` has no delay of its own, so the dwell is tracked here:
+/// a `mouse_area` reports enter/exit, and the tooltip is only built once the
+/// pointer has been still long enough. The 100 ms UI tick re-renders, so the
+/// observed delay is 500–600 ms.
+fn tipped<'a>(
+    enabled: bool,
+    hover: Option<(&'static str, std::time::Instant)>,
+    id: &'static str,
+    content: impl Into<Element<'a, Message>>,
+) -> Element<'a, Message> {
+    let content = content.into();
+    if !enabled {
+        return content;
+    }
+    let Some(text) = tips::tip(id) else {
+        return content;
+    };
+    let dwelt =
+        matches!(hover, Some((h, since)) if h == id && since.elapsed() >= tips::TOOLTIP_DELAY);
+    let inner: Element<'a, Message> = if dwelt {
+        Tooltip::new(
+            content,
+            Container::new(Text::new(text).size(11))
+                .padding([4, 8])
+                .style(|theme: &Theme| {
+                    let p = theme.extended_palette();
+                    container::Style {
+                        background: Some(Background::Color(p.background.weak.color)),
+                        border: iced::Border {
+                            color: p.background.strong.color,
+                            width: 1.0,
+                            radius: 4.0.into(),
+                        },
+                        ..container::Style::default()
+                    }
+                }),
+            tooltip::Position::Bottom,
+        )
+        .into()
+    } else {
+        content
+    };
+    MouseArea::new(inner)
+        .on_enter(Message::HoverEnter(id))
+        .on_exit(Message::HoverExit)
+        .into()
+}
+
 fn two_line_btn(
     state: ui::ButtonState,
     on: Option<bool>,

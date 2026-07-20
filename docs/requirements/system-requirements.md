@@ -1,7 +1,8 @@
 ---
 title: "System Requirements Specification"
 status: Draft
-version: "0.22"
+version: "0.23"
+version: "0.21"
 updated: 2026-07-20
 authors:
   - Simon Keimer (DC0SK)
@@ -10,7 +11,8 @@ owns: [FR, NFR]
 
 # System Requirements Specification (SRS)
 
-**Version:** 0.22 (Draft) · **Date:** 2026-07-20 · **Author:** DC0SK
+**Version:** 0.23 (Draft) · **Date:** 2026-07-20 · **Author:** DC0SK
+**Version:** 0.21 (Draft) · **Date:** 2026-07-20 · **Author:** DC0SK
 Trace: owns `FR-`, `NFR-`. Up → [stakeholder-requirements.md](stakeholder-requirements.md);
 down → [../concept/architecture.md](../concept/architecture.md) (`ARC`) and
 [../test/test-strategy.md](../test/test-strategy.md) (`TC`).
@@ -218,6 +220,7 @@ Interface Spec v1.03; Owner's Manual Rev F) for hands-on VFO selection + tuning.
 | `FR-UI-17` | offer a **theme selector** cycling **Dark → Light → Contrast → System**, applied live to the whole UI; `System` follows the OS light/dark preference. Each theme resolves the surface-shade and semantic-role palettes (`FR-UI-10/15`). | STK-11 | C | T/D | `ThemeMode` cycles the four modes with distinct labels and resolves to a concrete palette (`System` per the detected OS preference) (test); each theme renders coherently (demo). |
 | `FR-UI-18` | provide an **About** affordance showing the author, the **software version**, the license, the project URL, and a **donate** link; the license, project URL, and donate entries shall open in the OS browser when activated. | STK-11 | C | T/D | The About constants (author/license+URL/project URL/donate URL) and `app_version()` are present (test); the About box shows them, the links open externally, and it dismisses (demo). |
 | `FR-UI-UPD-01` | offer an operator-initiated check in the About box for a newer release on the project's GitHub, showing the new version number as a link to its download page, or that the build is current, or why the check failed. The check shall run **only** when requested — never on a timer or at start-up — and shall never report an update it cannot substantiate. | STK-16 | C | T/D | Version comparison is numeric (`0.10.0` newer than `0.9.0`), an equal or older upstream is not an update, and an unparseable version or a reply without a tag yields *not-an-update* / *failed* rather than success (test); the button reports the current release against a live GitHub and the link opens that release's page (demo). |
+| `FR-UI-TIP-01` | show an explanatory tooltip when the pointer rests on a control for **500 ms**, naming what the control does and the CAT command behind it, switchable by a persisted preference (default on) in the settings screen. A control with no tip written shall show nothing rather than an empty tooltip. | STK-16 | C | T/D | Tips are unique-keyed, single-sentence, non-trivial, and most name a CAT mnemonic; lookup of an unknown id yields `None`; the delay constant is 500 ms (test); tips appear after the dwell and vanish when switched off (demo). |
 | `FR-UI-19` | when a primary softkey (`MENU/Fn/DISPLAY/BAND/MAIN RX/SUB RX/TX`) is active, display that primary's K4 **configuration screen in place of the spectrum frame** (`R-EXT-02`) — **not** replacing the mode/filter controls and **not** a separate window — and restore the spectrum when it is deselected. The screen shows the radio's *additional* functions (e.g. RX/TX equalizer, display setup, band stacking), not controls already present elsewhere in the UI; the VFO band, controls, softkey row, and lower panels stay visible and operational. | STK-11 | S | T/D | `menu_screen_synopsis` maps each primary to a distinct screen (test); selecting a primary swaps only the spectrum frame and deselecting restores it, with the rest of the UI untouched (demo). |
 | `FR-UI-20` | **seed the configuration screens from the radio** on connect: the connect GET burst requests each screen's values (`RE/TE/KP/KS/MI/MG/LO/AN/AR/VX/BN/#REF/#SPN/#SCL/#DPM/#WFC/#WFH`), the parsed `RadioState` is surfaced into the snapshot, and each screen (EQ/DISPLAY/TX/RX) reflects the radio's **current** values once per connection rather than local defaults; later user edits are not overwritten. | STK-11/04 | S | T/D | `RadioState::apply_cat` parses each RESP form (test); on connect the screens show the radio's reported values (demo/live). |
 | `FR-UI-21` | **start in a landscape window** (wider than tall), matching the horizontal layout. | STK-11 | C | T/D | `DEFAULT_WINDOW_SIZE` has width > height (test); the window opens landscape (demo). |
@@ -331,3 +334,4 @@ syntax per the Programmer's Reference D12, cross-checked vs QK4 (`R-EXT-03`).*
 | 2026-07-19 | 0.20 | DC0SK | Added FR-PAN-09 (waterfall drawn as one texture). The per-cell rectangle loop made render cost scale with the column count, which is what pinned the display at 192 columns; a single `draw_image` decouples the two, so the width now follows the pane (capped at 2048). Closes the render-cost half of #115. |
 | 2026-07-20 | 0.21 | DC0SK | Added section J2: FR-ATU-01 (internal ATU in/bypass via `AT`) and FR-TX-TUNE-01 (tune actions via `TU`). Closes the gap found in the operating analysis — `AT` was parsed into state but no `AT`/`TU` encoder existed, so tuner state could be observed and never changed, which is an operational hole for a remote station. Tune keys the transmitter, so it is arm-gated, kept out of the mic path, and ended by both the emergency stop and the link-loss fail-safe. |
 | 2026-07-20 | 0.22 | DC0SK | Added FR-UI-UPD-01 (About-box update check against the GitHub releases API). Operator-initiated only — a radio-control app should not make unannounced outbound connections, and a remote station may be on a metered link. Failure direction is deliberate: an unparseable version or a tag-less reply reports *not an update* / *failed*, never a spurious "upgrade available". |
+| 2026-07-20 | 0.23 | DC0SK | Added FR-UI-TIP-01 (switchable control tooltips, 500 ms dwell). Tips name the CAT command behind each control, so the panel doubles as live documentation against the diagnostics console. iced 0.13's tooltip has no delay of its own, so the dwell is tracked in app state and driven by the existing 100 ms UI tick. |
