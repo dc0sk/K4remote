@@ -35,6 +35,7 @@ consistent traceability** from stakeholder needs down to test cases and test res
 | [requirements/k4-operating-gap-analysis.md](requirements/k4-operating-gap-analysis.md) | Operating features of the real K4 (incl. the tap/hold touch model) vs. what the app implements; prioritised gaps | — (proposes `FR-*`) |
 | [concept/station-accessories-plan.md](concept/station-accessories-plan.md) | Plan for KAT500 / KPA500 / KPA1500 support: transport, protocols, amplifier safety, phasing | — (proposes `FR-ACC/KPA/KAT-*`) |
 | [concept/cat-server-plan.md](concept/cat-server-plan.md) | Plan for a CAT server so third-party logging software can drive the radio through the app | — (proposes `FR-CATSRV-*`) |
+| [test/r5-unreached-encoders.md](test/r5-unreached-encoders.md) | R5 waivers: CAT encoders deliberately left with no non-test caller, each with a reason | — |
 | [test/test-strategy.md](test/test-strategy.md) | Test approach, levels, verification methods, traceability matrix | `TC-` |
 | [user-manual.md](user-manual.md) | **User-facing** operating manual (install, connect, tune, TX, K-Pod, settings) | — |
 | [references/](references/) | Vendor documentation (Elecraft K4 Programmer's Reference, manuals) | — |
