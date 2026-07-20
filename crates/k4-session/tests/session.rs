@@ -370,3 +370,34 @@ fn fr_tx_tune_01_emergency_stop_ends_a_tune() {
     assert!(sent.contains(&"TU0;".to_string()), "tune stopped: {sent:?}");
     assert_eq!(link.last_sent().as_deref(), Some("RX;"));
 }
+
+/// A `<cmd>?;` rejection reaches the session's state so the app can announce
+/// it. `RadioState` recorded this all along, but nothing read it — the
+/// operator saw a rejection only as one more Debug `rx` line among the
+/// traffic, which is not "surfaced" in any useful sense (FR-CAT-03).
+/// trace: FR-CAT-03
+#[test]
+fn fr_cat_03_rejection_reaches_the_session_state() {
+    let (link, _clock, mut s) = build();
+    assert_eq!(s.state().last_error, None);
+
+    link.queue(&["FA?;"]);
+    s.pump().unwrap();
+    assert_eq!(
+        s.state().last_error.as_deref(),
+        Some("FA"),
+        "the rejected mnemonic identifies which request failed"
+    );
+
+    // A later rejection replaces it, so the report names the current failure
+    // rather than the first one ever seen.
+    link.queue(&["MD?;"]);
+    s.pump().unwrap();
+    assert_eq!(s.state().last_error.as_deref(), Some("MD"));
+
+    // A normal response does not clear it — there is no "error acknowledged"
+    // reply on the wire, so the app decides when it has been reported.
+    link.queue(&["MD3;"]);
+    s.pump().unwrap();
+    assert_eq!(s.state().last_error.as_deref(), Some("MD"));
+}
