@@ -411,3 +411,45 @@ fn fr_pan_10_a_click_cannot_leave_the_band() {
         assert!(step < 10_000, "span {span}: {step} Hz/click is band-sized");
     }
 }
+
+/// Under fixed-tune (`#FXT`) the pan centre and the VFO diverge: the pan stays
+/// put while the VFO moves within it. The display maths must place the VFO by
+/// frequency rather than assuming mid-canvas.
+///
+/// This path existed for FR-PAN-06/08 but was **unreachable** until #133 added
+/// a control to switch fixed-tune on — nothing could produce a divergent
+/// centre, so it had never been exercised.
+/// trace: FR-PAN-CTL-01, FR-PAN-06
+#[test]
+fn fr_pan_ctl_01_fixed_tune_places_the_vfo_off_centre() {
+    let (center, span, w) = (14_200_000.0_f64, 50_000_u32, 800.0_f32);
+
+    // Tracking: the VFO sits at the pan centre, so mid-canvas.
+    assert_eq!(hz_to_x(center, center, span, w), 400.0);
+
+    // Fixed: the VFO has moved a quarter-span up while the pan stayed put.
+    // The carrier line must follow it, not stay at 400.
+    let vfo = center + 12_500.0;
+    assert_eq!(hz_to_x(vfo, center, span, w), 600.0);
+    // ...and down.
+    assert_eq!(hz_to_x(center - 12_500.0, center, span, w), 200.0);
+
+    // A VFO tuned outside the fixed window maps off-canvas rather than
+    // clamping to an edge, so callers can tell it has left the view.
+    let outside = hz_to_x(center + 40_000.0, center, span, w);
+    assert!(
+        outside > w,
+        "off-window VFO must map beyond the canvas: {outside}"
+    );
+
+    // Waterfall rows keep their own centre, so a fixed pan's history does not
+    // scroll even as the VFO moves — the complement of FR-PAN-06.
+    let row_c = center as i64;
+    assert_eq!(row_scroll_px(row_c, row_c, span, w), 0.0);
+    for c in [0usize, 400, 799] {
+        assert!(
+            column_to_bin(c, 800, row_c, span, row_c, span, 800).is_some(),
+            "a fixed pan's rows stay fully in view"
+        );
+    }
+}

@@ -36,11 +36,13 @@ means it belongs in an issue, not here.
 | `set_rit` / `set_xit` | The UI uses the radio's toggle forms so the button follows the radio's own state; these are the explicit-value forms. |
 | `set_band_sub` | Sub-receiver band selection has no UI yet — the BAND screen targets the main receiver. Tracked as future work under `FR-VFO-04`. |
 | `menu_open` / `menu_query_def` | The MENU screen uses `menu_query` + `menu_set`; these are the open-by-number and query-default forms, unused so far. |
-| `set_pan_fixed` | **Temporary.** `#FXT` is a real gap, not an alternate form — tracked as [#133](https://github.com/dc0sk/K4remote/issues/133). Waived only so R5 can be enforcing from the start rather than shipping as an ignorable report. Remove this row when the DISPLAY-screen control lands. |
 
 ## Not waived — real gaps
 
-None outstanding. `set_pan_fixed` is waived above **with an expiry**: it is a
-genuine gap (#133), waived only so the R5 gate can be enforcing today instead of
-shipping as a report nobody acts on. A waiver with a reason and an issue is
-visible; a non-failing report is not.
+None outstanding.
+
+`set_pan_fixed` (`#FXT`) was waived here with an explicit expiry when R5 landed;
+the DISPLAY-screen control arrived in #133 and the waiver has been removed. The
+gate now proves the capability is reachable rather than taking the waiver's word
+for it — which is the point of writing expiring waivers rather than permanent
+ones.

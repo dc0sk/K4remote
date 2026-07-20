@@ -196,6 +196,9 @@ pub struct RadioState {
     pub wf_palette: Option<u8>,
     pub wf_height: Option<u8>,
     /// Mini-pan display on/off (`#MP`).
+    /// Panadapter fixed-tune (`#FXT`): `true` = the pan stays put while the
+    /// VFO moves within it, `false` = the pan tracks the VFO.
+    pub pan_fixed: Option<bool>,
     pub mini_pan_on: Option<bool>,
     /// `false` when the radio reports `#MP$-1` — the mini-pan **cannot** be
     /// turned on with the current radio settings (D12 `#MP$` NOTE). Distinct
@@ -570,6 +573,16 @@ impl RadioState {
             if let Ok(v) = split_sub(arg).1.parse::<u8>() {
                 self.wf_height = Some(v);
             }
+        } else if let Some(arg) = cmd.strip_prefix("#FXT") {
+            // `#FXTn` — 0 track, 1 fixed (D12). Accept a `$` for consistency
+            // with the rest of the `#` family, where it is part of the LCD
+            // mnemonic rather than a sub-receiver modifier.
+            let a = split_sub(arg).1;
+            if let Some(c) = a.chars().next() {
+                if c == '0' || c == '1' {
+                    self.pan_fixed = Some(c == '1');
+                }
+            }
         } else if let Some(arg) = cmd.strip_prefix("#MP") {
             // `#MP$n` — mini-pan state, n = -1 (unavailable), 0 (off) or
             // 1 (displayed). `$` is part of the LCD mnemonic but accept it
@@ -801,6 +814,6 @@ pub fn connect_state_seed() -> &'static [&'static str] {
         "#MP$;", // mini-pan on/off
         // Configuration-screen read-back (FR-UI-19 screens):
         "RE;", "TE;", "KP;", "KS;", "MI;", "MG;", "LO;", "AN;", "AR;", "AR$;", "VXV;", "BN;",
-        "#REF;", "#SPN;", "#SCL;", "#DPM;", "#WFC;", "#WFH;",
+        "#REF;", "#SPN;", "#SCL;", "#DPM;", "#WFC;", "#WFH;", "#FXT;",
     ]
 }

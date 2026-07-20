@@ -342,6 +342,8 @@ enum DispMsg {
     Freeze(bool),
     Palette(u8),
     Height(u8),
+    /// Panadapter fixed-tune (`#FXT`): pan stays put vs tracks the VFO.
+    Fixed(bool),
     /// Panadapter noise blanker: 0 off, 1 on, 2 auto (`#NB`).
     PanNb(u8),
     /// Panadapter noise-blanker level, 0–14 (`#NBL`).
@@ -2711,6 +2713,7 @@ impl App {
                 self.display.wf_palette = p.min(4);
                 cat::set_waterfall_palette(self.display.wf_palette)
             }
+            DispMsg::Fixed(on) => cat::set_pan_fixed(on),
             DispMsg::PanNb(n) => {
                 self.display.pan_nb = n.min(2);
                 cat::set_pan_nb(self.display.pan_nb)
@@ -4532,6 +4535,19 @@ impl App {
                     // Panadapter noise blanker (#NB / #NBL) — cleans the
                     // display without touching receive audio. The encoders
                     // existed and were tested; nothing reached them (#127).
+                    // Fixed-tune (#FXT): the pan stops re-centring on every
+                    // QSY. Driven from the radio's read-back, like the other
+                    // `#`-family controls (#133).
+                    .push(tip(
+                        "pan.fixed",
+                        two_line_btn(
+                            ui::toggle_button("FIXED TUNE", self.ui.radio.pan_fixed),
+                            self.ui.radio.pan_fixed,
+                            Some(Message::Disp(DispMsg::Fixed(
+                                !self.ui.radio.pan_fixed.unwrap_or(false),
+                            ))),
+                        ),
+                    ))
                     .push(tip(
                         "pan.nb",
                         two_line_btn(
