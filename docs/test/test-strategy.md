@@ -1,7 +1,7 @@
 ---
 title: "Test Strategy & Traceability"
 status: Draft
-version: "1.50"
+version: "1.51"
 updated: 2026-07-19
 authors:
   - Simon Keimer (DC0SK)
@@ -143,6 +143,8 @@ Maintained partly by hand (design intent) and verified/augmented by `xtask trace
 | FR-PAN-07 | STK-09/10 | ARC-11 | TC-PAN-07 (`#REF`/`#SCL` → window, adaptive dB grid step, axis ticks + Hz/bin, `$`-spelling read-back) | L1 | V\* |
 | FR-PAN-08 | STK-09 | ARC-10/11 | TC-PAN-08 (centre crop + degenerate cases, contiguous-bucket resample, cropped row reports display span, crop resolves a merged carrier pair) | L1 | V\* |
 | FR-PAN-09 | STK-09 | ARC-11 | TC-PAN-09 (column→bin lookup incl. scroll/clip/rescale/degenerate; RGBA buffer size, transparency, colormap window) | L1 | V\* |
+| FR-ATU-01 | STK-10 | ARC-04 | TC-ATU-01 (`AT1/AT2/AT/` encode; `AT0` unrepresentable) | L1 | V\* |
+| FR-TX-TUNE-01 | STK-10/13 | ARC-04/06 | TC-TUNE-01 (`TU0–TU4` encode + `transmits()`), TC-TUNE-02 (arm gate, exit ungated, mic path stays closed, e-stop ends a tune) | L1 | V\* |
 | FR-UI-04 | STK-08/11 | ARC-08 | TC-UI-01 (arm/e-stop affordances) | L4 | P |
 | FR-UI-07 | STK-11 | ARC-08 | TC-UI-02 (no UI block under load) | L5 | P |
 | FR-UI-08 | STK-11 | ARC-15 | TC-UI-03 (ViewMode cycle + pane visibility) | L1 | V\* |
@@ -354,3 +356,4 @@ FR-SES-MULTI, FR-DIAG-02, etc. — get `TC` IDs when promoted to `Approved`.)*
 | 2026-07-19 | 1.48 | DC0SK | Tier-span cropping (FR-PAN-08) — **fixes a defect shipped in 1.45/0.17**. `PanFrame::span_hz()` is the *tier* the radio streams, not the display span (its doc comment said "Displayed span", which is what misled FR-PAN-06 into overriding `#SPN` with it — scaling the axis, the span readout and click-to-QSY by `tier / #SPN`). Rows are now cropped to the `#SPN` centre window before decimating, which also improves resolution at no memory cost (important for the Pi target, NFR-PORT-02). New `crop_to_span`/`resample_peak`; fixed an overlapping-bucket bug in the latter that put one carrier in two columns. 8 new tests sabotage-verified (no-crop, off-centre crop, tier-span-reported each fail). 184 tests. |
 | 2026-07-19 | 1.49 | DC0SK | Waterfall rasterised to one texture (FR-PAN-09), closing the render-cost half of #115. The old loop emitted one `fill_rectangle` per bin per row — ~12.3k quads per pane per frame at 64×192, doubled in dual-pan — so cost scaled with the column count and capped it at 192. New `column_to_bin` expresses the FR-PAN-06 scroll as a pixel lookup, and `waterfall_rgba` (extracted from `draw` so the buffer maths is testable without a GPU) builds one image drawn via `Frame::draw_image`. Row cap raised 192 → 1024. 11 new tests sabotage-verified (ignoring the retune fails 3, clamping instead of clipping fails 4, using the view span for the row fails 1, wrong row stride fails 1, always-opaque fails 2, ignoring the dB window fails 1). 195 tests. |
 | 2026-07-20 | 1.50 | DC0SK | Mini-pan fix + first hardware confirmation of the panadapter work. **HIL:** click-to-QSY confirmed correct on a live K4 (FR-PAN-05 → field-verified; FR-PAN-08 indirectly, since the click mapping scales by `tier / #SPN`). **Two defects found:** MiniPAN (`0x03`) was decoded with the main pan's 27-byte header when `R-EXT-01` gives it a 5-byte one — swallowing 22 bins and rejecting any mini frame under 27 bytes, so the mini-pan could never display; and `#MP$-1` ("cannot be enabled with current settings", D12) was collapsed into plain "off", so a refusal looked like a dead button. The old test asserted only `mini == true`, never the layout. Both fixed, both sabotage-verified. FR-PAN-06/07/09 remain hardware-unverified. 197 tests. |
+| 2026-07-20 | 1.51 | DC0SK | ATU + TUNE control (FR-ATU-01, FR-TX-TUNE-01), closing #118. `AT` was parsed into `RadioState` but no encoder existed for `AT` or `TU`, so the app could see tuner state and never act on it. `Session::tune` is arm-gated like voice/CW and deliberately does **not** set `transmitting` — that flag opens `send_tx_audio`, so a tune carrier would otherwise have streamed the operator's mic on air. Emergency stop and the link-loss fail-safe both emit `TU0` explicitly rather than relying on the radio's automatic `TU0` when it drops transmit (D12 `TU`). Also softened the mini-pan `N/A` state to stay clickable: the radio refuses with `#MP$-1` and neither D12 nor D14 documents which setting blocks it, so a disabled button was a dead end. 203 tests; 3 tune-safety sabotages caught (ungating the arm, setting the TX flag, e-stop forgetting the tune). |

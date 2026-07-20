@@ -521,6 +521,11 @@ enum Message {
     StartCaptureHotkey,
     ToggleKey,
     EmergencyStop,
+    /// Run/stop a transmit tune (`TU`, FR-TX-TUNE-01). Distinct from
+    /// [`Message::Tune`], which steps a VFO.
+    TxTune(k4_protocol::cat::TuneAction),
+    /// Toggle the ATU in/bypass (`AT/`, FR-ATU-01).
+    AtuToggle,
     CatInputChanged(String),
     SendCat,
     SetViewMode(ViewMode),
@@ -1738,6 +1743,18 @@ impl App {
             }
             Message::ToggleKey => self.send(WorkerCmd::Key(!self.ui.transmitting)),
             Message::EmergencyStop => self.send(WorkerCmd::EmergencyStop),
+            Message::TxTune(action) => {
+                // A tune keys the transmitter, so it is arm-gated in the
+                // session like any other TX path. Flash the ARM control when
+                // refused, matching the PTT-while-disarmed feedback
+                // (FR-TX-PTT-01, FR-TX-SAFE-03).
+                if action.transmits() && !self.ui.tx_armed {
+                    self.arm_flash = 18; // blink ARM ~3x (must arm first)
+                } else {
+                    self.send(WorkerCmd::Tune(action));
+                }
+            }
+            Message::AtuToggle => self.send(WorkerCmd::AtuToggle),
             Message::CatInputChanged(v) => self.cat_input = v,
             Message::SendCat => {
                 let cmd = self.cat_input.trim();
@@ -4214,18 +4231,21 @@ impl App {
             Some(d.freeze),
             Some(Message::Disp(DispMsg::Freeze(!d.freeze))),
         );
-        // The K4 refuses the mini-pan under some display settings, reporting
-        // `#MP$-1`. Show that instead of leaving a live-looking button that
-        // silently does nothing (D12 `#MP$` NOTE).
-        let minipan_blocked = self.ui.radio.mini_pan_available == Some(false);
+        // The K4 reports `#MP$-1` when the mini-pan cannot be turned on with the
+        // current settings (D12 `#MP$` NOTE). Surface that as `N/A` so a refusal
+        // is not indistinguishable from "off" — but keep the button live.
+        // Neither D12 nor D14 documents *which* setting blocks it, so the
+        // operator must be able to change something and retry; a disabled
+        // button would be a dead end. The raw `#MP$` reply is in the
+        // diagnostics console (rx, Debug) for confirmation.
         let minipan = two_line_btn(
-            if minipan_blocked {
+            if self.ui.radio.mini_pan_available == Some(false) {
                 ui::unavailable_button("MINI-PAN")
             } else {
                 ui::toggle_button("MINI-PAN", self.ui.radio.mini_pan_on)
             },
             self.ui.radio.mini_pan_on,
-            (!minipan_blocked).then_some(Message::ToggleMiniPan),
+            Some(Message::ToggleMiniPan),
         );
         // Steppers laid out on a fixed 3-column grid so labels, −/+ buttons and
         // values align across rows and columns.
@@ -5212,6 +5232,42 @@ impl App {
             .style(btn_style(BtnKind::Danger))
             .padding([6, 10])
             .on_press(Message::EmergencyStop);
+        // ATU + TUNE (FR-ATU-01, FR-TX-TUNE-01). These sit with the transmit
+        // controls because every TUNE action but exit puts the radio on air.
+        // `AT` reports 0 = not installed, so the tuner controls only appear
+        // when the radio says a KAT4 is fitted (D12 `AT` NOTE).
+        let atu_fitted = !matches!(self.ui.radio.atu_mode, Some(0));
+        let tuning = self.ui.tuning;
+        let atu = Button::new(
+            Text::new(match self.ui.radio.atu_mode {
+                Some(2) => "ATU AUTO",
+                Some(1) => "ATU BYP",
+                _ => "ATU",
+            })
+            .size(13),
+        )
+        .style(btn_style(if self.ui.radio.atu_mode == Some(2) {
+            BtnKind::Active
+        } else {
+            BtnKind::Plain
+        }))
+        .padding([6, 10])
+        .on_press(Message::AtuToggle);
+        // Tapping TUNE while a tune is running stops it — the same control
+        // must always be able to take the radio off air.
+        let tune_btn =
+            Button::new(Text::new(if tuning { "STOP TUNE" } else { "ATU TUNE" }).size(13))
+                .style(btn_style(if tuning {
+                    BtnKind::Amber
+                } else {
+                    BtnKind::Plain
+                }))
+                .padding([6, 10])
+                .on_press(Message::TxTune(if tuning {
+                    k4_protocol::cat::TuneAction::Exit
+                } else {
+                    k4_protocol::cat::TuneAction::AtuTune
+                }));
         // PA/PWR controls: power range H (QRO) / L (QRP) / X (mW) + PWR slider
         // (FR-TX-02). Seeded from the radio.
         let range_btn = |lbl: &'static str, r: char, cur: char| {
@@ -5230,14 +5286,18 @@ impl App {
             'X' => format!("{:.1} mW", f32::from(self.tx_power) / 10.0),
             _ => format!("{:.1} W", f32::from(self.tx_power) / 10.0),
         };
-        // Row 1: the three transmit controls (ARM / PTT / E-STOP), then the
-        // PA/PWR controls to their right.
-        let transmit_row = Row::new()
+        // Row 1: the transmit controls (ARM / PTT / E-STOP), then ATU + TUNE
+        // when a tuner is fitted, then the PA/PWR controls to their right.
+        let mut transmit_row = Row::new()
             .spacing(8)
             .align_y(Alignment::Center)
             .push(arm)
             .push(key)
-            .push(estop)
+            .push(estop);
+        if atu_fitted {
+            transmit_row = transmit_row.push(atu).push(tune_btn);
+        }
+        let transmit_row = transmit_row
             .push(horizontal_space())
             .push(Text::new("PWR").size(11).color(dim))
             .push(range_btn("H", 'H', self.tx_pwr_range))

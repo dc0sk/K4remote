@@ -12,7 +12,7 @@
 use std::io;
 use std::time::{Duration, Instant};
 
-use k4_protocol::cat::decode_cat_text;
+use k4_protocol::cat::{self, decode_cat_text, TuneAction};
 use k4_protocol::cw::{encode_kz, encode_kzf, encode_kzl, KeyElement};
 use k4_protocol::frame::PayloadType;
 use k4_protocol::state::{connect_state_seed, RadioState};
@@ -143,6 +143,9 @@ pub struct Session<L: CatLink, C: Clock> {
     connected: bool,
     tx_armed: bool,
     transmitting: bool,
+    /// A tune carrier is believed to be on air. Kept separate from
+    /// `transmitting`, which gates the mic path — see [`Session::tune`].
+    tuning: bool,
     last_rx: Instant,
     last_ping: Instant,
 }
@@ -159,6 +162,7 @@ impl<L: CatLink, C: Clock> Session<L, C> {
             connected: true,
             tx_armed: false,
             transmitting: false,
+            tuning: false,
             last_rx: t0,
             last_ping: t0,
         }
@@ -271,6 +275,38 @@ impl<L: CatLink, C: Clock> Session<L, C> {
         Ok(true)
     }
 
+    /// Start or stop a tune (`TU`; FR-TX-TUNE-01).
+    ///
+    /// Every action but [`TuneAction::Exit`] keys the transmitter, so those are
+    /// gated by the TX arm exactly like voice and CW: returns `false` and sends
+    /// nothing unless armed and connected (FR-TX-SAFE-03). `Exit` is always
+    /// allowed — stopping transmit must never be gated.
+    ///
+    /// Deliberately does **not** set the sustained `transmitting` flag. The K4
+    /// generates the tune carrier itself; setting that flag would open
+    /// [`Session::send_tx_audio`] and stream mic audio over the top of it.
+    /// Emergency stop and the link-loss fail-safe still end a tune, because
+    /// the K4 returns `TU0` whenever it drops transmit (D12 `TU`), and both
+    /// paths also send `TU0` explicitly.
+    pub fn tune(&mut self, action: TuneAction) -> io::Result<bool> {
+        if action.transmits() {
+            if !self.tx_armed || !self.connected {
+                return Ok(false);
+            }
+            self.tuning = true;
+        } else {
+            self.tuning = false;
+        }
+        self.link.send_cat(&cat::tune(action))?;
+        Ok(true)
+    }
+
+    /// Whether a tune is believed to be running. Distinct from
+    /// [`Session::is_transmitting`], which gates the mic path.
+    pub fn is_tuning(&self) -> bool {
+        self.tuning
+    }
+
     /// Configure the radio-side CW key-down initial delay (`KZL`; FR-TX-CW-02).
     pub fn set_cw_delay(&mut self, ms: u16) -> io::Result<()> {
         self.link.send_cat(&encode_kzl(ms))
@@ -306,6 +342,14 @@ impl<L: CatLink, C: Clock> Session<L, C> {
     pub fn emergency_stop(&mut self) -> io::Result<()> {
         self.transmitting = false;
         self.tx_armed = false;
+        // A tune carrier is on air without `transmitting` being set, so stop it
+        // explicitly rather than relying on the radio's automatic `TU0` on
+        // dropping transmit (D12 `TU`). Best-effort, then the unconditional
+        // `RX;` — the stop must reach the radio even if the first send fails.
+        if self.tuning {
+            self.tuning = false;
+            let _ = self.link.send_cat(&cat::tune(TuneAction::Exit));
+        }
         self.link.send_cat("RX;")
     }
 
@@ -315,6 +359,11 @@ impl<L: CatLink, C: Clock> Session<L, C> {
     fn fail_safe(&mut self) {
         if self.transmitting {
             self.transmitting = false;
+            let _ = self.link.send_cat("RX;");
+        }
+        if self.tuning {
+            self.tuning = false;
+            let _ = self.link.send_cat(&cat::tune(TuneAction::Exit));
             let _ = self.link.send_cat("RX;");
         }
         self.tx_armed = false;
