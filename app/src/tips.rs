@@ -109,7 +109,7 @@ pub const TIPS: &[(&str, &str)] = &[
     ("pan.wfheight", "Waterfall height as a percentage of the pan area (#WFH)."),
     ("pan.nb", "Panadapter noise blanker (#NB) — cleans the display without touching receive audio."),
     // --- Antenna ---------------------------------------------------------
-    ("pan.target", "Which pan the controls on this screen apply to. The two pans hold independent span, reference and scale, so a change here affects one of them only."),
+    ("pan.target", "Which pan SPAN applies to — the two pans hold independent spans. Reference and scale are global on this radio and apply to both regardless."),
     ("pan.fixed", "Fixed tune (#FXT): the panadapter stays put while the VFO moves within it, instead of re-centring on every QSY."),
     ("pan.nblevel", "Panadapter noise-blanker level (#NBL), 0-14."),
     ("ant.tx", "Transmit antenna (AN)."),
