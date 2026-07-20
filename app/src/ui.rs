@@ -47,6 +47,10 @@ pub enum ColorRole {
     RxValue,
     /// Caution, e.g. high SWR (yellow).
     Caution,
+    /// **On air** — RF is leaving the antenna right now (red). Distinct from
+    /// [`ColorRole::TxActive`], which is the amber of "armed and ready"
+    /// (FR-UI-TX-01).
+    OnAir,
     /// An off/available control (dim grey).
     Inactive,
 }
@@ -62,6 +66,7 @@ impl ColorRole {
             ColorRole::VfoB => (0x33, 0xCC, 0x66),     // green
             ColorRole::RxValue => (0xEC, 0xEF, 0xF2),  // near-white
             ColorRole::Caution => (0xFF, 0xD4, 0x33),  // yellow
+            ColorRole::OnAir => (0xE0, 0x22, 0x18),    // red
             ColorRole::Inactive => (0x66, 0x6B, 0x72), // dim grey
         }
     }
@@ -206,6 +211,7 @@ pub fn role_rgb(theme: EffectiveTheme, role: ColorRole) -> (u8, u8, u8) {
             ColorRole::VfoB => (0x1E, 0x8A, 0x44),
             ColorRole::RxValue => (0x1A, 0x1E, 0x24),
             ColorRole::Caution => (0xB8, 0x86, 0x00),
+            ColorRole::OnAir => (0xC0, 0x14, 0x0C),
             ColorRole::Inactive => (0x7A, 0x80, 0x88),
         },
         EffectiveTheme::Contrast => match role {
@@ -214,6 +220,7 @@ pub fn role_rgb(theme: EffectiveTheme, role: ColorRole) -> (u8, u8, u8) {
             ColorRole::VfoB => (0x3D, 0xF0, 0x7A),
             ColorRole::RxValue => (0xFF, 0xFF, 0xFF),
             ColorRole::Caution => (0xFF, 0xEE, 0x00),
+            ColorRole::OnAir => (0xFF, 0x3B, 0x30),
             ColorRole::Inactive => (0xB0, 0xB0, 0xB0),
         },
     }
@@ -447,6 +454,19 @@ pub const HOLD_THRESHOLD: std::time::Duration = std::time::Duration::from_millis
 /// trace: FR-UI-HOLD-01
 pub fn is_hold(elapsed: Option<std::time::Duration>) -> bool {
     matches!(elapsed, Some(d) if d >= HOLD_THRESHOLD)
+}
+
+/// Whether the radio is **on air** by any route.
+///
+/// Not the same as the mic path being open. A tune emits a carrier without
+/// `transmitting` being set — deliberately, so `send_tx_audio` stays closed
+/// and the operator's microphone is not streamed over the tune (see
+/// `Session::tune`). The indicator must nevertheless light, because what it
+/// answers is "is RF going out", not "is my voice going out".
+///
+/// trace: FR-UI-TX-01
+pub fn on_air(transmitting: bool, tuning: bool) -> bool {
+    transmitting || tuning
 }
 
 /// Noise-blanker button: on/off plus the active filter mode, so the mode the
@@ -1927,5 +1947,26 @@ mod nb_filter_tests {
         assert_eq!(nb_filter_label(Some(2)), "WIDE");
         assert_eq!(nb_filter_label(None), UNKNOWN);
         assert_ne!(nb_filter_label(None), nb_filter_label(Some(0)));
+    }
+}
+
+#[cfg(test)]
+mod on_air_tests {
+    use super::on_air;
+
+    /// Any route to air lights the indicator — including a tune, which
+    /// deliberately does not set the transmit flag.
+    /// trace: FR-UI-TX-01
+    #[test]
+    fn fr_ui_tx_01_any_route_to_air_counts() {
+        assert!(!on_air(false, false), "idle");
+        assert!(on_air(true, false), "PTT / voice");
+        assert!(
+            on_air(false, true),
+            "a tune emits a carrier without setting the transmit flag — the \
+             indicator must still light, or the operator sees a dark TX box \
+             while RF is going out"
+        );
+        assert!(on_air(true, true));
     }
 }
