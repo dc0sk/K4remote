@@ -5,6 +5,7 @@ Legend: ✅ test-traced · 🟡 waived (see r3-waivers.md) · ⚪ not test-requi
 | Requirement | Pri | Ver | Status |
 |---|---|---|---|
 | `FR-ANT-01` | C | T | ✅ |
+| `FR-ATU-01` | S | T/D | ✅ |
 | `FR-AUD-02` | M | T | ✅ |
 | `FR-AUD-03` | C | T | ⚪ |
 | `FR-AUD-04` | M | T | ✅ |
@@ -116,6 +117,7 @@ Legend: ✅ test-traced · 🟡 waived (see r3-waivers.md) · ⚪ not test-requi
 | `FR-TX-SAFE-02` | M | T | ✅ |
 | `FR-TX-SAFE-03` | M | T | ✅ |
 | `FR-TX-SAFE-04` | M | T | ✅ |
+| `FR-TX-TUNE-01` | S | T/D | ✅ |
 | `FR-TXT-01` | C | T | ✅ |
 | `FR-UI-01` | M | D | ⚪ |
 | `FR-UI-02` | M | D | ⚪ |
@@ -143,6 +145,7 @@ Legend: ✅ test-traced · 🟡 waived (see r3-waivers.md) · ⚪ not test-requi
 | `FR-UI-24` | C | T | ✅ |
 | `FR-UI-STATUS-01` | C | D | ⚪ |
 | `FR-UI-TIP-01` | C | T/D | ✅ |
+| `FR-UI-UPD-01` | C | T/D | ✅ |
 | `FR-VFO-01` | M | T | ✅ |
 | `FR-VFO-02` | M | T | ✅ |
 | `FR-VFO-03` | M | T | ✅ |
