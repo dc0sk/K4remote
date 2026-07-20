@@ -449,6 +449,53 @@ pub fn is_hold(elapsed: Option<std::time::Duration>) -> bool {
     matches!(elapsed, Some(d) if d >= HOLD_THRESHOLD)
 }
 
+/// Noise-blanker button: on/off plus the active filter mode, so the mode the
+/// hold cycles is visible without opening anything.
+///
+/// trace: FR-UI-11, FR-UI-HOLD-01
+pub fn nb_button(on: Option<bool>, filter: Option<u8>) -> ButtonState {
+    let value = match on {
+        Some(true) => format!("On · {}", nb_filter_label(filter)),
+        Some(false) => "Off".to_string(),
+        None => UNKNOWN.to_string(),
+    };
+    ButtonState::new("NB", value)
+}
+
+/// Next noise-blanker filter mode for a **hold** (`NB`): NONE → NARROW →
+/// WIDE → NONE.
+///
+/// On the radio this lives on the paired `[LEVEL]` switch, not on `[NB]`
+/// itself: D14 p.767 lists the receiver row as pairs — `[NB]` and `[LEVEL]`,
+/// `[NR]` and `[ADJ]`, `[NTCH]` and `[MANUAL]` — and p.1368 reads "Tap [NB] to
+/// turn the noise blanker on/off, or hold [LEVEL] to bring up the noise
+/// blanker controls (on/off, filtering mode, and level)". The app draws one
+/// control where the radio has two switches, so the hold surfaces the paired
+/// switch's function.
+///
+/// Filtering mode is the part of that pair the app could not otherwise
+/// reach: the level already has a slider, and `nb_filter` was parsed into
+/// state and passed straight back out on every set, never chosen. D14 p.1370
+/// is explicit that it matters — "if you hear audio artifacts such as
+/// 'pumping' … try changing the NB filter mode from NONE to NARROW or WIDE".
+///
+/// trace: FR-UI-HOLD-01
+pub fn nb_filter_hold(cur: Option<u8>) -> u8 {
+    (cur.unwrap_or(0).min(2) + 1) % 3
+}
+
+/// Human label for an `NB` filter mode.
+///
+/// trace: FR-UI-HOLD-01
+pub fn nb_filter_label(mode: Option<u8>) -> &'static str {
+    match mode {
+        Some(1) => "NAR",
+        Some(2) => "WIDE",
+        Some(_) => "NONE",
+        None => UNKNOWN,
+    }
+}
+
 /// Next attenuator level for a **hold** (`RA`): +3 dB, wrapping 21 → 0.
 ///
 /// D14 p.1318: "Hold [ATTN] to bring up the attenuator controls (on/off and
@@ -1828,5 +1875,57 @@ mod atten_hold_tests {
             seen.push(cur);
         }
         assert_eq!(seen, vec![3, 6, 9, 12, 15, 18, 21, 0]);
+    }
+}
+
+#[cfg(test)]
+mod nb_filter_tests {
+    use super::*;
+
+    /// The hold cycles the three documented filter modes and returns to NONE.
+    /// trace: FR-UI-HOLD-01
+    #[test]
+    fn fr_ui_hold_01_nb_filter_cycles() {
+        assert_eq!(nb_filter_hold(Some(0)), 1, "NONE → NARROW");
+        assert_eq!(nb_filter_hold(Some(1)), 2, "NARROW → WIDE");
+        assert_eq!(nb_filter_hold(Some(2)), 0, "WIDE → NONE");
+        assert_eq!(nb_filter_hold(None), 1, "unknown starts the cycle");
+    }
+
+    /// Only the three modes the `NB` command defines are ever produced, even
+    /// from a value the radio should never report.
+    /// trace: FR-UI-HOLD-01
+    #[test]
+    fn fr_ui_hold_01_nb_filter_stays_in_range() {
+        for cur in 0u8..=255 {
+            assert!(nb_filter_hold(Some(cur)) <= 2, "cur={cur}");
+        }
+    }
+
+    /// Three holds return to where they started — no mode is unreachable and
+    /// none is a dead end.
+    /// trace: FR-UI-HOLD-01
+    #[test]
+    fn fr_ui_hold_01_nb_filter_round_trips() {
+        let mut cur = 0u8;
+        let mut seen = Vec::new();
+        for _ in 0..3 {
+            cur = nb_filter_hold(Some(cur));
+            seen.push(cur);
+        }
+        assert_eq!(seen, vec![1, 2, 0]);
+    }
+
+    /// Labels track the modes, and an unknown mode is not shown as NONE —
+    /// "we have not heard from the radio" and "the filter is off" are
+    /// different things.
+    /// trace: FR-UI-HOLD-01
+    #[test]
+    fn fr_ui_hold_01_nb_filter_labels() {
+        assert_eq!(nb_filter_label(Some(0)), "NONE");
+        assert_eq!(nb_filter_label(Some(1)), "NAR");
+        assert_eq!(nb_filter_label(Some(2)), "WIDE");
+        assert_eq!(nb_filter_label(None), UNKNOWN);
+        assert_ne!(nb_filter_label(None), nb_filter_label(Some(0)));
     }
 }

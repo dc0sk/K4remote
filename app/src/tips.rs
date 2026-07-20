@@ -65,7 +65,7 @@ pub const TIPS: &[(&str, &str)] = &[
     ("filter.hicut", "Passband high cut. Sent as the BW + IS pair the K4 uses."),
     // --- Receive DSP -----------------------------------------------------
     ("rx.agc", "AGC speed (GT): tap for slow/fast, hold to switch AGC off. Slow suits SSB, fast suits CW and pile-ups."),
-    ("rx.nb", "Noise blanker on/off (NB) — for pulse noise such as ignition or power-line ticks."),
+    ("rx.nb", "Noise blanker (NB): tap for on/off, hold to cycle the filter mode NONE/NARROW/WIDE. Narrow or wide removes QRM ahead of the blanker if you hear pumping."),
     ("rx.nr", "Noise reduction on/off (NR) — DSP smoothing of broadband hiss."),
     ("rx.notch", "Manual notch (NM) — tune it onto a carrier to null it out."),
     ("rx.autonotch", "Automatic notch (NA) — tracks and nulls steady carriers by itself."),
