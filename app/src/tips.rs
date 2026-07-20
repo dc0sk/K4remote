@@ -22,6 +22,22 @@ pub fn tip(id: &str) -> Option<&'static str> {
     TIPS.iter().find(|(k, _)| *k == id).map(|(_, v)| *v)
 }
 
+/// Coverage: 55 of these are wired to a control. The rest are not simply
+/// un-wired — they fall into three groups worth distinguishing:
+///
+/// - **No control exists yet.** `pan.nb` describes the panadapter noise
+///   blanker (`#NB`/`#NBL`); the encoders exist in `k4-protocol` but nothing
+///   in the UI calls them. The tip is written and waiting.
+/// - **Composite widgets.** `vfo.a`/`vfo.b` are per-digit readouts and
+///   `filter.locut`/`filter.hicut` are drag handles on the passband graphic.
+///   One tooltip over the whole widget would fight the per-digit click and
+///   drag behaviour, so these need a deliberate choice of hover target rather
+///   than a wrapper.
+/// - **Switch emulation.** `tx.tune`, `tx.tunelp`, `vfo.swap`, `vfo.a2b`,
+///   `vfo.b2a` and the antenna selectors are driven through the generic
+///   `Message::Switch(n)` front-panel emulation, which has no per-control call
+///   site to attach a tip to.
+///
 /// Every control tip, as `(id, text)`.
 ///
 /// Ids are grouped by the screen they appear on. Keep them stable: they are
