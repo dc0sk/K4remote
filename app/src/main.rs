@@ -2628,19 +2628,23 @@ impl App {
     /// The shared TX / SPLIT / RIT-XIT box that sits between the VFOs (FR-UI-12),
     /// so transmit routing is always visible. TX lights amber while transmitting.
     fn center_box(&self) -> Element<'_, Message> {
-        let txing = self.ui.transmitting;
+        // On air by any route, not just an open mic: a tune emits a carrier
+        // without setting `transmitting` (FR-UI-TX-01).
+        let txing = ui::on_air(self.ui.transmitting, self.ui.tuning);
         let tx_ind: Element<Message> = Container::new(
             Text::new(if txing { "● TX" } else { "TX" })
                 .size(13)
                 .color(if txing {
-                    Color::BLACK
+                    Color::WHITE
                 } else {
                     role_color(ui::ColorRole::Inactive)
                 }),
         )
         .style(move |_theme: &Theme| container::Style {
             background: Some(Background::Color(if txing {
-                role_color(ui::ColorRole::TxActive)
+                // Red, not the amber used for "armed": this says RF is
+                // leaving the antenna right now.
+                role_color(ui::ColorRole::OnAir)
             } else {
                 shade(ui::Shade::Track)
             })),
@@ -5090,10 +5094,10 @@ impl App {
                 tap_hold(
                     Message::ToggleAtten,
                     Message::StepAtten,
-                    two_line_btn(
+                    two_line_btn_visual(
                         ui::atten_button(self.rx_atten_on(), self.rx_atten_db()),
                         self.rx_atten_on(),
-                        Some(Message::ToggleAtten),
+                        false,
                     ),
                 ),
             ))
@@ -5117,10 +5121,10 @@ impl App {
                 tap_hold(
                     Message::ToggleNb,
                     Message::CycleNbFilter,
-                    two_line_btn(
+                    two_line_btn_visual(
                         ui::nb_button(self.rx_nb_on(), self.ui.radio.nb_filter),
                         self.rx_nb_on(),
-                        Some(Message::ToggleNb),
+                        false,
                     ),
                 ),
             ))
@@ -5143,10 +5147,9 @@ impl App {
                 tap_hold(
                     Message::CycleAgc,
                     Message::ToggleAgcOff,
-                    two_line_btn_dim(
+                    two_line_btn_visual(
                         ui::agc_button(self.rx_agc_mode()),
                         None,
-                        Some(Message::CycleAgc),
                         rx_dim(ui::RxCtl::Agc),
                     ),
                 ),
@@ -6728,6 +6731,63 @@ fn tipped<'a>(
         .into()
 }
 
+/// A two-line button rendered as a **visual only**, for use inside
+/// [`tap_hold`].
+///
+/// An iced `Button` with an `on_press` captures both press and release, and
+/// `MouseArea` delegates to its content first and returns early when the
+/// content captured — so a wrapped button swallows the very events the
+/// tap/hold timing needs. The tap fired from the button's own handler and the
+/// hold could never happen at all.
+///
+/// Dropping `on_press` stops the capture, but iced then reports
+/// `Status::Disabled`, which our style greys out. The style here maps
+/// `Disabled` back to `Active` so a fully interactive control does not look
+/// dead. The trade-off is that iced no longer reports `Hovered` for these
+/// three buttons, so they lose their hover tint; the tooltip hover still
+/// works, since that is driven by `MouseArea`.
+fn two_line_btn_visual(
+    state: ui::ButtonState,
+    on: Option<bool>,
+    dim: bool,
+) -> Element<'static, Message> {
+    let engaged = on == Some(true);
+    let kind = if dim {
+        BtnKind::Dim
+    } else if engaged {
+        BtnKind::Active
+    } else {
+        BtnKind::Plain
+    };
+    let label_color = if engaged && !dim {
+        Color::WHITE
+    } else {
+        role_color(ui::ColorRole::Inactive)
+    };
+    let value = Text::new(state.value).size(13);
+    let value = if dim {
+        value.color(role_color(ui::ColorRole::Inactive))
+    } else {
+        value
+    };
+    let content = Column::new()
+        .align_x(Alignment::Center)
+        .push(Text::new(state.label).size(10).color(label_color))
+        .push(value);
+    let inner = btn_style(kind);
+    Button::new(content)
+        .style(move |t: &Theme, status: button::Status| {
+            let status = match status {
+                button::Status::Disabled => button::Status::Active,
+                other => other,
+            };
+            inner(t, status)
+        })
+        .width(Length::Fixed(66.0))
+        .padding([4, 6])
+        .into()
+}
+
 /// Give a control the radio's tap/hold pair (FR-UI-HOLD-01).
 ///
 /// Every K4 switch carries a white tap function and a yellow hold function
@@ -7092,5 +7152,48 @@ mod band_target_tests {
         assert_eq!(target_rx("BN+;".to_string(), true), "BN$+;");
         assert_eq!(target_rx("BN-;".to_string(), true), "BN$-;");
         assert_eq!(target_rx("BN^;".to_string(), true), "BN$^;");
+    }
+}
+
+#[cfg(test)]
+mod tap_hold_wiring_tests {
+    /// Every `tap_hold` call must wrap a **non-interactive** visual.
+    ///
+    /// Structural, not logical: an iced `Button` carrying its own `on_press`
+    /// captures both press and release, and `MouseArea` delegates to its
+    /// content first and returns early when the content captured. A wrapped
+    /// interactive button therefore swallows exactly the events the hold
+    /// timing needs — the tap still fires from the button's own handler, so
+    /// the control looks fine and the hold silently never happens. That
+    /// shipped, and only a hardware check caught it.
+    ///
+    /// trace: FR-UI-HOLD-01
+    #[test]
+    fn fr_ui_hold_01_tap_hold_wraps_a_non_interactive_visual() {
+        let src = include_str!("main.rs");
+        let mut checked = 0;
+        for (i, _) in src.match_indices("tap_hold(") {
+            // Skip the definition and this test's own prose.
+            let line_start = src[..i].rfind('\n').map_or(0, |n| n + 1);
+            let line = &src[line_start..i];
+            if line.contains("fn ") || line.contains("///") {
+                continue;
+            }
+            let window = &src[i..(i + 500).min(src.len())];
+            assert!(
+                window.contains("two_line_btn_visual"),
+                "tap_hold call #{checked} must wrap two_line_btn_visual, got:\n{window}"
+            );
+            assert!(
+                !window.contains("Some(Message::"),
+                "tap_hold call #{checked} wraps an interactive button — its \
+                 on_press will capture the events the hold needs:\n{window}"
+            );
+            checked += 1;
+        }
+        assert!(
+            checked >= 3,
+            "expected the AGC/ATTN/NB sites, found {checked}"
+        );
     }
 }
