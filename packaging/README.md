@@ -69,7 +69,7 @@ Build it locally on Windows (Inno Setup installed):
 
 ```powershell
 cargo build -p k4remote --release --features vendored-tls
-iscc /DMyAppVersion=0.3.0 packaging\windows\k4remote.iss   # → k4remote-windows-x86_64-setup.exe
+iscc /DMyAppVersion=0.4.0 packaging\windows\k4remote.iss   # → k4remote-windows-x86_64-setup.exe
 ```
 
 ## macOS (`.app` / `.dmg`)
