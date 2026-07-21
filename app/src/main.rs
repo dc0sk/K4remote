@@ -5127,8 +5127,8 @@ impl App {
             )
             .push(
                 Text::new(format!(
-                    "RX audio frames: {}   spectrum: {} bins",
-                    self.ui.audio_frames, self.ui.spectrum_bins
+                    "RX audio: {} decoded / {} played   spectrum: {} bins",
+                    self.ui.audio_frames, self.ui.audio_played, self.ui.spectrum_bins
                 ))
                 .size(11)
                 .color(dim),
