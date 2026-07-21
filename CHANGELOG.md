@@ -10,6 +10,27 @@ during the 0.4.0 release, so earlier detail lives in the git history and in the
 change ledgers under [`docs/test/test-strategy.md`](docs/test/test-strategy.md)
 and [`docs/requirements/system-requirements.md`](docs/requirements/system-requirements.md).
 
+## [0.4.1] — 2026-07-21
+
+### Fixed
+
+- **Control popups opened in the corner of the window instead of at the
+  control** — a regression introduced in 0.4.0 while reducing the cost of
+  tracking the pointer. The popup is anchored again where you opened it.
+
+### Changed
+
+- **Holding a control chip now opens its settings popup**, which is what the
+  radio itself does — "Hold [ATTN] to bring up the attenuator controls",
+  "hold [LEVEL] to bring up the noise blanker controls". Right-click still
+  opens the same popup.
+
+  This replaces the stand-in behaviours the holds carried in 0.4.0, from before
+  those panels existed: holding **ATT** stepped the attenuator 3 dB, **NB**
+  cycled the filter mode, and **AGC** switched AGC off. Each of those is now a
+  control inside the corresponding popup, so nothing is lost — but if you had
+  learned the old gestures, they have changed.
+
 ## [0.4.0] — 2026-07-21
 
 The K4's **interaction grammar**: every control chip now carries the radio's own
@@ -143,6 +164,7 @@ Anyone running 0.3.0 should update.
 
 - RIT/XIT sync.
 
+[0.4.1]: https://github.com/dc0sk/K4remote/releases/tag/v0.4.1
 [0.4.0]: https://github.com/dc0sk/K4remote/releases/tag/v0.4.0
 [0.3.0]: https://github.com/dc0sk/K4remote/releases/tag/v0.3.0
 [0.2.3]: https://github.com/dc0sk/K4remote/releases/tag/v0.2.3

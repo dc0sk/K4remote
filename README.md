@@ -9,11 +9,11 @@ stakeholder needs down to individual tests, enforced by a build gate.
 
 ![K4 Remote main window](docs/screenshots/main.png)
 
-> **Status:** v0.4.0 — feature-complete; hardware bring-up in progress.
-> 258 hardware-free tests pass · clippy/fmt clean · traceability gate green · CI green on Linux/macOS/Windows.
+> **Status:** v0.4.1 — feature-complete; hardware bring-up in progress.
+> 269 hardware-free tests pass · clippy/fmt clean · traceability gate green · CI green on Linux/macOS/Windows.
 > VFO tuning, RIT/XIT, split, band, panadapter click-to-QSY, and the K-Pod (incl. F1–F8 tap/hold macros)
 > are validated against a real K4; audio / PTT / waterfall rendering / serial bring-up is ongoing.
-> 0.4.0 closes **four transmit-safety faults** found on a live K4 — most seriously, the transmitter
+> 0.4.0 closed **four transmit-safety faults** found on a live K4 — most seriously, the transmitter
 > could be keyed with the TX arm off. See [CHANGELOG.md](CHANGELOG.md); anyone on 0.3.0 should update.
 >
 > **In 0.2.x:** Elecraft K-Pod support (rocker + encoder tuning, and configurable F1–F8 tap/hold
@@ -26,9 +26,9 @@ stakeholder needs down to individual tests, enforced by a build gate.
 > radio — plus **ATU and TUNE control**, an About-box **update check**, and **switchable control
 > tooltips**.
 >
-> **New in 0.4.0:** the K4's **interaction grammar** on every control chip — **tap** for the
-> switch's white function, **hold** for its yellow one, and **right-click** to open that control's
-> settings popup (level, mode and on/off together, at the chip). Plus panadapter correctness fixes
+> **New in 0.4.x:** the K4's **interaction grammar** on every control chip — **tap** for the
+> switch's own function, and **hold** (or right-click) to bring up that control's settings popup
+> with its level, mode and on/off together, exactly as holding the switch does on the radio. Plus panadapter correctness fixes
 > from operating against a live K4 — per-pan span, trace/waterfall alignment — and a protocol fix
 > that had silently made the attenuator ignore its 3, 6 and 9 dB steps.
 >
