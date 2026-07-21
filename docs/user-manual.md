@@ -126,7 +126,10 @@ From top to bottom:
 - **Control row** — band, mode, bandwidth, filter edges, AGC, NB/NR, preamp, attenuator,
   RIT/XIT, split.
 - **Panadapter** — live spectrum trace + scrolling waterfall + mini-pan (GPU-drawn), with
-  click-to-QSY and mouse-wheel tuning.
+  click-to-QSY and mouse-wheel tuning. Beside each pane's **A** / **B** badge is that receiver's
+  **VOL** — its listening level *in this app*. Use it to balance the two receivers in your
+  headphones; it does not touch the radio's own AF gain, so it changes nothing at the front panel
+  or for anyone else connected. The **Volume** slider in Settings is the master over both.
 - **Transmit panel** — the TX arm, PTT, and mode-specific transmit controls.
 
 The **view mode** (A / B / A+B) picks which receiver(s) are shown; single-A or single-B also

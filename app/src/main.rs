@@ -167,7 +167,11 @@ struct App {
     audio_inputs: Vec<String>,
     selected_output: Option<String>,
     selected_input: Option<String>,
-    volume: f32,   // RX playback gain 0.0–2.0
+    volume: f32, // RX playback gain 0.0–2.0 (master over both receivers)
+    // Per-receiver local playback gain [main, sub] (FR-RX-VOL-01). Local to
+    // this app: the radio's own AF gain is untouched, so balancing the two
+    // receivers here cannot disturb the front panel or another client.
+    rx_volume: [f32; 2],
     mic_gain: f32, // TX capture gain 0.0–3.0
     // Two-step guard for the remote power-off (FR-PWR-01).
     power_off_armed: bool,
@@ -633,6 +637,9 @@ enum Message {
     SelectOutputDevice(String),
     SelectInputDevice(String),
     VolumeChanged(f32),
+    /// Set one receiver's **local** playback volume (is_b, 0.0–2.0), the
+    /// per-pane control above the spectrum. FR-RX-VOL-01.
+    RxVolumeChanged(bool, f32),
     MicGainChanged(f32),
     SaveSettings,
     ExportConfig,
@@ -728,11 +735,17 @@ impl App {
         let selected_output = prefs.audio_output.clone();
         let selected_input = prefs.audio_input.clone();
         let volume = prefs.volume_pct as f32 / 100.0;
+        let rx_volume = [
+            prefs.rx_volume_main_pct as f32 / 100.0,
+            prefs.rx_volume_sub_pct as f32 / 100.0,
+        ];
         let mic_gain = prefs.mic_gain_pct as f32 / 100.0;
         // Seed the worker with the restored audio settings before any connect.
         let _ = cmd_tx.send(WorkerCmd::SetOutputDevice(selected_output.clone()));
         let _ = cmd_tx.send(WorkerCmd::SetInputDevice(selected_input.clone()));
         let _ = cmd_tx.send(WorkerCmd::SetVolume(volume));
+        let _ = cmd_tx.send(WorkerCmd::SetRxVolume(false, rx_volume[0]));
+        let _ = cmd_tx.send(WorkerCmd::SetRxVolume(true, rx_volume[1]));
         let _ = cmd_tx.send(WorkerCmd::SetMicGain(mic_gain));
         let kpod_enabled = prefs.kpod_enabled;
         let _ = cmd_tx.send(WorkerCmd::SetKpodEnabled(kpod_enabled));
@@ -843,6 +856,7 @@ impl App {
             selected_output,
             selected_input,
             volume,
+            rx_volume,
             mic_gain,
             power_off_armed: false,
             main_window,
@@ -1177,6 +1191,8 @@ impl App {
                     audio_output: self.selected_output.clone(),
                     audio_input: self.selected_input.clone(),
                     volume_pct: (self.volume * 100.0).round() as u16,
+                    rx_volume_main_pct: (self.rx_volume[0] * 100.0).round() as u16,
+                    rx_volume_sub_pct: (self.rx_volume[1] * 100.0).round() as u16,
                     mic_gain_pct: (self.mic_gain * 100.0).round() as u16,
                     theme: Some(theme_to_str(self.theme_mode).to_string()),
                     mute_radio_mon: self.mute_mon,
@@ -2050,6 +2066,11 @@ impl App {
             Message::VolumeChanged(v) => {
                 self.volume = v;
                 self.send(WorkerCmd::SetVolume(v));
+            }
+            Message::RxVolumeChanged(is_b, v) => {
+                self.rx_volume[usize::from(is_b)] = v;
+                self.send(WorkerCmd::SetRxVolume(is_b, v));
+                self.save_config();
             }
             Message::MicGainChanged(g) => {
                 self.mic_gain = g;
@@ -5780,6 +5801,37 @@ impl App {
                         .color(role_color(ui::ColorRole::TxActive)),
                 );
             }
+            // This receiver's **local** listening level, in the space beside
+            // the badge (FR-RX-VOL-01). RX audio arrives as 12 kHz stereo with
+            // main on the left channel and sub on the right (FR-AUD-04), so
+            // the two can be balanced against each other here without touching
+            // the radio's own AF gain — nothing done here reaches the front
+            // panel or another connected client.
+            let is_b = p.is_b();
+            let vol = self.rx_volume[usize::from(is_b)];
+            header = header.push(tipped(
+                self.tips_on(),
+                self.hover,
+                "pan.rxvolume",
+                Row::new()
+                    .spacing(6)
+                    .align_y(Alignment::Center)
+                    .push(
+                        Text::new("VOL")
+                            .size(11)
+                            .color(role_color(ui::ColorRole::Inactive)),
+                    )
+                    .push(
+                        slider(0.0..=2.0, vol, move |v| Message::RxVolumeChanged(is_b, v))
+                            .step(0.01_f32)
+                            .width(Length::Fixed(110.0)),
+                    )
+                    .push(
+                        Text::new(format!("{:.0}%", vol * 100.0))
+                            .size(11)
+                            .color(role_color(ui::ColorRole::RxValue)),
+                    ),
+            ));
             // Meters live in the top VFO panels now, not in the panadapter.
             let pane = Container::new(Column::new().spacing(6).push(header).push(plot))
                 .style(pane_style(selected))

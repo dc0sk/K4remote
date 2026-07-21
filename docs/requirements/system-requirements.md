@@ -1,7 +1,7 @@
 ---
 title: "System Requirements Specification"
 status: Draft
-version: "0.32"
+version: "0.33"
 updated: 2026-07-20
 authors:
   - Simon Keimer (DC0SK)
@@ -10,7 +10,7 @@ owns: [FR, NFR]
 
 # System Requirements Specification (SRS)
 
-**Version:** 0.32 (Draft) · **Date:** 2026-07-20 · **Author:** DC0SK
+**Version:** 0.33 (Draft) · **Date:** 2026-07-20 · **Author:** DC0SK
 Trace: owns `FR-`, `NFR-`. Up → [stakeholder-requirements.md](stakeholder-requirements.md);
 down → [../concept/architecture.md](../concept/architecture.md) (`ARC`) and
 [../test/test-strategy.md](../test/test-strategy.md) (`TC`).
@@ -169,6 +169,7 @@ Interface Spec v1.03; Owner's Manual Rev F) for hands-on VFO selection + tuning.
 | `FR-AUD-05` | order/seq-check audio packets using the wrapping sequence byte and drop/conceal as needed. | STK-05 | S | T | Out-of-order/duplicate sequence numbers handled per policy. |
 | `FR-AUD-DEV-01` | let the operator **select the audio devices** — RX playback (output) and TX microphone (capture) — from the OS-enumerated device lists via dropdowns in the settings dialog; the choice persists (`FR-CFG-02`) and is applied to the audio streams. | STK-05/06/12 | S | D/T | Available output/input devices are listed; selecting one routes RX playback / TX capture to it and the choice survives restart. |
 | `FR-AUD-LVL-01` | provide a **RX volume** slider (local playback level of the received audio) and a **TX mic-level** slider (local capture gain before encode), each adjustable live; these are client-side levels, distinct from the radio's `AG`/`MG`. | STK-05/06 | S | T/D | Moving the volume slider scales RX playback amplitude; the mic slider scales captured mic amplitude; both take effect without reconnect. |
+| `FR-RX-VOL-01` | provide a **per-receiver local listening level** for the main and sub receivers, presented beside each spectrum pane's A/B badge, adjustable independently and persisted across runs. RX audio is 12 kHz stereo with main on the left channel and sub on the right (`FR-AUD-04`), so this is a gain on each channel **in the application**: it shall not alter the radio's `AG`, so balancing the receivers cannot disturb the front panel or another connected client. The gain shall apply before any mono fold, so a mono output device still reflects the balance, and shall be reapplied when the output device is recreated. | STK-05/09 | S | T/D | `apply_rx_gains` scales a channel, leaves it untouched at unity, and mutes only its own receiver at zero (test); the two panes' controls change their receivers independently, survive an output-device change and a restart, and the radio's AF gain is unchanged throughout (demo). |
 | `FR-AUD-MON-01` | optionally **mute the radio TX monitor** (`ML=0`) on connect so a remote session doesn't drive the shack speaker. | STK-11 | C | D | With the option on, connecting sends `ML0000;ML1000;ML2000;`. |
 
 ## J. Panadapter / Waterfall — `FR-PAN` (Phase 2; control subset in v1)
@@ -348,3 +349,4 @@ syntax per the Programmer's Reference D12, cross-checked vs QK4 (`R-EXT-03`).*
 | 2026-07-20 | 0.30 | DC0SK | Added FR-TX-SAFE-05 (keyboard emergency stop), completing FR-TX-SAFE-04's "always available" with an actual keyboard route. First drafted as a global `Ctrl+C`, then reconsidered: that displaced copy app-wide *and* asked the operator to recall an arbitrary chord under stress. Settled on **`ESC` while on air** — the largest, most isolated key, findable without looking, colliding with nothing, and keeping its dismiss role off air — plus **`Ctrl+Shift+X`** unconditionally as a backstop for a stale on-air state. The `ESC` gate is on *state*, not focus, which is what makes it sound: it can only withhold the stop when there is nothing to stop, whereas a focus gate fails precisely when focus is somewhere unhelpful. No editing shortcut is displaced. |
 | 2026-07-21 | 0.31 | DC0SK | Strengthened FR-TX-SAFE-03 after a **live-radio safety finding**: `TUNE` and `TUNE LP` transmitted with ARM TX **off**. The requirement said "transmit is impossible while disarmed" and the implementation enforced that in three methods (`begin_tx`, `send_cw`, `tune`) — but `Session::send`, the raw passthrough every switch tap uses, was ungated. So the front-panel emulations (`SW16`/`131`/`40`/`30`), DVR playback (`PB`) and the diagnostics console all bypassed the interlock. The requirement now specifies enforcement **at the single seam**, names the stop/receive commands that must never be gated, and requires the refusal to be visible; acceptance covers the raw path that was missing. |
 | 2026-07-21 | 0.32 | DC0SK | FR-UI-HOLD-01 + FR-UI-POPUP-01: the **hold now opens the settings popup** on all six chips that have one. This is what the requirement always asked for — the gap analysis specified "hold = open that control's settings", and D14 says "Hold [ATTN] to bring up the attenuator controls" — but with no panel to open, the first implementation shipped app-invented steppers instead (attenuator +3 dB, NB filter cycle, AGC off). Those are now retired: every one of their functions is in the popup, reached by the gesture the radio itself uses. Right-click remains as an alternative. FR-UI-HOLD-01 now states explicitly that where a popup exists the hold shall open it rather than invent a behaviour. |
+| 2026-07-21 | 0.33 | DC0SK | Added FR-RX-VOL-01 (per-receiver **local** listening level, beside each pane's A/B badge). Specified local deliberately: the radio's `AG` is shared with the front panel and any other connected client, so balancing the two receivers for *this* operator's ears should not reach the radio at all. Rests on FR-AUD-04's already-verified channel split (L=Main, R=Sub) rather than assuming it. Applied before the mono fold so a mono device still hears the balance, and reapplied on output-device change — a new device starts at unity and would otherwise reset it silently. |

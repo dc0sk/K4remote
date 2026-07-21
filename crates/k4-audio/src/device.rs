@@ -87,6 +87,9 @@ pub struct AudioOutput {
     channels: usize,
     /// Local playback gain (FR-AUD-LVL-01), 0.0–2.0.
     volume: f32,
+    /// Per-receiver local playback gains (FR-RX-VOL-01): main and sub.
+    vol_main: f32,
+    vol_sub: f32,
     rs_left: LinearResampler,
     rs_right: LinearResampler,
 }
@@ -135,6 +138,8 @@ impl AudioOutput {
             ring,
             channels,
             volume: 1.0,
+            vol_main: 1.0,
+            vol_sub: 1.0,
             rs_left: LinearResampler::new(K4_RATE, rate),
             rs_right: LinearResampler::new(K4_RATE, rate),
         })
@@ -143,6 +148,21 @@ impl AudioOutput {
     /// Set the local playback gain (FR-AUD-LVL-01), clamped to 0.0–2.0.
     pub fn set_volume(&mut self, v: f32) {
         self.volume = v.clamp(0.0, 2.0);
+    }
+
+    /// Set one receiver's **local** playback gain (FR-RX-VOL-01), clamped to
+    /// 0.0–2.0. `sub` selects the sub receiver.
+    ///
+    /// This is a gain on the received audio in this application only — it does
+    /// not touch the radio's `AG`, so it cannot disturb the front panel or
+    /// another connected client.
+    pub fn set_rx_volume(&mut self, sub: bool, v: f32) {
+        let v = v.clamp(0.0, 2.0);
+        if sub {
+            self.vol_sub = v;
+        } else {
+            self.vol_main = v;
+        }
     }
 
     /// Submit interleaved 12 kHz stereo PCM (L = Main, R = Sub) for playback.
@@ -157,6 +177,12 @@ impl AudioOutput {
         let mut r = Vec::new();
         self.rs_left.process(&left, &mut l);
         self.rs_right.process(&right, &mut r);
+
+        // Per-receiver gains first, on the separated channels — before the
+        // mono fold below, so a mono output device still reflects the balance
+        // between the two receivers rather than ignoring it (FR-RX-VOL-01).
+        crate::apply_rx_gains(&mut l, self.vol_main);
+        crate::apply_rx_gains(&mut r, self.vol_sub);
 
         let frames = l.len().min(r.len());
         let mut out = Vec::with_capacity(frames * self.channels);

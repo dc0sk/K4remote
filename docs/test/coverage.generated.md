@@ -95,6 +95,7 @@ Legend: ✅ test-traced · 🟡 waived (see r3-waivers.md) · ⚪ not test-requi
 | `FR-RX-APF-01` | C | T | ✅ |
 | `FR-RX-NOTCH-01` | C | T | ✅ |
 | `FR-RX-SQL-01` | S | T | ✅ |
+| `FR-RX-VOL-01` | S | T/D | ✅ |
 | `FR-SCAN-01` | C | T | ✅ |
 | `FR-SES-01` | M | T | ✅ |
 | `FR-SES-02` | M | T | ✅ |

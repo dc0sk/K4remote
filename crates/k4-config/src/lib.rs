@@ -51,6 +51,12 @@ pub struct Prefs {
     /// RX playback volume, percent (0–200; 100 = unity).
     #[serde(default = "default_pct")]
     pub volume_pct: u16,
+    /// Per-receiver local playback gain, percent (FR-RX-VOL-01). Independent of
+    /// `volume_pct`, which is the master over both.
+    #[serde(default = "pct_100")]
+    pub rx_volume_main_pct: u16,
+    #[serde(default = "pct_100")]
+    pub rx_volume_sub_pct: u16,
     /// TX mic capture gain, percent (0–300; 100 = unity).
     #[serde(default = "default_pct")]
     pub mic_gain_pct: u16,
@@ -309,6 +315,8 @@ impl Default for Prefs {
             audio_output: None,
             audio_input: None,
             volume_pct: 100,
+            rx_volume_main_pct: 100,
+            rx_volume_sub_pct: 100,
             mic_gain_pct: 100,
             theme: None,
             mute_radio_mon: true,
@@ -386,4 +394,9 @@ pub fn redact(text: &str, secret: &str) -> String {
     } else {
         text.replace(secret, "***")
     }
+}
+
+/// Serde default for the per-receiver volume percentages.
+fn pct_100() -> u16 {
+    100
 }

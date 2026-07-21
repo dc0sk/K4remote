@@ -196,6 +196,8 @@ pub enum WorkerCmd {
     SetInputDevice(Option<String>),
     /// RX playback volume gain (FR-AUD-LVL-01), 0.0–2.0.
     SetVolume(f32),
+    /// Set one receiver's local playback gain (is_b, 0.0–2.0) — FR-RX-VOL-01.
+    SetRxVolume(bool, f32),
     /// TX mic capture gain (FR-AUD-LVL-01), 0.0–3.0.
     SetMicGain(f32),
     /// Enable/disable the K-Pod control surface at runtime (FR-KPOD-04).
@@ -389,6 +391,9 @@ struct WorkerState {
     out_device: Option<String>,
     in_device: Option<String>,
     volume: f32,
+    /// Per-receiver local playback gains [main, sub], reapplied when the output
+    /// device is recreated (FR-RX-VOL-01).
+    rx_volume: [f32; 2],
     mic_gain: f32,
     // Elecraft K-Pod USB control surface (FR-KPOD-*), when the feature is built.
     #[cfg(feature = "kpod")]
@@ -430,6 +435,7 @@ impl WorkerState {
             out_device: None,
             in_device: None,
             volume: 1.0,
+            rx_volume: [1.0, 1.0],
             mic_gain: 1.0,
         }
     }
@@ -441,6 +447,8 @@ impl WorkerState {
         self.audio_out = AudioOutput::with_device(self.out_device.as_deref()).ok();
         if let Some(out) = self.audio_out.as_mut() {
             out.set_volume(self.volume);
+            out.set_rx_volume(false, self.rx_volume[0]);
+            out.set_rx_volume(true, self.rx_volume[1]);
         }
         self.audio_in = AudioInput::with_device(self.in_device.as_deref()).ok();
         if let Some(inp) = self.audio_in.as_mut() {
@@ -1053,6 +1061,10 @@ fn handle_cmd(cmd: WorkerCmd, ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnaps
                 ws.audio_out = AudioOutput::with_device(ws.out_device.as_deref()).ok();
                 if let Some(out) = ws.audio_out.as_mut() {
                     out.set_volume(ws.volume);
+                    // A new device starts at unity, so the per-receiver gains
+                    // must be reapplied or they silently reset on a swap.
+                    out.set_rx_volume(false, ws.rx_volume[0]);
+                    out.set_rx_volume(true, ws.rx_volume[1]);
                 }
             }
         }
@@ -1069,6 +1081,12 @@ fn handle_cmd(cmd: WorkerCmd, ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnaps
             ws.volume = v;
             if let Some(out) = ws.audio_out.as_mut() {
                 out.set_volume(v);
+            }
+        }
+        WorkerCmd::SetRxVolume(is_b, v) => {
+            ws.rx_volume[usize::from(is_b)] = v;
+            if let Some(out) = ws.audio_out.as_mut() {
+                out.set_rx_volume(is_b, v);
             }
         }
         WorkerCmd::SetMicGain(g) => {
