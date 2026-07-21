@@ -10,6 +10,46 @@ during the 0.4.0 release, so earlier detail lives in the git history and in the
 change ledgers under [`docs/test/test-strategy.md`](docs/test/test-strategy.md)
 and [`docs/requirements/system-requirements.md`](docs/requirements/system-requirements.md).
 
+## [0.6.0] — 2026-07-21
+
+### Added
+
+- **Tap the mode you are already in to reach its alternate** — the reverse or
+  opposite sideband, paired as the radio pairs them: LSB ⇄ USB, CW ⇄ CW-R,
+  DATA ⇄ DATA-R. Tapping again returns you. AM and FM have no alternate and are
+  unaffected. Previously that tap re-sent the mode already in effect and did
+  nothing. (`FR-UI-ALT-01`)
+- The diagnostics console reports the **worker loop's own rate** every few
+  seconds — filter it on `perf`. It reads like
+  `worker 340 loops/s, publish 20/s costing 12.4 ms/s`, and it is there so a
+  report of "the spectrum is lagging" can be answered with a measurement.
+
+### Changed
+
+- **Controls no longer resize as their content changes** (`FR-UI-STABLE-01`).
+  A control whose label varies over a known set now reserves the width of its
+  widest possible label. The worst case was **ARM TX**, which grew to
+  `TX ARMED — DISARM` on arming and shoved **PTT** and **EMERGENCY STOP**
+  sideways — the two controls you least want moving under a cursor that may be
+  reaching for them. Also fixed on the ATU buttons and the per-receiver volume
+  and mute controls.
+
+  Not yet a complete sweep: the connect button, the theme button, the filter
+  shift/edge toggle, the APF widths and several numeric readouts still resize.
+
+### Fixed
+
+- **The radio's stream could fall behind, showing as a lagging spectrum and
+  waterfall**, especially with the diagnostics console open. The worker
+  published a full snapshot — both waterfalls, the spectrum and the whole radio
+  state, deep-copied — on *every* read from the socket, hundreds of times a
+  second, while the display only samples it ten times a second. That work
+  competed directly with draining the socket. Publishing is now capped at
+  20 Hz.
+
+  *If you still see the stream fall behind, the new `perf` line is the thing to
+  report — it says whether the worker is keeping up.*
+
 ## [0.5.0] — 2026-07-21
 
 Audio: a per-receiver listening level, volume controls that can actually make
@@ -227,6 +267,7 @@ Anyone running 0.3.0 should update.
 
 - RIT/XIT sync.
 
+[0.6.0]: https://github.com/dc0sk/K4remote/releases/tag/v0.6.0
 [0.5.0]: https://github.com/dc0sk/K4remote/releases/tag/v0.5.0
 [0.4.1]: https://github.com/dc0sk/K4remote/releases/tag/v0.4.1
 [0.4.0]: https://github.com/dc0sk/K4remote/releases/tag/v0.4.0
