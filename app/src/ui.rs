@@ -478,9 +478,14 @@ pub fn is_hold(elapsed: Option<std::time::Duration>) -> bool {
 /// trace: FR-UI-STABLE-01
 pub fn stable_label_width(labels: &[&str], text_size: f32, padding: f32) -> f32 {
     let longest = labels.iter().map(|l| l.chars().count()).max().unwrap_or(0);
-    // ~0.62 em per character is a safe upper bound for this UI's font at the
-    // sizes used here.
-    longest as f32 * text_size * 0.62 + padding
+    // 0.78 em per character. Control labels here are almost all upper case,
+    // and capitals run near 0.72 em in this font — an earlier 0.62 was under
+    // the true width, so "DISARM" wrapped to two lines inside its own
+    // reservation. Erring high costs a few pixels of padding; erring low
+    // breaks the layout in a way that is worse than the resizing this exists
+    // to prevent. Wide glyphs (an em dash) still argue for equal-length
+    // labels over a bigger estimate.
+    longest as f32 * text_size * 0.78 + padding
 }
 
 /// Whether a key press should trigger the **emergency stop**.

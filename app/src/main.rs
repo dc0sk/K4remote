@@ -6024,10 +6024,22 @@ impl App {
         } else {
             BtnKind::Ptt
         };
-        // The safety row's worst offender: "ARM TX" is 6 characters and
-        // "TX ARMED — DISARM" is 17, so arming shoved PTT and EMERGENCY STOP
-        // sideways — the two controls you least want to move under a cursor
-        // that may be reaching for them (FR-UI-STABLE-01).
+        // The safety row's worst offender: "ARM TX" against the old
+        // "TX ARMED — DISARM" was 6 characters against 17, so arming shoved
+        // PTT and EMERGENCY STOP sideways — the two controls you least want
+        // moving under a cursor that may be reaching for them.
+        //
+        // Reserving the wider label's space was the first attempt, but that
+        // rests on *estimating* rendered width from a character count, and
+        // this label contained an em dash — about twice the width the estimate
+        // assumes. So the reservation could be too small and the button would
+        // grow regardless.
+        //
+        // The button keeps its informative armed label and is simply made wide
+        // enough for it, with the short label centred in the same space. The
+        // width comes from the longest member of the set, so it cannot be got
+        // wrong by editing one label and forgetting the other.
+        // (FR-UI-STABLE-01)
         const ARM_LABELS: [&str; 2] = ["ARM TX", "TX ARMED — DISARM"];
         let arm = Button::new(
             Text::new(if self.ui.tx_armed {
