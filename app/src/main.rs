@@ -5524,6 +5524,14 @@ impl App {
         // (see rx_mode_strip), not the always-visible chips row (Phase 3).
         let mode_btn = |label: &'static str, digit: u8| -> Element<'_, Message> {
             let active = self.ui.mode_a == Some(label);
+            // Re-tapping the active mode switches to its alternate — the
+            // reverse or opposite sideband, as the radio pairs them (CW ⇄
+            // CW-R, LSB ⇄ USB, DATA ⇄ DATA-R). AM and FM have no partner, so
+            // they keep re-selecting themselves, which is a harmless no-op.
+            let press = match (active, ui::alternate_of(label)) {
+                (true, Some(alt)) => Message::SetMode(alt),
+                _ => Message::SetMode(digit),
+            };
             tipped(
                 self.tips_on(),
                 self.hover,
@@ -5535,7 +5543,7 @@ impl App {
                         BtnKind::Plain
                     }))
                     .padding([6, 10])
-                    .on_press(Message::SetMode(digit)),
+                    .on_press(press),
             )
         };
         let tune_row = Row::new()
