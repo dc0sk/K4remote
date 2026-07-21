@@ -573,7 +573,11 @@ enum Message {
     KpodButtonPreset(usize, String),
     /// Reset the whole K-Pod macro table to the Elecraft sample seed.
     KpodButtonsReset,
-    KeyPressed(iced::keyboard::Key, iced::keyboard::Modifiers),
+    KeyPressed(
+        iced::keyboard::Key,
+        iced::keyboard::Modifiers,
+        iced::window::Id,
+    ),
     KeyReleased(iced::keyboard::Key, iced::keyboard::Modifiers),
     StartCaptureHotkey,
     ToggleKey,
@@ -1887,7 +1891,7 @@ impl App {
                 self.kpod_buttons = k4_config::default_kpod_buttons();
                 self.push_kpod_buttons();
             }
-            Message::KeyPressed(key, mods) => {
+            Message::KeyPressed(key, mods, window) => {
                 // Emergency stop (FR-TX-SAFE-05) is checked before *everything*
                 // — modals, hotkey capture, text entry. An emergency control
                 // that can be swallowed by whatever has focus is not one.
@@ -1904,6 +1908,21 @@ impl App {
                 ) {
                     self.send(WorkerCmd::EmergencyStop);
                     return Task::none();
+                }
+                // ESC in the diagnostics console closes *that* window. It used
+                // to fall through to the main window's dismiss chain and close
+                // the Settings dialog instead, which is not where the operator
+                // was looking.
+                let is_esc = matches!(
+                    key,
+                    iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape)
+                );
+                if is_esc && self.diag_window == Some(window) {
+                    if let Some(id) = self.diag_window.take() {
+                        self.diag_enabled = false;
+                        self.save_config();
+                        return iced::window::close(id);
+                    }
                 }
                 // ESC dismisses an open modal (Settings / About, FR-UI-23) or
                 // cancels an in-progress hotkey capture, before other key handling.
@@ -2516,7 +2535,16 @@ impl App {
         // Window lifecycle: quit on main-window close; track the diag window.
         let closed = iced::window::close_events().map(Message::WindowClosed);
         // Keyboard: PTT hotkey (push-to-talk) + hotkey capture.
-        let key_down = iced::keyboard::on_key_press(|k, m| Some(Message::KeyPressed(k, m)));
+        // `on_key_press` does not say which window the key came from, so a key
+        // typed in the diagnostics console was handled as though it had been
+        // pressed in the main window — ESC there closed the Settings dialog
+        // (reported by the operator). `listen_with` carries the window id.
+        let key_down = iced::event::listen_with(|event, _status, id| match event {
+            iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, modifiers, .. }) => {
+                Some(Message::KeyPressed(key, modifiers, id))
+            }
+            _ => None,
+        });
         let key_up = iced::keyboard::on_key_release(|k, m| Some(Message::KeyReleased(k, m)));
         Subscription::batch([tick, resize, cursor, closed, key_down, key_up])
     }

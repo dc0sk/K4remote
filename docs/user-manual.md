@@ -361,6 +361,7 @@ The **theme** (dark / light / high-contrast / follow-system) cycles from the hea
 | **`Ctrl+Shift+X`** | **EMERGENCY STOP** — always, whatever the app thinks it is doing |
 | **PTT hotkey** (default `Ctrl+Space`) | Transmit — toggle or hold-to-talk (configurable) |
 | **ESC** *(not transmitting)* | Close a control popup, then the Settings or About dialog / cancel hotkey capture |
+| **ESC** *(in the Diagnostics window)* | Close the Diagnostics window |
 
 > ⚠️ **Stopping transmission.** Whenever you are **on air** — transmitting *or* running a tune —
 > **ESC** stops the radio. It is handled before everything else, so it works no matter where the
