@@ -5869,9 +5869,11 @@ impl App {
                             .color(role_color(ui::ColorRole::Inactive)),
                     )
                     .push(
-                        slider(0.0..=2.0, vol, move |v| Message::RxVolumeChanged(is_b, v))
-                            .step(0.01_f32)
-                            .width(Length::Fixed(110.0)),
+                        slider(0.0..=k4_audio::MAX_GAIN, vol, move |v| {
+                            Message::RxVolumeChanged(is_b, v)
+                        })
+                        .step(0.01_f32)
+                        .width(Length::Fixed(110.0)),
                     )
                     .push(
                         Text::new(format!("{:.0}%", vol * 100.0))
@@ -6479,10 +6481,14 @@ impl App {
                     .align_y(Alignment::Center)
                     .push(label("Volume"))
                     .push(
-                        slider(0.0..=2.0, self.volume, Message::VolumeChanged)
-                            .step(0.05f32)
-                            .on_release(Message::SaveSettings)
-                            .width(Length::Fixed(240.0)),
+                        slider(
+                            0.0..=k4_audio::MAX_GAIN,
+                            self.volume,
+                            Message::VolumeChanged,
+                        )
+                        .step(0.05f32)
+                        .on_release(Message::SaveSettings)
+                        .width(Length::Fixed(240.0)),
                     )
                     .push(
                         Text::new(format!("{:.0}%", self.volume * 100.0))

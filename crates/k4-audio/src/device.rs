@@ -145,9 +145,9 @@ impl AudioOutput {
         })
     }
 
-    /// Set the local playback gain (FR-AUD-LVL-01), clamped to 0.0–2.0.
+    /// Set the local playback gain (FR-AUD-LVL-01), clamped to 0.0–[`MAX_GAIN`].
     pub fn set_volume(&mut self, v: f32) {
-        self.volume = v.clamp(0.0, 2.0);
+        self.volume = v.clamp(0.0, crate::MAX_GAIN);
     }
 
     /// Set one receiver's **local** playback gain (FR-RX-VOL-01), clamped to
@@ -157,7 +157,7 @@ impl AudioOutput {
     /// not touch the radio's `AG`, so it cannot disturb the front panel or
     /// another connected client.
     pub fn set_rx_volume(&mut self, sub: bool, v: f32) {
-        let v = v.clamp(0.0, 2.0);
+        let v = v.clamp(0.0, crate::MAX_GAIN);
         if sub {
             self.vol_sub = v;
         } else {

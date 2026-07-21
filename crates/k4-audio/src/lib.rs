@@ -25,6 +25,16 @@ pub mod codec;
 #[cfg(feature = "opus")]
 pub use codec::{OpusDecoder, OpusEncoder};
 
+/// Maximum local playback gain, as a linear factor (+12 dB).
+///
+/// The K4's streamed RX audio can arrive far below full scale — measured at
+/// about -45 dBFS on one radio — and the client has no way to raise it at
+/// source beyond what `AG` provides. Headroom here lets the operator make a
+/// quiet stream usable. Digital gain amplifies the stream's own noise equally,
+/// so this is a fallback for a quiet source, not a substitute for setting the
+/// level on the radio.
+pub const MAX_GAIN: f32 = 4.0;
+
 /// Scale one receiver's channel by its local playback gain (FR-RX-VOL-01).
 ///
 /// Separate from the master volume so the two compose: a per-receiver gain
