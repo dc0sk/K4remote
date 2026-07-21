@@ -74,6 +74,7 @@ pub const TIPS: &[(&str, &str)] = &[
     ("rx.atten", "Attenuator (RA): tap for in/out, hold to step the level 0-21 dB in 3 dB steps. Backs off strong signals that would overload the front end."),
     ("rx.afgain", "AF gain of the active receiver — its volume (AG). Sets the radio, so the front panel follows."),
     ("pan.rxvolume", "This receiver's listening level in this app only. It does not change the radio's AG."),
+    ("pan.rxmute", "Silence this receiver locally. The level is kept, so unmuting returns to it."),
     ("rx.rfgain", "RF gain (RG). Reduces receiver gain ahead of the AGC."),
     ("rx.squelch", "Squelch threshold (SQ). 0 leaves the receiver open."),
     ("rx.subrx", "Sub receiver on/off (SB). Needed for dual-pan and for the sub-RX mini-pan."),

@@ -172,6 +172,10 @@ struct App {
     // this app: the radio's own AF gain is untouched, so balancing the two
     // receivers here cannot disturb the front panel or another client.
     rx_volume: [f32; 2],
+    // Per-receiver mute [main, sub] (FR-RX-VOL-01). Deliberately **not**
+    // persisted: an app that starts muted looks broken, and the operator has
+    // no reason to suspect a setting from a previous session.
+    rx_muted: [bool; 2],
     mic_gain: f32, // TX capture gain 0.0–3.0
     // Two-step guard for the remote power-off (FR-PWR-01).
     power_off_armed: bool,
@@ -640,6 +644,8 @@ enum Message {
     /// Set one receiver's **local** playback volume (is_b, 0.0–2.0), the
     /// per-pane control above the spectrum. FR-RX-VOL-01.
     RxVolumeChanged(bool, f32),
+    /// Mute/unmute one receiver locally (is_b). FR-RX-VOL-01.
+    ToggleRxMute(bool),
     MicGainChanged(f32),
     SaveSettings,
     ExportConfig,
@@ -857,6 +863,7 @@ impl App {
             selected_input,
             volume,
             rx_volume,
+            rx_muted: [false, false],
             mic_gain,
             power_off_armed: false,
             main_window,
@@ -2068,9 +2075,27 @@ impl App {
                 self.send(WorkerCmd::SetVolume(v));
             }
             Message::RxVolumeChanged(is_b, v) => {
-                self.rx_volume[usize::from(is_b)] = v;
-                self.send(WorkerCmd::SetRxVolume(is_b, v));
+                let i = usize::from(is_b);
+                self.rx_volume[i] = v;
+                // Moving the slider while muted sets the level to return to,
+                // without unmuting — silently restoring audio because a slider
+                // moved would be its own surprise.
+                if !self.rx_muted[i] {
+                    self.send(WorkerCmd::SetRxVolume(is_b, v));
+                }
                 self.save_config();
+            }
+            Message::ToggleRxMute(is_b) => {
+                let i = usize::from(is_b);
+                self.rx_muted[i] = !self.rx_muted[i];
+                // Mute is a gain of zero on the wire; the slider keeps its
+                // value so unmuting restores the operator's level.
+                let gain = if self.rx_muted[i] {
+                    0.0
+                } else {
+                    self.rx_volume[i]
+                };
+                self.send(WorkerCmd::SetRxVolume(is_b, gain));
             }
             Message::MicGainChanged(g) => {
                 self.mic_gain = g;
@@ -5794,13 +5819,6 @@ impl App {
                 .spacing(8)
                 .align_y(Alignment::Center)
                 .push(badge(p.label(), role));
-            if selected {
-                header = header.push(
-                    Text::new("TX")
-                        .size(11)
-                        .color(role_color(ui::ColorRole::TxActive)),
-                );
-            }
             // This receiver's **local** listening level, in the space beside
             // the badge (FR-RX-VOL-01). RX audio arrives as 12 kHz stereo with
             // main on the left channel and sub on the right (FR-AUD-04), so
@@ -5809,6 +5827,7 @@ impl App {
             // panel or another connected client.
             let is_b = p.is_b();
             let vol = self.rx_volume[usize::from(is_b)];
+            let muted = self.rx_muted[usize::from(is_b)];
             header = header.push(tipped(
                 self.tips_on(),
                 self.hover,
@@ -5830,6 +5849,23 @@ impl App {
                         Text::new(format!("{:.0}%", vol * 100.0))
                             .size(11)
                             .color(role_color(ui::ColorRole::RxValue)),
+                    )
+                    .push(
+                        // Mute keeps the level, so unmuting returns to where
+                        // the operator had it rather than to some default.
+                        tipped(
+                            self.tips_on(),
+                            self.hover,
+                            "pan.rxmute",
+                            Button::new(Text::new(if muted { "MUTED" } else { "MUTE" }).size(10))
+                                .style(btn_style(if muted {
+                                    BtnKind::Amber
+                                } else {
+                                    BtnKind::Plain
+                                }))
+                                .padding([3, 7])
+                                .on_press(Message::ToggleRxMute(is_b)),
+                        ),
                     ),
             ));
             // Meters live in the top VFO panels now, not in the panadapter.
