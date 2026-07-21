@@ -601,36 +601,3 @@ fn fr_tx_safe_03_stop_and_receive_commands_are_not_gated() {
         );
     }
 }
-
-/// Re-tapping the active mode returns to the previous one, and that is a
-/// different command from stepping through the modes in order.
-///
-/// trace: FR-UI-ALT-01, FR-MODE-01
-#[test]
-fn fr_ui_alt_01_alternate_mode_is_the_toggle_form() {
-    use k4_protocol::cat::{alternate_mode, cycle_mode, set_mode};
-    assert_eq!(alternate_mode(), "MD/;", "D12's TOGGLE form of MD");
-    assert_ne!(
-        alternate_mode(),
-        cycle_mode(),
-        "returning to the previous mode is not the same as stepping to the next"
-    );
-    // And neither is a plain SET, which would re-send the mode already active
-    // and do nothing — the fault this closes.
-    for digit in 1..=9u8 {
-        assert_ne!(alternate_mode(), set_mode(digit), "digit {digit}");
-    }
-}
-
-/// The sub receiver's toggle is the `$` form, built by the app's `target_rx`
-/// helper — so the alternate applies to whichever receiver is active.
-///
-/// trace: FR-UI-ALT-01, FR-CAT-05
-#[test]
-fn fr_ui_alt_01_sub_receiver_uses_the_dollar_form() {
-    use k4_protocol::cat::alternate_mode;
-    // `target_rx` inserts `$` after the two-letter mnemonic.
-    let main = alternate_mode();
-    let sub = format!("{}${}", &main[..2], &main[2..]);
-    assert_eq!(sub, "MD$/;");
-}

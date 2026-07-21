@@ -183,9 +183,20 @@ Dismiss a popup by clicking outside it, pressing **ESC**, or with the **X** butt
 
 ### Mode buttons
 
-Tap a mode to select it. **Tap the mode you are already in** to go back to the previous one — so
-CW ⇄ USB is a single tap each way rather than hunting along the row. (This is the radio's own
-`MD/` toggle: "alternates between the two most recently used modes".)
+Tap a mode to select it. **Tap the mode you are already in** to switch to its alternate — the
+reverse or opposite sideband, paired the way the radio pairs them:
+
+| Tap the lit… | …and you get |
+|---|---|
+| **LSB** | USB |
+| **USB** | LSB |
+| **CW** | CW-R |
+| **CW-R** | CW |
+| **DATA** | DATA-R |
+| **DATA-R** | DATA |
+
+Tapping again returns you, so it is always reversible. **AM** and **FM** have no alternate, so
+re-tapping them does nothing.
 
 ### Click-to-tune digits
 

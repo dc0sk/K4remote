@@ -118,19 +118,6 @@ pub fn cycle_mode() -> String {
     "MD+;".to_string()
 }
 
-/// Toggle between the **two most recently used** modes (`MD/`; `MD$/` for the
-/// sub via `target_rx`) — D12's TOGGLE form of `MD`.
-///
-/// The K4's "tap the mode you are already in to go back" gesture: it returns to
-/// whatever you were in before, so CW ⇄ USB is one tap each way rather than
-/// hunting along the button row. Distinct from [`cycle_mode`], which steps
-/// through every enabled mode in order.
-///
-/// trace: FR-UI-ALT-01
-pub fn alternate_mode() -> String {
-    "MD/;".to_string()
-}
-
 /// Set the operating mode for sub RX (`MD$`).
 ///
 /// trace: FR-MODE-01
