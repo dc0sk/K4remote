@@ -181,6 +181,12 @@ Dismiss a popup by clicking outside it, pressing **ESC**, or with the **X** butt
 
 ## 4. Tuning & VFOs
 
+### Mode buttons
+
+Tap a mode to select it. **Tap the mode you are already in** to go back to the previous one — so
+CW ⇄ USB is a single tap each way rather than hunting along the row. (This is the radio's own
+`MD/` toggle: "alternates between the two most recently used modes".)
+
 ### Click-to-tune digits
 
 Click any digit of a VFO frequency to set the **tuning step** to that digit's place value

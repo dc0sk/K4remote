@@ -513,6 +513,9 @@ enum Message {
     SerialBaudChanged(String),
     SetMode(u8),
     CycleMode(bool),
+    /// Tap the already-active mode again: return to the previous mode
+    /// (`MD/`). FR-UI-ALT-01.
+    AlternateMode(bool),
     /// Tune one frequency digit: (is_b, place value 10^k, up). Rolls within the
     /// clicked digit only (no carry to neighbours).
     FreqDigit(bool, u64, bool),
@@ -1422,6 +1425,14 @@ impl App {
             Message::SerialBaudChanged(v) => self.serial_baud = v,
             Message::Tune(is_b, up) => self.step_vfo(is_b, up),
             Message::SetMode(digit) => self.send(WorkerCmd::SetMode(digit)),
+            // Tapping the mode you are already in returns you to the previous
+            // one (`MD/`, D12's TOGGLE form) — one tap each way between the two
+            // you are actually working, instead of hunting the row
+            // (FR-UI-ALT-01).
+            Message::AlternateMode(is_b) => self.send(WorkerCmd::Cat(target_rx(
+                k4_protocol::cat::alternate_mode(),
+                is_b,
+            ))),
             // MD+ (MD$+ for the sub) steps the mode through the K4's enabled
             // set; the MODE switch tap (SW43) only opens a chooser on the LCD.
             Message::CycleMode(is_b) => self.send(WorkerCmd::Cat(target_rx(
@@ -5524,6 +5535,13 @@ impl App {
         // (see rx_mode_strip), not the always-visible chips row (Phase 3).
         let mode_btn = |label: &'static str, digit: u8| -> Element<'_, Message> {
             let active = self.ui.mode_a == Some(label);
+            // Re-tapping the active mode goes back to the previous one rather
+            // than re-sending the mode it is already in, which did nothing.
+            let press = if active {
+                Message::AlternateMode(self.active_sub())
+            } else {
+                Message::SetMode(digit)
+            };
             tipped(
                 self.tips_on(),
                 self.hover,
@@ -5535,7 +5553,7 @@ impl App {
                         BtnKind::Plain
                     }))
                     .padding([6, 10])
-                    .on_press(Message::SetMode(digit)),
+                    .on_press(press),
             )
         };
         let tune_row = Row::new()
