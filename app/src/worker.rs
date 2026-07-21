@@ -370,6 +370,10 @@ struct WorkerState {
     audio_dropped: u64,
     audio_suppressed: u64,
     audio_silence_reported: bool,
+    /// Largest absolute sample seen in the decoded RX audio since the last
+    /// report — the measurement that says whether the radio is sending sound.
+    audio_peak: f32,
+    audio_peak_reported: u64,
     af_zero_reported: bool,
     spectrum_bins: usize,
     /// The last `<cmd>?;` rejection already reported, so a persisting error is
@@ -432,6 +436,8 @@ impl WorkerState {
             audio_dropped: 0,
             audio_suppressed: 0,
             audio_silence_reported: false,
+            audio_peak: 0.0,
+            audio_peak_reported: 0,
             af_zero_reported: false,
             spectrum_bins: 0,
             reported_error: None,
@@ -506,6 +512,8 @@ impl WorkerState {
         self.audio_dropped = 0;
         self.audio_suppressed = 0;
         self.audio_silence_reported = false;
+        self.audio_peak = 0.0;
+        self.audio_peak_reported = 0;
         self.af_zero_reported = false;
         self.spectrum_bins = 0;
         for rx in 0..2 {
@@ -824,6 +832,24 @@ impl WorkerState {
             }
         }
 
+        // Report the decoded peak every ~5 s of audio, whatever else is true:
+        // an operator hearing nothing needs to know whether the samples
+        // arriving contain sound at all, and no counter can tell them that.
+        if self.audio_frames >= self.audio_peak_reported + 250 {
+            self.audio_peak_reported = self.audio_frames;
+            let peak = self.audio_peak;
+            self.audio_peak = 0.0;
+            let note = if peak < 0.0005 {
+                " — the radio is sending SILENCE (this is not a playback fault)"
+            } else {
+                ""
+            };
+            self.diag.log(
+                Level::Info,
+                "audio",
+                &format!("RX audio peak level {peak:.4}{note}"),
+            );
+        }
         if self.audio_silence_reported || self.audio_played > 0 {
             return;
         }
@@ -880,6 +906,11 @@ fn service(ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnapshot>>) {
             match ws.rx_decoder.as_mut() {
                 Some(dec) => {
                     if let Ok(pcm) = dec.decode_float(&opus_frame) {
+                        // Peak of the decoded samples, before any gain of ours.
+                        // Whether the radio is sending silence has been inferred
+                        // twice and measured never; this settles it.
+                        let peak = pcm.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+                        ws.audio_peak = ws.audio_peak.max(peak);
                         if !txing {
                             match ws.audio_out.as_mut() {
                                 Some(out) => {
