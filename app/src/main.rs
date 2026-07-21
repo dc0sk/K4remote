@@ -1453,8 +1453,7 @@ impl App {
                 // Make the clicked digit the tuning cursor: set the K4 tune rate
                 // (VT) to its place value (1 Hz…100 kHz), keeping the K4, the
                 // K-Pod step, and the underline indicator in sync (FR-VFO-03).
-                let index = place.ilog10();
-                if index <= 5 {
+                if let Some(index) = ui::tune_step_index(place) {
                     let mode = if is_b {
                         self.ui.radio.mode_b
                     } else {
@@ -1462,9 +1461,7 @@ impl App {
                     };
                     if let Some(m) = mode.map(md_digit) {
                         self.send(WorkerCmd::CatLocal(k4_protocol::cat::set_tune_step(
-                            is_b,
-                            index as u8,
-                            m,
+                            is_b, index, m,
                         )));
                     }
                 }

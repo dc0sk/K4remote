@@ -1,7 +1,7 @@
 ---
 title: "System Requirements Specification"
 status: Draft
-version: "0.38"
+version: "0.39"
 updated: 2026-07-20
 authors:
   - Simon Keimer (DC0SK)
@@ -10,7 +10,7 @@ owns: [FR, NFR]
 
 # System Requirements Specification (SRS)
 
-**Version:** 0.38 (Draft) · **Date:** 2026-07-20 · **Author:** DC0SK
+**Version:** 0.39 (Draft) · **Date:** 2026-07-20 · **Author:** DC0SK
 Trace: owns `FR-`, `NFR-`. Up → [stakeholder-requirements.md](stakeholder-requirements.md);
 down → [../concept/architecture.md](../concept/architecture.md) (`ARC`) and
 [../test/test-strategy.md](../test/test-strategy.md) (`TC`).
@@ -83,6 +83,7 @@ Programmer's Reference rev. D12 (`PRG`) command mnemonics.
 | `FR-VFO-05` | control RIT/XIT on/off and offset, and clear them (PRG `RT`/`XT`/`RC`, `IF` flags). | STK-03 | S | T | Enabling RIT and a +50 Hz offset is reflected in state and via `IF`. |
 | `FR-VFO-06` | control split on/off (PRG `FT`). | STK-02 | S | T | `FT1;`/`FT0;` toggles split state. |
 | `FR-VFO-08` | tune by **clicking individual frequency digits** — a digit's upper half increments it, the lower half decrements it, rolling 0–9 within that digit only (no carry). | STK-03 | C | D | Clicking a digit sends `FA`/`FB` with just that place changed. |
+| `FR-VFO-STEP-01` | tapping a **frequency digit** shall make that digit's place value the tuning step (`VT`, per mode and per VFO), and the active step digit shall be marked with an **underline cursor** in both VFO frames. Places the radio has no rate for (MHz and above) shall leave the step unchanged. **Out of scope:** the per-mode **coarse** rate (`VC`) — the app has no coarse-tune control to attach it to, so honouring it needs that affordance first. | STK-03 | S | T/D | `tune_step_index` maps each of the six place values to the radio's 0–5 rate, rejects MHz-and-above and any non-place value, and never yields an index outside the ladder (test); tapping a digit on a radio moves the underline and changes the knob's rate to match (demo). |
 | `FR-VFO-07` | copy/swap the VFOs — A→B, B→A, and swap, for frequency or full state (PRG `AB`). | STK-02 | S | T | `AB0`…`AB5;` encode the copy/swap variants. |
 | `FR-VFO-ID` | set/display the station ID text (PRG `ID`) to support identification. | STK-13 | S | T | Setting ID emits `ID<text>;`; RESP updates displayed ID. |
 
@@ -356,3 +357,4 @@ syntax per the Programmer's Reference D12, cross-checked vs QK4 (`R-EXT-03`).*
 | 2026-07-21 | 0.36 | DC0SK | Added FR-UI-ALT-01 (re-tap the active mode to return to the previous one) from the gap-analysis backlog. D12 documents `MD/` as a TOGGLE form — "alternates between two most recently used modes" — so this is the radio's own gesture, not an invention. Previously the active mode button re-sent the mode already in effect and did nothing. Noted while reading `MD`: D12 says applications recreating the K4's **grouped** mode buttons should also use `MA` (Mode Alternates, GET-only bit flags for labelling SSB/CW/DATA with their current alternate). That does not apply here — this app shows all eight modes individually rather than a grouped set — and is recorded so the omission is a decision rather than an oversight. |
 | 2026-07-21 | 0.37 | DC0SK | Corrected FR-UI-ALT-01 after operator review. The first cut used `MD/`, D12's toggle between the two **most recently used** modes — which the gap analysis had cited. On an eight-button row that is incoherent: tapping the lit `CW` button jumped to whatever mode you happened to be in before, and CW-R stayed reachable only from its own button. The requirement now specifies the **pairwise alternate** the radio itself uses (`MA`, Mode Alternates: CW normal/reverse, USB/LSB, DATA-A normal/reverse), with AM and FM unaffected. Lesson: the gap analysis cited a command, and I implemented the command instead of the behaviour it was standing in for. |
 | 2026-07-21 | 0.38 | DC0SK | Added FR-UI-STABLE-01 (controls do not resize as their content changes), raised by DC0SK as the "no bouncing wireframe" rule: a button that reads MUTE and then MUTED, or a readout going 7 % → 100 %, shifts everything beside it, and across a panel the layout twitches continuously while operating. Scoped to content that is **known and defined**, so it is a rule that can actually be followed and checked; genuinely unbounded content is excluded and gets a designed fixed size instead. |
+| 2026-07-21 | 0.39 | DC0SK | Declared FR-VFO-STEP-01, which a backlog survey found was **already implemented** — digit-tap sets `VT` per mode and per VFO, and the underline cursor tracks it — but had never been recorded as a requirement, so nothing tied the behaviour to a test or protected it from regression. The place→rate mapping was extracted from an inline expression into `tune_step_index` so it could be tested at all. The `VC` coarse rate is named as **out of scope** with its reason, rather than left as an unstated gap: there is no coarse-tune control in the app to attach it to. |
