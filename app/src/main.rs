@@ -153,10 +153,7 @@ struct App {
     rx_popup: Option<ui::RxPopup>,
     // Live pointer position, and where it was when the popup was opened — the
     // popup is anchored at the control rather than centred on the window.
-    // Tracking is gated on `pointer_on_chip` so the per-move cost is paid only
-    // over the controls that can open a popup (see `subscription`).
     cursor: (f32, f32),
-    pointer_on_chip: bool,
     rx_popup_at: (f32, f32),
     // Encrypt cached peer passwords under a master password (vs OS keychain).
     use_master: bool,
@@ -573,12 +570,6 @@ enum Message {
     StartCaptureHotkey,
     ToggleKey,
     EmergencyStop,
-    /// NB hold: cycle the noise-blanker filter mode (D14 p.1368).
-    CycleNbFilter,
-    /// ATTN hold: step the attenuator 3 dB (D14 p.1318).
-    StepAtten,
-    /// AGC hold: switch AGC on/off (D14 p.909).
-    ToggleAgcOff,
     /// Deliberately does nothing: swallows a click so it cannot reach a
     /// click-away handler underneath (the RX popup card).
     Noop,
@@ -700,9 +691,6 @@ enum Message {
     /// Pointer moved, in window coordinates — remembered so a popup can open
     /// at the control instead of the middle of the window (FR-UI-POPUP-01).
     CursorMoved(f32, f32),
-    /// Pointer entered/left a chip that can open a popup. Gates the cursor
-    /// tracking above, which is too expensive to run app-wide.
-    PointerOnChip(bool),
     Tick,
 }
 
@@ -844,7 +832,6 @@ impl App {
             settings_open: false,
             rx_popup: None,
             cursor: (0.0, 0.0),
-            pointer_on_chip: false,
             rx_popup_at: (0.0, 0.0),
             use_master: false,
             master_password: String::new(),
@@ -1452,38 +1439,6 @@ impl App {
             Message::ToggleAtten => {
                 self.send(WorkerCmd::Cat(target_rx("RA/;".into(), self.active_sub())))
             }
-            Message::CycleNbFilter => {
-                // Hold: NONE → NARROW → WIDE. The paired [LEVEL] switch's
-                // "filtering mode" (D14 p.1368) — parsed into state all along
-                // but never settable until now.
-                let sub = self.active_sub();
-                let next = ui::nb_filter_hold(self.ui.radio.nb_filter);
-                self.send(WorkerCmd::Cat(target_rx(
-                    k4_protocol::cat::set_nb_level(
-                        self.nb_level,
-                        self.rx_nb_on() == Some(true),
-                        next,
-                    ),
-                    sub,
-                )));
-                self.send(WorkerCmd::Cat(target_rx("NB;".into(), sub)));
-            }
-            Message::StepAtten => {
-                // Hold: walk the 0–21 dB ladder in 3 dB steps (D14 p.1318).
-                // 0 dB means the attenuator is out, so send it off there
-                // rather than "on at 0", which the radio would show as
-                // engaged while doing nothing.
-                let next = ui::atten_hold(self.rx_atten_db());
-                // Keep the mirror with the chip, so opening the popup after a
-                // hold shows the level the hold just set.
-                self.atten_db = next;
-                self.opt_atten.set(next);
-                self.send(WorkerCmd::Cat(target_rx(
-                    k4_protocol::cat::set_attenuator(next, next > 0),
-                    self.active_sub(),
-                )));
-                self.send(WorkerCmd::Cat(target_rx("RA;".into(), self.active_sub())));
-            }
             Message::Noop => {}
             Message::OpenRxPopup(p) => {
                 // Freeze the anchor at the click: the pointer keeps moving
@@ -1986,17 +1941,6 @@ impl App {
             }
             Message::ToggleKey => self.send(WorkerCmd::Key(!self.ui.transmitting)),
             Message::EmergencyStop => self.send(WorkerCmd::EmergencyStop),
-            Message::ToggleAgcOff => {
-                // Hold: AGC on/off, restoring slow (D14 p.909). With AGC off
-                // the radio falls back to its own audio limiter.
-                let sub = self.active_sub();
-                let next = ui::agc_hold(self.rx_agc_mode());
-                self.send(WorkerCmd::Cat(target_rx(
-                    k4_protocol::cat::set_agc(next),
-                    sub,
-                )));
-                self.send(WorkerCmd::Cat(target_rx("GT;".into(), sub)));
-            }
             Message::PressDown => self.press_at = Some(std::time::Instant::now()),
             Message::TapOrHold(tap, hold) => {
                 // The radio's own convention: tap and hold are different
@@ -2331,7 +2275,6 @@ impl App {
                 }
             }
             Message::CursorMoved(x, y) => self.cursor = (x, y),
-            Message::PointerOnChip(on) => self.pointer_on_chip = on,
             Message::Tick => {
                 if let Ok(snap) = self.snapshot.lock() {
                     self.ui = snap.clone();
@@ -2506,24 +2449,24 @@ impl App {
             .map(|(id, size)| Message::Resized(id, size.width, size.height));
         // Pointer position, for anchoring a popup where it was opened.
         //
-        // Live **only while the pointer is over a chip that can open one**.
-        // Every one of these messages costs a full `view()` rebuild across
-        // both windows, and measured on an idle, disconnected app that was
-        // already 4% → 20% of a core just from moving the mouse — with a live
-        // radio (spectrum, waterfall, a fast-filling diagnostics log) the
-        // rebuild is far more expensive. Gating it to the few chips that can
-        // actually be right-clicked keeps the cost where the feature is,
-        // instead of charging it to every pointer movement in the app.
-        let cursor = if self.pointer_on_chip {
-            iced::event::listen_with(|event, _status, _id| match event {
-                iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
-                    Some(Message::CursorMoved(position.x, position.y))
-                }
-                _ => None,
-            })
-        } else {
-            Subscription::none()
-        };
+        // Deliberately **not** gated on the pointer being over a chip. That
+        // was tried, to save the `view()` rebuild each of these messages
+        // costs (4% → 20% of a core while the mouse moves, on an idle app),
+        // and it broke the feature: the subscription only starts *after* the
+        // enter event, so a pointer that arrives and stops — exactly what a
+        // **hold** is — never produces a `CursorMoved`, and the popup opened
+        // at the window corner with a stale (0, 0) anchor. That shipped in
+        // v0.4.0.
+        //
+        // The overload this was trying to help was the diagnostics log
+        // pipeline, which is fixed at its own source. Idle cost here is nil;
+        // the cost is only paid while the mouse is actually moving.
+        let cursor = iced::event::listen_with(|event, _status, _id| match event {
+            iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
+                Some(Message::CursorMoved(position.x, position.y))
+            }
+            _ => None,
+        });
         // Window lifecycle: quit on main-window close; track the diag window.
         let closed = iced::window::close_events().map(Message::WindowClosed);
         // Keyboard: PTT hotkey (push-to-talk) + hotkey capture.
@@ -5343,13 +5286,15 @@ impl App {
                 self.tips_on(),
                 self.hover,
                 "rx.atten",
-                // Tap = in/out, hold = step the level, right-click = the
-                // radio's attenuator panel (D14 p.1318).
+                // Tap = in/out; hold (or right-click) brings up the
+                // attenuator controls, which is what the radio does —
+                // "Hold [ATTN] to bring up the attenuator controls (on/off
+                // and level)" (D14 p.1318).
                 popup_click(
                     ui::RxPopup::Atten,
                     tap_hold(
                         Message::ToggleAtten,
-                        Message::StepAtten,
+                        Message::OpenRxPopup(ui::RxPopup::Atten),
                         two_line_btn_visual(
                             ui::atten_button(self.rx_atten_on(), self.rx_atten_db()),
                             self.rx_atten_on(),
@@ -5364,10 +5309,14 @@ impl App {
                 "rx.preamp",
                 popup_click(
                     ui::RxPopup::Preamp,
-                    two_line_btn(
-                        ui::preamp_button(self.rx_preamp_on(), self.ui.radio.preamp_level),
-                        self.rx_preamp_on(),
-                        Some(Message::TogglePreamp),
+                    tap_hold(
+                        Message::TogglePreamp,
+                        Message::OpenRxPopup(ui::RxPopup::Preamp),
+                        two_line_btn_visual(
+                            ui::preamp_button(self.rx_preamp_on(), self.ui.radio.preamp_level),
+                            self.rx_preamp_on(),
+                            false,
+                        ),
                     ),
                 ),
             ))
@@ -5375,14 +5324,16 @@ impl App {
                 self.tips_on(),
                 self.hover,
                 "rx.nb",
-                // Tap = on/off, hold = filter mode. The K4 splits these across
-                // [NB] and its paired [LEVEL] switch (D14 p.767/1368); the app
-                // draws one control, so the hold carries the pair's function.
+                // Tap = on/off; hold brings up the noise-blanker controls —
+                // "hold [LEVEL] to bring up the noise blanker controls
+                // (on/off, filtering mode, and level)" (D14 p.1368). The app
+                // draws one control where the radio has two switches, so the
+                // hold carries the paired switch's function.
                 popup_click(
                     ui::RxPopup::Nb,
                     tap_hold(
                         Message::ToggleNb,
-                        Message::CycleNbFilter,
+                        Message::OpenRxPopup(ui::RxPopup::Nb),
                         two_line_btn_visual(
                             ui::nb_button(self.rx_nb_on(), self.ui.radio.nb_filter),
                             self.rx_nb_on(),
@@ -5397,10 +5348,14 @@ impl App {
                 "rx.nr",
                 popup_click(
                     ui::RxPopup::Nr,
-                    two_line_btn(
-                        ui::toggle_button("NR", self.rx_nr_on()),
-                        self.rx_nr_on(),
-                        Some(Message::ToggleNr),
+                    tap_hold(
+                        Message::ToggleNr,
+                        Message::OpenRxPopup(ui::RxPopup::Nr),
+                        two_line_btn_visual(
+                            ui::toggle_button("NR", self.rx_nr_on()),
+                            self.rx_nr_on(),
+                            false,
+                        ),
                     ),
                 ),
             ))
@@ -5408,13 +5363,14 @@ impl App {
                 self.tips_on(),
                 self.hover,
                 "rx.agc",
-                // Tap = slow/fast, hold = AGC on/off — the radio's own pair
-                // (D14 p.909, FR-UI-HOLD-01).
+                // Tap = slow/fast (D14 p.909); hold brings up the AGC panel,
+                // where switching it **off** now lives — a tap still cannot
+                // reach off by accident.
                 popup_click(
                     ui::RxPopup::Agc,
                     tap_hold(
                         Message::CycleAgc,
-                        Message::ToggleAgcOff,
+                        Message::OpenRxPopup(ui::RxPopup::Agc),
                         two_line_btn_visual(
                             ui::agc_button(self.rx_agc_mode()),
                             None,
@@ -5450,11 +5406,14 @@ impl App {
                 "rx.notch",
                 popup_click(
                     ui::RxPopup::Notch,
-                    two_line_btn_dim(
-                        ui::toggle_button("NOTCH", self.rx_notch_on()),
-                        self.rx_notch_on(),
-                        Some(Message::ToggleManualNotch),
-                        rx_dim(ui::RxCtl::ManualNotch),
+                    tap_hold(
+                        Message::ToggleManualNotch,
+                        Message::OpenRxPopup(ui::RxPopup::Notch),
+                        two_line_btn_visual(
+                            ui::toggle_button("NOTCH", self.rx_notch_on()),
+                            self.rx_notch_on(),
+                            rx_dim(ui::RxCtl::ManualNotch),
+                        ),
                     ),
                 ),
             ))
@@ -7337,10 +7296,6 @@ fn popup_click<'a>(
 ) -> Element<'a, Message> {
     MouseArea::new(content)
         .on_right_press(Message::OpenRxPopup(popup))
-        // Enable pointer tracking only while over this chip, so the popup has
-        // a fresh anchor without the app paying for every mouse move.
-        .on_enter(Message::PointerOnChip(true))
-        .on_exit(Message::PointerOnChip(false))
         .into()
 }
 
@@ -7812,8 +7767,8 @@ mod tap_hold_wiring_tests {
             checked += 1;
         }
         assert!(
-            checked >= 3,
-            "expected the AGC/ATTN/NB sites, found {checked}"
+            checked >= 6,
+            "expected all six popup chips (ATT/PRE/AGC/NB/NR/NOTCH), found {checked}"
         );
     }
 }

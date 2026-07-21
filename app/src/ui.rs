@@ -535,28 +535,6 @@ pub fn nb_button(on: Option<bool>, filter: Option<u8>) -> ButtonState {
     ButtonState::new("NB", value)
 }
 
-/// Next noise-blanker filter mode for a **hold** (`NB`): NONE → NARROW →
-/// WIDE → NONE.
-///
-/// On the radio this lives on the paired `[LEVEL]` switch, not on `[NB]`
-/// itself: D14 p.767 lists the receiver row as pairs — `[NB]` and `[LEVEL]`,
-/// `[NR]` and `[ADJ]`, `[NTCH]` and `[MANUAL]` — and p.1368 reads "Tap [NB] to
-/// turn the noise blanker on/off, or hold [LEVEL] to bring up the noise
-/// blanker controls (on/off, filtering mode, and level)". The app draws one
-/// control where the radio has two switches, so the hold surfaces the paired
-/// switch's function.
-///
-/// Filtering mode is the part of that pair the app could not otherwise
-/// reach: the level already has a slider, and `nb_filter` was parsed into
-/// state and passed straight back out on every set, never chosen. D14 p.1370
-/// is explicit that it matters — "if you hear audio artifacts such as
-/// 'pumping' … try changing the NB filter mode from NONE to NARROW or WIDE".
-///
-/// trace: FR-UI-HOLD-01
-pub fn nb_filter_hold(cur: Option<u8>) -> u8 {
-    (cur.unwrap_or(0).min(2) + 1) % 3
-}
-
 /// Human label for an `NB` filter mode.
 ///
 /// trace: FR-UI-HOLD-01
@@ -566,27 +544,6 @@ pub fn nb_filter_label(mode: Option<u8>) -> &'static str {
         Some(2) => "WIDE",
         Some(_) => "NONE",
         None => UNKNOWN,
-    }
-}
-
-/// Next attenuator level for a **hold** (`RA`): +3 dB, wrapping 21 → 0.
-///
-/// D14 p.1318: "Hold [ATTN] to bring up the attenuator controls (on/off and
-/// level). Attenuation varies from 0 to 21 dB in 3 dB steps." The radio opens
-/// an adjustment panel; with a mouse, stepping the level directly is the same
-/// idea in one gesture.
-///
-/// A level off the 3 dB grid (a radio in some other state, or a stale
-/// read-back) snaps up to the next valid step rather than being preserved.
-///
-/// trace: FR-UI-HOLD-01
-pub fn atten_hold(cur: Option<u8>) -> u8 {
-    let cur = cur.unwrap_or(0).min(ATTEN_MAX_DB);
-    let next = (cur / ATTEN_STEP_DB) * ATTEN_STEP_DB + ATTEN_STEP_DB;
-    if next > ATTEN_MAX_DB {
-        0
-    } else {
-        next
     }
 }
 
@@ -725,22 +682,6 @@ pub fn agc_tap(cur: Option<u8>) -> u8 {
         2
     } else {
         1
-    }
-}
-
-/// Next AGC mode for a **hold** (`GT`): on/off, restoring slow when switching
-/// back on.
-///
-/// D14 p.909: "Holding this button turns AGC on or off (AGC-)." With AGC off
-/// the K4 falls back to an audio limiter (D14 p.911), so this is a real
-/// operating mode rather than a mistake — but it belongs behind the hold.
-///
-/// trace: FR-UI-HOLD-01
-pub fn agc_hold(cur: Option<u8>) -> u8 {
-    if cur == Some(0) {
-        1
-    } else {
-        0
     }
 }
 
@@ -2209,94 +2150,6 @@ mod agc_taphold_tests {
             assert_ne!(agc_tap(cur), 0, "cur={cur:?} must not tap into AGC off");
         }
     }
-
-    /// A hold toggles AGC off and back on, restoring slow.
-    /// trace: FR-UI-HOLD-01
-    #[test]
-    fn fr_ui_hold_01_agc_hold_toggles_off() {
-        assert_eq!(agc_hold(Some(1)), 0, "slow → off");
-        assert_eq!(agc_hold(Some(2)), 0, "fast → off");
-        assert_eq!(agc_hold(Some(0)), 1, "off → slow");
-        assert_eq!(agc_hold(None), 0);
-    }
-
-    /// Tap and hold are different actions whenever AGC is on — the point of
-    /// the convention.
-    ///
-    /// They deliberately coincide from the **off** state: D14's tap "selects
-    /// slow or fast" and its hold "turns AGC on", and both of those mean slow
-    /// when starting from off. So an operator who cannot remember which
-    /// gesture restores AGC gets it back either way, which is the forgiving
-    /// direction.
-    /// trace: FR-UI-HOLD-01
-    #[test]
-    fn fr_ui_hold_01_tap_and_hold_differ_while_agc_is_on() {
-        for cur in [Some(1), Some(2)] {
-            assert_ne!(agc_tap(cur), agc_hold(cur), "cur={cur:?}");
-        }
-        // From off, both restore AGC rather than one of them being inert.
-        assert_eq!(agc_tap(Some(0)), agc_hold(Some(0)));
-        assert_ne!(agc_tap(Some(0)), 0, "neither gesture leaves AGC off");
-    }
-}
-
-#[cfg(test)]
-mod atten_hold_tests {
-    use super::*;
-
-    /// The hold walks the documented 0–21 dB ladder in 3 dB steps and wraps.
-    /// trace: FR-UI-HOLD-01
-    #[test]
-    fn fr_ui_hold_01_atten_hold_steps_3db() {
-        let ladder = [0u8, 3, 6, 9, 12, 15, 18, 21];
-        for pair in ladder.windows(2) {
-            assert_eq!(
-                atten_hold(Some(pair[0])),
-                pair[1],
-                "{} → {}",
-                pair[0],
-                pair[1]
-            );
-        }
-        assert_eq!(atten_hold(Some(21)), 0, "wraps at the top");
-        assert_eq!(atten_hold(None), 3, "unknown starts the ladder");
-    }
-
-    /// Every reachable level is on the documented grid and within range —
-    /// including from a level the radio should never report.
-    /// trace: FR-UI-HOLD-01
-    #[test]
-    fn fr_ui_hold_01_atten_hold_stays_on_the_grid() {
-        for cur in 0u8..=255 {
-            let n = atten_hold(Some(cur));
-            assert!(n <= 21, "cur={cur} → {n} exceeds the 21 dB maximum");
-            assert_eq!(n % 3, 0, "cur={cur} → {n} is off the 3 dB grid");
-        }
-    }
-
-    /// Off-grid input snaps up to the next valid step rather than being
-    /// carried forward.
-    /// trace: FR-UI-HOLD-01
-    #[test]
-    fn fr_ui_hold_01_atten_hold_snaps_off_grid_values() {
-        assert_eq!(atten_hold(Some(1)), 3);
-        assert_eq!(atten_hold(Some(4)), 6);
-        assert_eq!(atten_hold(Some(20)), 21);
-    }
-
-    /// Repeated holds visit the whole ladder and return to the start — no
-    /// level is unreachable and none is a dead end.
-    /// trace: FR-UI-HOLD-01
-    #[test]
-    fn fr_ui_hold_01_atten_hold_cycles_every_level() {
-        let mut seen = Vec::new();
-        let mut cur = 0u8;
-        for _ in 0..8 {
-            cur = atten_hold(Some(cur));
-            seen.push(cur);
-        }
-        assert_eq!(seen, vec![3, 6, 9, 12, 15, 18, 21, 0]);
-    }
 }
 
 #[cfg(test)]
@@ -2342,18 +2195,24 @@ mod rx_popup_tests {
         assert_eq!(reachable, ladder, "every 3 dB step must be selectable");
     }
 
-    /// The hold and the popup agree on the ladder — they are the same radio
-    /// control reached two ways, so a level one can set the other must too.
+    /// The popup can set every level the radio's ladder defines, and nothing
+    /// between them.
+    ///
+    /// This used to compare against `atten_hold`, the blind 3 dB stepper the
+    /// chip's hold ran before the hold started opening this popup instead.
+    /// The ladder is the same; it is now asserted directly rather than
+    /// through a function that no longer exists.
     /// trace: FR-UI-POPUP-01
     #[test]
-    fn fr_ui_popup_01_atten_snap_and_hold_share_the_ladder() {
-        for cur in 0u8..=ATTEN_MAX_DB {
-            let held = atten_hold(Some(cur));
+    fn fr_ui_popup_01_atten_snap_covers_the_whole_ladder() {
+        let mut level = 0u8;
+        while level <= ATTEN_MAX_DB {
             assert_eq!(
-                atten_snap(held),
-                held,
-                "the hold reached {held} dB, which the popup cannot represent"
+                atten_snap(level),
+                level,
+                "{level} dB is on the radio's ladder but the popup cannot represent it"
             );
+            level += ATTEN_STEP_DB;
         }
     }
 
@@ -2458,44 +2317,10 @@ mod rx_popup_tests {
 mod nb_filter_tests {
     use super::*;
 
-    /// The hold cycles the three documented filter modes and returns to NONE.
-    /// trace: FR-UI-HOLD-01
-    #[test]
-    fn fr_ui_hold_01_nb_filter_cycles() {
-        assert_eq!(nb_filter_hold(Some(0)), 1, "NONE → NARROW");
-        assert_eq!(nb_filter_hold(Some(1)), 2, "NARROW → WIDE");
-        assert_eq!(nb_filter_hold(Some(2)), 0, "WIDE → NONE");
-        assert_eq!(nb_filter_hold(None), 1, "unknown starts the cycle");
-    }
-
-    /// Only the three modes the `NB` command defines are ever produced, even
-    /// from a value the radio should never report.
-    /// trace: FR-UI-HOLD-01
-    #[test]
-    fn fr_ui_hold_01_nb_filter_stays_in_range() {
-        for cur in 0u8..=255 {
-            assert!(nb_filter_hold(Some(cur)) <= 2, "cur={cur}");
-        }
-    }
-
-    /// Three holds return to where they started — no mode is unreachable and
-    /// none is a dead end.
-    /// trace: FR-UI-HOLD-01
-    #[test]
-    fn fr_ui_hold_01_nb_filter_round_trips() {
-        let mut cur = 0u8;
-        let mut seen = Vec::new();
-        for _ in 0..3 {
-            cur = nb_filter_hold(Some(cur));
-            seen.push(cur);
-        }
-        assert_eq!(seen, vec![1, 2, 0]);
-    }
-
     /// Labels track the modes, and an unknown mode is not shown as NONE —
     /// "we have not heard from the radio" and "the filter is off" are
-    /// different things.
-    /// trace: FR-UI-HOLD-01
+    /// different things. Used by the chip and by the NB popup's mode buttons.
+    /// trace: FR-UI-POPUP-01
     #[test]
     fn fr_ui_hold_01_nb_filter_labels() {
         assert_eq!(nb_filter_label(Some(0)), "NONE");
