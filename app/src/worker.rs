@@ -195,10 +195,6 @@ pub enum WorkerCmd {
     /// Select the TX capture device by name (`None` = default) — FR-AUD-DEV-01.
     SetInputDevice(Option<String>),
     /// RX playback volume gain (FR-AUD-LVL-01), 0.0–2.0.
-    /// Record an operator-facing note in the diagnostics log. For actions the
-    /// app takes on its own that change the radio — the operator should be
-    /// able to see that it happened, and why.
-    Note(String),
     SetVolume(f32),
     /// Set one receiver's local playback gain (is_b, 0.0–2.0) — FR-RX-VOL-01.
     SetRxVolume(bool, f32),
@@ -1215,7 +1211,6 @@ fn handle_cmd(cmd: WorkerCmd, ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnaps
                 }
             }
         }
-        WorkerCmd::Note(msg) => ws.diag.log(Level::Info, "app", &msg),
         WorkerCmd::SetVolume(v) => {
             ws.volume = v;
             if let Some(out) = ws.audio_out.as_mut() {
