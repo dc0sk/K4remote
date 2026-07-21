@@ -2171,7 +2171,7 @@ impl App {
                 } else {
                     // Freeze the current lines so the console holds still to be
                     // read/selected (the live buffer keeps churning underneath).
-                    self.log_frozen = self.ui.diag_lines.clone();
+                    self.log_frozen = self.ui.diag_lines.as_ref().clone();
                 }
                 self.refresh_log_content();
             }
