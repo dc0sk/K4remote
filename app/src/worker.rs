@@ -255,7 +255,7 @@ pub struct UiSnapshot {
     /// Latest mini-pan trace (0x03), empty if disabled.
     pub mini_pan: Vec<f32>,
     /// Recent diagnostic log lines (FR-DIAG-01/02).
-    pub diag_lines: Vec<String>,
+    pub diag_lines: std::sync::Arc<Vec<String>>,
     /// Human-readable status / last error.
     pub status: String,
     /// Full radio state model, for the config screens to read back their current
@@ -369,6 +369,13 @@ struct WorkerState {
     // Latest mini-pan (0x03) trace, if enabled (FR-UI-14).
     mini_pan: Vec<f32>,
     diag: DiagLog,
+    // Last time the (expensive) diagnostics line vector was rebuilt for the
+    // snapshot, and the vector itself. Rebuilding it allocates up to 4 000
+    // Strings; `publish` runs once per worker loop, and that loop is paced by
+    // inbound frames, so under heavy traffic this ran hundreds of times a
+    // second and saturated the worker thread.
+    diag_published: Instant,
+    diag_lines: std::sync::Arc<Vec<String>>,
     // Reconnect (FR-SES-RECONNECT): retained target + backoff schedule.
     connect_params: Option<ConnectTarget>,
     backoff: Backoff,
@@ -413,6 +420,8 @@ impl WorkerState {
             // Debug level so the raw CAT console shows traffic; bounded ring.
             // Sized to hold a few minutes of busy traffic so lines don't scroll
             // out from under the reader before they can be copied.
+            diag_published: Instant::now(),
+            diag_lines: std::sync::Arc::new(Vec::new()),
             diag: DiagLog::new(4000, Level::Debug),
             connect_params: None,
             backoff: Backoff::default(),
@@ -469,10 +478,33 @@ fn set_phase(snapshot: &Arc<Mutex<UiSnapshot>>, phase: ConnPhase) {
     }
 }
 
-fn publish(snapshot: &Arc<Mutex<UiSnapshot>>, ws: &WorkerState) {
-    let Some(session) = ws.session.as_ref() else {
+/// Rebuild the snapshot's diagnostics line vector, at most ~5×/s.
+///
+/// This allocates up to 4 000 `String`s (measured ~223 µs). `publish` runs once
+/// per worker-loop iteration, and that loop is paced by inbound frames rather
+/// than by a timer — under heavy CAT + spectrum traffic it therefore ran
+/// hundreds of times a second, spending most of the worker thread on log lines
+/// nobody could read that fast. The UI polls the snapshot at 10 Hz, so a
+/// console refreshed at 5 Hz loses nothing an operator can perceive.
+///
+/// The vector is shared as an `Arc`, so the UI's per-tick snapshot clone is a
+/// refcount bump rather than 4 000 allocations.
+fn refresh_diag_lines(ws: &mut WorkerState) {
+    const INTERVAL: Duration = Duration::from_millis(200);
+    if ws.diag_published.elapsed() < INTERVAL {
         return;
-    };
+    }
+    ws.diag_published = Instant::now();
+    ws.diag_lines = Arc::new(ws.diag.recent(4000));
+}
+
+fn publish(snapshot: &Arc<Mutex<UiSnapshot>>, ws: &mut WorkerState) {
+    if ws.session.is_none() {
+        return;
+    }
+    // Rebuild the log vector at most ~5×/s, before borrowing the session.
+    refresh_diag_lines(ws);
+    let session = ws.session.as_ref().expect("checked above");
     let st: &RadioState = session.state();
     if let Ok(mut s) = snapshot.lock() {
         s.connected = session.is_connected();
@@ -483,7 +515,7 @@ fn publish(snapshot: &Arc<Mutex<UiSnapshot>>, ws: &WorkerState) {
         }
         s.transmitting = session.is_transmitting();
         s.tx_armed = session.is_tx_armed();
-        s.tuning = session.is_tuning();
+        s.tuning = session.is_tuning() || session.is_raw_tx();
         s.vfo_a_hz = st.vfo_a_hz;
         s.vfo_b_hz = st.vfo_b_hz;
         s.mode_a = st.mode_a.map(mode_label);
@@ -508,7 +540,7 @@ fn publish(snapshot: &Arc<Mutex<UiSnapshot>>, ws: &WorkerState) {
         s.waterfall = ws.waterfall[0].iter().cloned().collect();
         s.waterfall_sub = ws.waterfall[1].iter().cloned().collect();
         s.mini_pan = ws.mini_pan.clone();
-        s.diag_lines = ws.diag.recent(4000);
+        s.diag_lines = Arc::clone(&ws.diag_lines);
         s.radio = st.clone();
     }
 }
@@ -688,7 +720,8 @@ fn run(rx: Receiver<WorkerCmd>, snapshot: Arc<Mutex<UiSnapshot>>) {
             }
             // Publish diagnostics even while disconnected (connect errors, etc.).
             if let Ok(mut s) = snapshot.lock() {
-                s.diag_lines = ws.diag.recent(4000);
+                refresh_diag_lines(&mut ws);
+                s.diag_lines = Arc::clone(&ws.diag_lines);
             }
             thread::sleep(Duration::from_millis(50));
         }
@@ -951,8 +984,14 @@ fn handle_cmd(cmd: WorkerCmd, ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnaps
         }
         WorkerCmd::SendRawCat(cmd) => {
             if let Some(s) = ws.session.as_mut() {
-                let _ = s.send(&cmd);
-                ws.diag.log(Level::Info, "tx", &cmd);
+                match s.send(&cmd) {
+                    Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => ws.diag.log(
+                        Level::Warn,
+                        "tx",
+                        &format!("{cmd} refused: transmit is disarmed (ARM TX first)"),
+                    ),
+                    _ => ws.diag.log(Level::Info, "tx", &cmd),
+                }
             }
         }
         WorkerCmd::SetRxEq(bands) => {
@@ -972,15 +1011,38 @@ fn handle_cmd(cmd: WorkerCmd, ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnaps
         }
         WorkerCmd::Cat(cmd) => {
             if let Some(s) = ws.session.as_mut() {
-                let _ = s.send(&cmd);
+                // A refusal is silent on the wire, so say so in the console
+                // rather than leaving the operator wondering why TUNE did
+                // nothing (FR-TX-SAFE-03).
+                match s.send(&cmd) {
+                    Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                        ws.diag.log(
+                            Level::Warn,
+                            "tx",
+                            &format!("{cmd} refused: transmit is disarmed (ARM TX first)"),
+                        );
+                        return;
+                    }
+                    _ => {}
+                }
                 ws.diag.log(Level::Debug, "tx", &cmd);
             }
         }
         WorkerCmd::CatLocal(cmd) => {
             if let Some(s) = ws.session.as_mut() {
-                let _ = s.send(&cmd);
-                s.apply_local(&cmd);
-                ws.diag.log(Level::Debug, "tx", &cmd);
+                // A refused command must not be folded into local state, or
+                // the UI would show a change the radio never made.
+                match s.send(&cmd) {
+                    Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => ws.diag.log(
+                        Level::Warn,
+                        "tx",
+                        &format!("{cmd} refused: transmit is disarmed (ARM TX first)"),
+                    ),
+                    _ => {
+                        s.apply_local(&cmd);
+                        ws.diag.log(Level::Debug, "tx", &cmd);
+                    }
+                }
             }
         }
         // Audio device / level control (FR-AUD-DEV-01 / FR-AUD-LVL-01). Device

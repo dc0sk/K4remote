@@ -13,8 +13,8 @@ stakeholder needs down to individual tests, enforced by a build gate.
 > 258 hardware-free tests pass · clippy/fmt clean · traceability gate green · CI green on Linux/macOS/Windows.
 > VFO tuning, RIT/XIT, split, band, panadapter click-to-QSY, and the K-Pod (incl. F1–F8 tap/hold macros)
 > are validated against a real K4; audio / PTT / waterfall rendering / serial bring-up is ongoing.
-> The 0.4.0 chip gestures (tap/hold and the right-click settings popups) are verified in the app but
-> **not yet on a radio** — see [CHANGELOG.md](CHANGELOG.md).
+> 0.4.0 closes **four transmit-safety faults** found on a live K4 — most seriously, the transmitter
+> could be keyed with the TX arm off. See [CHANGELOG.md](CHANGELOG.md); anyone on 0.3.0 should update.
 >
 > **In 0.2.x:** Elecraft K-Pod support (rocker + encoder tuning, and configurable F1–F8 tap/hold
 > macros), a filterable + selectable diagnostics console, and RIT/XIT sync fixes; K-Pod tap/hold

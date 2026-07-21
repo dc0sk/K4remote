@@ -401,3 +401,126 @@ fn fr_cat_03_rejection_reaches_the_session_state() {
     s.pump().unwrap();
     assert_eq!(s.state().last_error.as_deref(), Some("MD"));
 }
+
+/// The arm interlock covers the **raw** command path, not only `begin_tx` /
+/// `send_cw` / `tune`.
+///
+/// This is the seam the front panel uses: the UI's `TUNE`, `TUNE LP`,
+/// `ATU TUNE` and `XMIT` buttons emulate front-panel switches by sending raw
+/// `SW` commands, and DVR playback sends `PB`. Those went straight through an
+/// ungated `Session::send`, so **they transmitted with the arm off** — found on
+/// a live radio, where TUNE and TUNE LP keyed the transmitter while disarmed.
+///
+/// trace: FR-TX-SAFE-03
+#[test]
+fn fr_tx_safe_03_raw_transmit_commands_are_arm_gated() {
+    let (link, _clock, mut s) = build();
+    // Disarmed: every transmit-capable raw command must be refused and must
+    // put nothing on the wire.
+    for cmd in ["SW16;", "SW131;", "SW40;", "SW30;", "TU1;", "PB1;", "TX;"] {
+        let r = s.send(cmd);
+        assert!(r.is_err(), "{cmd} must be refused while disarmed");
+        assert!(
+            link.sent().is_empty(),
+            "{cmd} reached the radio while disarmed"
+        );
+    }
+
+    // Receive-side commands are unaffected — the gate must not break tuning
+    // the radio, changing mode, or reading state.
+    for cmd in ["FA00014074000;", "MD3;", "SW42;", "IF;"] {
+        s.send(cmd)
+            .unwrap_or_else(|e| panic!("{cmd} must pass: {e}"));
+    }
+
+    // Stopping must never be gated, even disarmed.
+    s.send("TU0;").expect("exit tune must always be allowed");
+    s.send("RX;").expect("stop transmit must always be allowed");
+
+    // Armed: the same transmit commands now reach the radio.
+    s.arm_tx();
+    s.send("SW16;").expect("TUNE must work once armed");
+    assert_eq!(link.last_sent().as_deref(), Some("SW16;"));
+}
+
+/// A raw transmit-capable command makes the session report **on air**, so the
+/// emergency stop can reach it.
+///
+/// The gap this closes: the switch-emulation `TUNE`/`TUNE LP`/`XMIT` buttons
+/// bypass `Session::tune`, so `is_tuning()` stayed false while the radio was
+/// keyed. With the arm on, the radio transmitted and **ESC did nothing** —
+/// found on a live radio. Stopping clears it again, or ESC would stop
+/// dismissing dialogs forever after one tune.
+///
+/// trace: FR-TX-SAFE-05, FR-UI-TX-01
+#[test]
+fn fr_tx_safe_05_raw_transmit_is_visible_to_the_emergency_stop() {
+    let (_link, _clock, mut s) = build();
+    s.arm_tx();
+    assert!(!s.is_raw_tx(), "idle");
+
+    s.send("SW16;").expect("armed, so TUNE goes through");
+    assert!(
+        s.is_raw_tx(),
+        "a switch-tap TUNE keys the radio; the session must know, or the \
+         emergency stop cannot reach it"
+    );
+
+    // An explicit stop clears it.
+    s.send("TU0;").unwrap();
+    assert!(!s.is_raw_tx(), "exiting the tune clears the on-air belief");
+
+    // So does the emergency stop.
+    s.arm_tx();
+    s.send("SW131;").unwrap();
+    assert!(s.is_raw_tx());
+    s.emergency_stop().unwrap();
+    assert!(!s.is_raw_tx(), "emergency stop clears it");
+}
+
+/// Receive-side commands never set the on-air belief — otherwise ESC would
+/// stop dismissing dialogs after any ordinary command.
+///
+/// trace: FR-TX-SAFE-05
+#[test]
+fn fr_tx_safe_05_receive_commands_do_not_mark_on_air() {
+    let (_link, _clock, mut s) = build();
+    s.arm_tx();
+    for cmd in ["FA00014074000;", "MD3;", "SW42;", "AG030;", "IF;"] {
+        s.send(cmd).unwrap();
+        assert!(!s.is_raw_tx(), "{cmd} must not read as on air");
+    }
+}
+
+/// The emergency stop sends **every** stop command, unconditionally.
+///
+/// It previously sent `TU0` only when `self.tuning` was set — and a switch-tap
+/// `TUNE` never sets that, so an emergency stop during one emitted `RX;`
+/// alone, which does not end a tune. On a live radio the operator saw ARM TX
+/// go out while the radio kept transmitting.
+///
+/// The stop must not depend on our model of what the radio is doing; that
+/// model has been wrong repeatedly. Commands that do not apply are no-ops.
+///
+/// trace: FR-TX-SAFE-04, FR-TX-SAFE-05
+#[test]
+fn fr_tx_safe_04_emergency_stop_sends_every_stop_unconditionally() {
+    let (link, _clock, mut s) = build();
+    // Nothing running that *we* know of — the case that failed on air.
+    s.emergency_stop().unwrap();
+    let sent = link.sent();
+    assert!(
+        sent.iter().any(|c| c == "TU0;"),
+        "must end a tune even when we do not believe one is running: {sent:?}"
+    );
+    assert!(
+        sent.iter().any(|c| c == "PB0;"),
+        "must end DVR playback: {sent:?}"
+    );
+    assert!(
+        sent.iter().any(|c| c == "RX;"),
+        "must leave transmit: {sent:?}"
+    );
+    // `RX;` last, so the radio ends on receive whatever else happened.
+    assert_eq!(sent.last().map(String::as_str), Some("RX;"));
+}

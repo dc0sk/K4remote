@@ -539,3 +539,65 @@ fn fr_pan_ctl_01_fixed_tune_encode() {
     assert_eq!(set_pan_fixed(true), "#FXT1;");
     assert_eq!(set_pan_fixed(false), "#FXT0;");
 }
+
+/// Everything that can put the radio on air is classified as such, so the arm
+/// interlock at `Session::send` actually covers it.
+///
+/// The regression: the interlock was applied per call site (`begin_tx`,
+/// `send_cw`, `tune`) while the raw passthrough was open, so the front-panel
+/// switch emulations keyed the transmitter with the arm off. Found on a live
+/// radio — TUNE and TUNE LP transmitted while disarmed.
+///
+/// trace: FR-TX-SAFE-03
+#[test]
+fn fr_tx_safe_03_transmit_capable_commands_are_classified() {
+    use k4_protocol::cat::keys_transmitter;
+    for cmd in [
+        "TX;",       // begin transmit
+        "TU1;",      // tune
+        "TU2;",      // tune low power
+        "TU3;",      // ATU tune
+        "TU4;",      // ATU extended search
+        "SW16;",     // front-panel TUNE
+        "SW131;",    // front-panel TUNE LP
+        "SW40;",     // front-panel ATU TUNE
+        "SW30;",     // front-panel XMIT
+        "SW016;",    // zero-padded spelling of the same switch
+        "PB1;",      // DVR playback transmits the recorded message
+        "KY HELLO;", // text send
+        "KZ0102;",   // CW keying stream
+    ] {
+        assert!(keys_transmitter(cmd), "{cmd} must be gated by the TX arm");
+    }
+}
+
+/// Stopping transmission is never gated, and ordinary receive-side commands
+/// are not held back — a gate that blocks the stop, or blocks everything,
+/// would be worse than no gate.
+///
+/// trace: FR-TX-SAFE-03, FR-TX-SAFE-04
+#[test]
+fn fr_tx_safe_03_stop_and_receive_commands_are_not_gated() {
+    use k4_protocol::cat::keys_transmitter;
+    for cmd in [
+        "TU0;",           // exit tune — must always get through
+        "RX;",            // stop transmit — must always get through
+        "PB0;",           // stop DVR playback
+        "FA00014074000;", // set VFO
+        "MD3;",           // mode
+        "RA031;",         // attenuator
+        "AG030;",         // AF gain
+        "SW42;",          // SPOT — receive-side
+        "SW152;",         // DIV
+        "SW70;",          // RX ANT
+        "SW134;",         // QSK
+        "IF;",            // query
+        "TU;",            // tune query
+        "",
+    ] {
+        assert!(
+            !keys_transmitter(cmd),
+            "{cmd} must not be blocked by the TX arm"
+        );
+    }
+}

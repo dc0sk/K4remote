@@ -10,11 +10,13 @@ during the 0.4.0 release, so earlier detail lives in the git history and in the
 change ledgers under [`docs/test/test-strategy.md`](docs/test/test-strategy.md)
 and [`docs/requirements/system-requirements.md`](docs/requirements/system-requirements.md).
 
-## [0.4.0] — 2026-07-20
+## [0.4.0] — 2026-07-21
 
 The K4's **interaction grammar**: every control chip now carries the radio's own
-tap, hold, and settings-panel behaviour. Plus a round of panadapter correctness
-fixes found by operating against a live K4.
+tap, hold, and settings-panel behaviour. Plus a round of correctness fixes found
+by operating against a live K4 — including **four transmit-safety faults**, of
+which the most serious allowed the transmitter to be keyed with the TX arm off.
+Anyone running 0.3.0 should update.
 
 ### Added
 
@@ -32,9 +34,38 @@ fixes found by operating against a live K4.
 - A build gate (`cargo xtask`, rule R5) for CAT encoders that nothing calls, so
   a command that is written but never wired is a build failure rather than dead
   code.
+- A **keyboard emergency stop**: **`ESC` while on air** stops transmission
+  (off air it keeps closing popups and dialogs as before), with
+  **`Ctrl+Shift+X`** as an unconditional backstop. Both are handled ahead of
+  every other key, including text entry, so neither can be swallowed by
+  whatever holds focus. (`FR-TX-SAFE-05`)
 
 ### Fixed
 
+- **Transmit was possible with the TX arm off.** The arm interlock was enforced
+  in three code paths but *not* at the point every command reaches the radio, so
+  the front-panel switch emulations — **TUNE**, **TUNE LP**, **ATU TUNE** and
+  **XMIT** — along with DVR playback and the diagnostics console all bypassed
+  it and keyed the transmitter while disarmed. It is now enforced at that single
+  seam. Commands that *stop* transmission are never gated, and a refusal is
+  reported rather than failing silently.
+- **The emergency stop could not stop transmission the app had not started.**
+  Whether the radio was on air was judged from local intent alone, while the
+  radio's own report went unread — so a tune begun from the switch row, a
+  front-panel PTT, VOX or the K-Pod were all invisible to it. The radio's report
+  is now consulted, transmit-capable commands are tracked where they are sent,
+  and the radio is polled for its transmit state twice a second instead of once
+  every five seconds.
+- **The emergency stop was itself incomplete**, ending a tune only when it
+  believed one was running — so it could disarm TX while the radio kept
+  transmitting. It now sends every stop unconditionally.
+- **The diagnostics console could make the application unresponsive, and it
+  could exit**, within seconds of heavy CAT traffic. The log buffer was rebuilt
+  on every worker-loop iteration (which is paced by inbound frames, not by a
+  timer) and the whole console text was re-laid-out ten times a second. Both are
+  now throttled and shared rather than copied. *The lag and the exit are gone,
+  but the mechanism of the exit itself was never captured — if you see the
+  application close unexpectedly, please report it.*
 - **The attenuator ignored 3, 6 and 9 dB.** The `RA` level was interpolated
   without zero-padding, so single-digit levels ran into the on/off field —
   3 dB went out as `RA31;`, which the radio read as a malformed level and
