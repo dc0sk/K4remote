@@ -391,10 +391,17 @@ played`:
 - **Decoded rising, played stuck at 0** — audio arrives but cannot be played. The log says why
   (no output device, or playback suppressed because the app believes it is transmitting).
 - **Both rising, still silent** — the audio is reaching your speakers but carries no sound. That
-  points at the radio, not the app. The commonest cause is the radio's own AF gain being at zero:
-  the log says so outright (*"the radio's AF gain is 0 (AG000)"*), and you can confirm it by
-  filtering the log on `AG` — the reply reads `rx: AG000;`. Raise it with the app's **AF** slider
-  or the radio's knob. Also check the per-receiver **VOL** / **MUTE** above each spectrum pane.
+  points at the radio, not the app. The commonest cause is **this session's** AF gain being at
+  zero: the log says so outright, and you can confirm it by filtering the log on `AG` — the reply
+  reads `rx: AG000;`.
+  
+  > **`AG` over a remote link is *your* level, not the radio's.** The K4 keeps the two apart: the
+  > front-panel AF knob feeds the radio's own speaker, while `AG` sent over the link sets what the
+  > connected client hears (K4 Programmer's Reference D12, `RS`). So if you have audio at the
+  > radio but silence in the app, **turning up the radio's knob will not help** — raise the app's
+  > **AF** slider instead.
+  
+  Also check the per-receiver **VOL** / **MUTE** above each spectrum pane.
 
 To test the playback path on its own, independently of the radio:
 

@@ -814,9 +814,11 @@ impl WorkerState {
                 self.diag.log(
                     Level::Warn,
                     "audio",
-                    "the radio's AF gain is 0 (AG000) — received audio is being \
-                     played but the radio is sending silence; raise AF on the \
-                     radio or with the app's AF slider",
+                    "this session's AF gain is 0 (AG000) — audio is arriving and \
+                     being played, but the K4 is streaming silence. `AG` over a \
+                     remote link sets the **client** level, not the radio's own \
+                     (D12 `RS`), so the front-panel knob will NOT fix this: raise \
+                     the app's AF slider",
                 );
                 self.af_zero_reported = true;
             }
