@@ -360,15 +360,26 @@ impl<L: CatLink, C: Clock> Session<L, C> {
         self.transmitting = false;
         self.tx_armed = false;
         self.raw_tx = false;
-        // A tune carrier is on air without `transmitting` being set, so stop it
-        // explicitly rather than relying on the radio's automatic `TU0` on
-        // dropping transmit (D12 `TU`). Best-effort, then the unconditional
-        // `RX;` — the stop must reach the radio even if the first send fails.
-        if self.tuning {
-            self.tuning = false;
-            let _ = self.link.send_cat(&cat::tune(TuneAction::Exit));
-        }
-        self.link.send_cat("RX;")
+        self.tuning = false;
+        // Every stop is sent **unconditionally**, and that is the whole point.
+        //
+        // This used to send `TU0` only `if self.tuning` — and a switch-tap
+        // `TUNE` never sets that flag, so an emergency stop during one emitted
+        // `RX;` alone, which does not end a tune. The operator saw ARM TX go
+        // out while the radio kept transmitting.
+        //
+        // Our model of what the radio is doing has been wrong three times over
+        // now (tune started by a raw switch, transmit started at the front
+        // panel, `IF` read back too slowly to notice either). An emergency
+        // stop must not be predicated on that model: send every stop the radio
+        // understands and let the ones that do not apply be no-ops. They are
+        // three short commands.
+        //
+        // Each is best-effort so a failed send cannot prevent the rest — the
+        // last one carries the result.
+        let _ = self.link.send_cat(&cat::tune(TuneAction::Exit)); // end any tune
+        let _ = self.link.send_cat("PB0;"); // end DVR playback
+        self.link.send_cat("RX;") // leave transmit
     }
 
     /// Fail-safe applied on link loss: cease keying locally and disarm so TX

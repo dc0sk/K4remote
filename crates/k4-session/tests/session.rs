@@ -491,3 +491,36 @@ fn fr_tx_safe_05_receive_commands_do_not_mark_on_air() {
         assert!(!s.is_raw_tx(), "{cmd} must not read as on air");
     }
 }
+
+/// The emergency stop sends **every** stop command, unconditionally.
+///
+/// It previously sent `TU0` only when `self.tuning` was set — and a switch-tap
+/// `TUNE` never sets that, so an emergency stop during one emitted `RX;`
+/// alone, which does not end a tune. On a live radio the operator saw ARM TX
+/// go out while the radio kept transmitting.
+///
+/// The stop must not depend on our model of what the radio is doing; that
+/// model has been wrong repeatedly. Commands that do not apply are no-ops.
+///
+/// trace: FR-TX-SAFE-04, FR-TX-SAFE-05
+#[test]
+fn fr_tx_safe_04_emergency_stop_sends_every_stop_unconditionally() {
+    let (link, _clock, mut s) = build();
+    // Nothing running that *we* know of — the case that failed on air.
+    s.emergency_stop().unwrap();
+    let sent = link.sent();
+    assert!(
+        sent.iter().any(|c| c == "TU0;"),
+        "must end a tune even when we do not believe one is running: {sent:?}"
+    );
+    assert!(
+        sent.iter().any(|c| c == "PB0;"),
+        "must end DVR playback: {sent:?}"
+    );
+    assert!(
+        sent.iter().any(|c| c == "RX;"),
+        "must leave transmit: {sent:?}"
+    );
+    // `RX;` last, so the radio ends on receive whatever else happened.
+    assert_eq!(sent.last().map(String::as_str), Some("RX;"));
+}
