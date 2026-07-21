@@ -488,6 +488,27 @@ pub fn stable_label_width(labels: &[&str], text_size: f32, padding: f32) -> f32 
     longest as f32 * text_size * 0.78 + padding
 }
 
+/// The `VT` tuning-step index for a frequency digit's **place value**.
+///
+/// The K4 numbers its tuning rates 0–5 for 1 Hz, 10 Hz, 100 Hz, 1 kHz, 10 kHz
+/// and 100 kHz, so the index is simply the place's power of ten. Returns
+/// `None` for a place the radio has no rate for — the MHz digits and above,
+/// which select a band rather than a tuning rate.
+///
+/// trace: FR-VFO-STEP-01
+pub fn tune_step_index(place: u64) -> Option<u8> {
+    if place == 0 {
+        return None;
+    }
+    let index = place.ilog10();
+    // A place value is a power of ten; anything else is a caller passing a
+    // frequency rather than a digit position.
+    if 10u64.checked_pow(index) != Some(place) {
+        return None;
+    }
+    (index <= 5).then_some(index as u8)
+}
+
 /// The **alternate** of a mode: its reverse or opposite-sideband partner, as
 /// the K4's own mode-button group pairs them (D12 `MA`, "Mode Alternates":
 /// CW normal/reverse, USB/LSB, DATA-A normal/reverse).
@@ -2108,6 +2129,59 @@ mod stable_width_tests {
     #[test]
     fn fr_ui_stable_01_empty_label_set_is_safe() {
         assert_eq!(stable_label_width(&[], 12.0, 8.0), 8.0);
+    }
+}
+
+#[cfg(test)]
+mod tune_step_tests {
+    use super::*;
+
+    /// Each digit maps to the radio's rate for its place value.
+    /// trace: FR-VFO-STEP-01
+    #[test]
+    fn fr_vfo_step_01_place_maps_to_the_radios_rate() {
+        assert_eq!(tune_step_index(1), Some(0), "1 Hz");
+        assert_eq!(tune_step_index(10), Some(1), "10 Hz");
+        assert_eq!(tune_step_index(100), Some(2), "100 Hz");
+        assert_eq!(tune_step_index(1_000), Some(3), "1 kHz");
+        assert_eq!(tune_step_index(10_000), Some(4), "10 kHz");
+        assert_eq!(tune_step_index(100_000), Some(5), "100 kHz");
+    }
+
+    /// The MHz digits and above have no tuning rate — they select a band, so
+    /// tapping one must not try to set a rate the radio does not have.
+    /// trace: FR-VFO-STEP-01
+    #[test]
+    fn fr_vfo_step_01_places_above_the_ladder_have_no_rate() {
+        assert_eq!(tune_step_index(1_000_000), None, "1 MHz");
+        assert_eq!(tune_step_index(10_000_000), None);
+        assert_eq!(tune_step_index(100_000_000), None);
+    }
+
+    /// A place that is not a power of ten is not a digit position at all —
+    /// guard against a caller passing a frequency rather than a place value.
+    /// trace: FR-VFO-STEP-01
+    #[test]
+    fn fr_vfo_step_01_non_place_values_are_rejected() {
+        assert_eq!(tune_step_index(0), None);
+        assert_eq!(tune_step_index(7), None);
+        assert_eq!(
+            tune_step_index(14_074_000),
+            None,
+            "a frequency, not a place"
+        );
+    }
+
+    /// Every index the function yields is inside the radio's 0-5 range, so a
+    /// `VT` built from it can never name a rate that does not exist.
+    /// trace: FR-VFO-STEP-01
+    #[test]
+    fn fr_vfo_step_01_index_is_always_in_range() {
+        for p in 0..=18u32 {
+            if let Some(i) = tune_step_index(10u64.pow(p)) {
+                assert!(i <= 5, "10^{p} yielded index {i}");
+            }
+        }
     }
 }
 
