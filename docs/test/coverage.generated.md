@@ -150,6 +150,7 @@ Legend: ✅ test-traced · 🟡 waived (see r3-waivers.md) · ⚪ not test-requi
 | `FR-UI-ALT-01` | C | T/D | ✅ |
 | `FR-UI-HOLD-01` | S | T/D | ✅ |
 | `FR-UI-POPUP-01` | S | T/D | ✅ |
+| `FR-UI-STABLE-01` | S | T/D | ✅ |
 | `FR-UI-STATUS-01` | C | D | ⚪ |
 | `FR-UI-TIP-01` | C | T/D | ✅ |
 | `FR-UI-TX-01` | M | T/D | ✅ |

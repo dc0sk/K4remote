@@ -5899,8 +5899,11 @@ impl App {
                             .width(Length::Fixed(110.0)),
                     )
                     .push(
+                        // Reserved for "100%" so the row does not shift as the
+                        // level changes (FR-UI-STABLE-01).
                         Text::new(format!("{vol}%"))
                             .size(11)
+                            .width(Length::Fixed(ui::stable_label_width(&["100%"], 11.0, 4.0)))
                             .color(role_color(ui::ColorRole::RxValue)),
                     )
                     .push(
@@ -6029,15 +6032,38 @@ impl App {
         } else {
             BtnKind::Ptt
         };
+        // The safety row's worst offender: "ARM TX" against the old
+        // "TX ARMED — DISARM" was 6 characters against 17, so arming shoved
+        // PTT and EMERGENCY STOP sideways — the two controls you least want
+        // moving under a cursor that may be reaching for them.
+        //
+        // Reserving the wider label's space was the first attempt, but that
+        // rests on *estimating* rendered width from a character count, and
+        // this label contained an em dash — about twice the width the estimate
+        // assumes. So the reservation could be too small and the button would
+        // grow regardless.
+        //
+        // The button keeps its informative armed label and is simply made wide
+        // enough for it, with the short label centred in the same space. The
+        // width comes from the longest member of the set, so it cannot be got
+        // wrong by editing one label and forgetting the other.
+        // (FR-UI-STABLE-01)
+        const ARM_LABELS: [&str; 2] = ["ARM TX", "TX ARMED — DISARM"];
         let arm = Button::new(
             Text::new(if self.ui.tx_armed {
-                "TX ARMED — DISARM"
+                ARM_LABELS[1]
             } else {
-                "ARM TX"
+                ARM_LABELS[0]
             })
-            .size(13),
+            .size(13)
+            .center(),
         )
         .style(btn_style(arm_kind))
+        .width(Length::Fixed(ui::stable_label_width(
+            &ARM_LABELS,
+            13.0,
+            20.0,
+        )))
         .padding([6, 10])
         .on_press(Message::ToggleArm);
         let key =
@@ -6072,6 +6098,12 @@ impl App {
         } else {
             BtnKind::Plain
         }))
+        // Sized for the widest of its three labels (FR-UI-STABLE-01).
+        .width(Length::Fixed(ui::stable_label_width(
+            &["ATU", "ATU BYP", "ATU AUTO"],
+            13.0,
+            20.0,
+        )))
         .padding([6, 10])
         .on_press(Message::AtuToggle);
         // Tapping TUNE while a tune is running stops it — the same control
@@ -6083,6 +6115,11 @@ impl App {
                 } else {
                     BtnKind::Plain
                 }))
+                .width(Length::Fixed(ui::stable_label_width(
+                    &["ATU TUNE", "STOP TUNE"],
+                    13.0,
+                    20.0,
+                )))
                 .padding([6, 10])
                 .on_press(Message::TxTune(if tuning {
                     k4_protocol::cat::TuneAction::Exit
