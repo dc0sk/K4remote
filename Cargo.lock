@@ -2141,7 +2141,7 @@ dependencies = [
 
 [[package]]
 name = "k4-audio"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "cpal",
  "opus",
@@ -2149,7 +2149,7 @@ dependencies = [
 
 [[package]]
 name = "k4-config"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "argon2",
  "chacha20poly1305",
@@ -2164,25 +2164,25 @@ dependencies = [
 
 [[package]]
 name = "k4-diag"
-version = "0.4.1"
+version = "0.5.0"
 
 [[package]]
 name = "k4-kpod"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "hidapi",
 ]
 
 [[package]]
 name = "k4-protocol"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "sha2",
 ]
 
 [[package]]
 name = "k4-session"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "k4-protocol",
  "k4-stream",
@@ -2191,18 +2191,18 @@ dependencies = [
 
 [[package]]
 name = "k4-sim"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "k4-protocol",
 ]
 
 [[package]]
 name = "k4-stream"
-version = "0.4.1"
+version = "0.5.0"
 
 [[package]]
 name = "k4-transport"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "k4-protocol",
  "k4-sim",
@@ -2212,7 +2212,7 @@ dependencies = [
 
 [[package]]
 name = "k4remote"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "iced",
  "k4-audio",
@@ -5536,7 +5536,7 @@ checksum = "3ae8337f8a065cfc972643663ea4279e04e7256de865aa66fe25cec5fb912d3f"
 
 [[package]]
 name = "xtask"
-version = "0.4.1"
+version = "0.5.0"
 
 [[package]]
 name = "yazi"

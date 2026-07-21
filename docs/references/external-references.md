@@ -44,6 +44,27 @@ QK4 is **GPLv3**. To keep K4 Remote under a license of our choosing, we treat QK
 
 > Recorded as a project rule. See `CON-09` in vision-and-scope.
 
+### Consulted again 2026-07-21 — remote audio level
+
+While diagnosing near-silent received audio, QK4's `src/audio/audioengine.cpp` was read to see
+how another client handles the K4's stream level. **Facts taken** (interoperability observations,
+no code): QK4 leaves its own output at unity gain and treats the K4's `AG` command as the volume
+control, and its per-receiver MAIN/SUB sliders **attenuate only** (clamped 0..1) rather than
+boosting. The second of those informed our decision to make the per-pane `VOL` a trim rather than
+a second boost stage — an architectural *idea*, used as this file permits.
+
+Worth recording that the first observation **did not hold on DC0SK's K4**: measurement showed `AG`
+sets the radio's own speaker volume in both directions (knob and over the link) and does **not**
+change the streamed level, which sits near -45 dBFS regardless. So K4 Remote supplies the gain
+itself. See the project memory note and `CHANGELOG.md` 0.5.0.
+
+> **Compliance note.** One comment line from that file was quoted verbatim in a commit message
+> (`feat(audio): more local gain headroom for a quiet stream`) as a citation for the claim. No QK4
+> source, comment, or structure has been incorporated into this project's code. Flagged here
+> because the rule above names comments explicitly.
+
+---
+
 ### Why it matters most: the streaming protocol our vendor docs omit
 
 The Elecraft Programmer's Reference says the streaming-data wire format is "available on

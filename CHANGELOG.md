@@ -10,6 +10,69 @@ during the 0.4.0 release, so earlier detail lives in the git history and in the
 change ledgers under [`docs/test/test-strategy.md`](docs/test/test-strategy.md)
 and [`docs/requirements/system-requirements.md`](docs/requirements/system-requirements.md).
 
+## [0.5.0] — 2026-07-21
+
+Audio: a per-receiver listening level, volume controls that can actually make
+the K4's quiet stream loud, and — because this release began with a "no sound"
+report that took hours to pin down — the diagnostics to tell you *why* there is
+no sound, in one line instead of an afternoon.
+
+### Added
+
+- **Per-receiver volume and mute**, beside each spectrum pane's **A** / **B**
+  badge. Balances the two receivers in your headphones. Local to the app: it
+  does not touch the radio's AF gain, so it changes nothing at the front panel
+  or for anyone else connected. Mute keeps the level, so unmuting returns to
+  where you had it, and mute always starts clear. (`FR-RX-VOL-01`)
+- **Audio diagnostics.** The console now reports `RX audio: N decoded / M
+  played` and a per-channel **peak level in dBFS**, which separates "no audio
+  arriving", "arriving but cannot be played", and "playing, but the audio
+  itself is silent" — three cases that previously looked identical. Failures to
+  open the output device or build the decoder are reported with their actual
+  error instead of being swallowed.
+- Two diagnostic examples: `cargo run -p k4-audio --example test_tone
+  --features device` plays a tone through the real playback path (1 kHz left =
+  Main, 600 Hz right = Sub), which proves or clears the whole client side in
+  seconds; `--example list_audio` prints the devices the app can see.
+
+### Changed
+
+- **Volume controls read 0–100 %** and follow a perceptual (cubic) curve
+  instead of being a raw multiplier. Unity sits near 40 % of the travel and the
+  top reaches **+24 dB**, because the K4 can stream audio at around -45 dBFS —
+  far too quiet for a noisy room at the old ceiling. Existing settings are
+  migrated to the position that reproduces the same loudness, so upgrading does
+  not change how loud your radio is.
+- The per-pane **VOL** only attenuates; overall loudness is the master's job.
+- Playback is clamped to the sample range, so the extra gain clips rather than
+  distorting.
+- The **TX** tag is gone from the transmitting spectrum pane — the accent
+  border already says which pane transmits.
+
+### Fixed
+
+- **ESC in the diagnostics window** closed the Settings dialog in the main
+  window and left the log window open. Key presses were handled without regard
+  to which window they came from.
+
+### Known: the K4 streams quietly, and `AG` does not change that
+
+Measured on one K4: the streamed level sits around **-45 dBFS**, and **`AG`
+does not control it** — neither the radio's front-panel knob nor `AG` sent over
+the link changes the streamed level; both change the radio's own speaker
+volume. Until a radio-side control is found, **the app's own Volume is the
+lever**, which is why it now reaches +24 dB. Note that digital gain raises the
+stream's noise along with the signal.
+
+Two consequences worth knowing:
+
+- **Turning the radio's AF down to quiet the shack will not quiet your stream —
+  and turning it up will not raise it.** To listen remotely with a silent
+  shack, switch the radio's internal speaker off (menu *Speaker, Internal*, or
+  `ME0001.0;`) instead.
+- If you hear nothing, the console's peak line now tells you whether the radio
+  is sending sound at all.
+
 ## [0.4.1] — 2026-07-21
 
 ### Fixed
@@ -164,6 +227,7 @@ Anyone running 0.3.0 should update.
 
 - RIT/XIT sync.
 
+[0.5.0]: https://github.com/dc0sk/K4remote/releases/tag/v0.5.0
 [0.4.1]: https://github.com/dc0sk/K4remote/releases/tag/v0.4.1
 [0.4.0]: https://github.com/dc0sk/K4remote/releases/tag/v0.4.0
 [0.3.0]: https://github.com/dc0sk/K4remote/releases/tag/v0.3.0
