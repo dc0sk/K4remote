@@ -458,6 +458,28 @@ pub fn is_hold(elapsed: Option<std::time::Duration>) -> bool {
     matches!(elapsed, Some(d) if d >= HOLD_THRESHOLD)
 }
 
+/// The level a silent session's AF gain is lifted to on connect.
+///
+/// Matches the app's own slider default: low enough not to startle, high
+/// enough to be plainly audible. The point is that the operator hears
+/// *something* and can then set it where they want.
+///
+/// trace: FR-AUD-SESSION-01
+pub const DEFAULT_SESSION_AF: u8 = 30;
+
+/// The AF level to send on connect, given what the radio reports for this
+/// session — `None` to leave it alone.
+///
+/// A **floor**, not a policy: it acts only on a reported zero. Any other level
+/// is the operator's, including a deliberately very quiet one. An unreported
+/// level (`None`, the radio has not answered yet) is also left alone — acting
+/// on a value we do not have would mean writing to the radio on a guess.
+///
+/// trace: FR-AUD-SESSION-01
+pub fn session_af_floor(reported: Option<u8>) -> Option<u8> {
+    (reported == Some(0)).then_some(DEFAULT_SESSION_AF)
+}
+
 /// Whether a key press should trigger the **emergency stop**.
 ///
 /// Two routes, and the distinction between them matters:
@@ -1995,6 +2017,44 @@ mod opt_level_tests {
         o.set(9); // the operator moves it again, just before expiry
         o.reconcile(Some(21));
         assert!(o.is_pending(), "the new value must get a full hold");
+    }
+}
+
+#[cfg(test)]
+mod session_af_tests {
+    use super::*;
+
+    /// A session the radio reports as silent is lifted to an audible level.
+    ///
+    /// The fault this prevents: `AG` over a remote link is the *client's*
+    /// level (D12 `RS`), so a session at 0 streams silence and the front-panel
+    /// knob does not fix it — the radio sounds perfectly fine in the shack
+    /// while the operator hears nothing.
+    /// trace: FR-AUD-SESSION-01
+    #[test]
+    fn fr_aud_session_01_silent_session_is_raised() {
+        assert_eq!(session_af_floor(Some(0)), Some(DEFAULT_SESSION_AF));
+        const { assert!(DEFAULT_SESSION_AF > 0, "the floor must be audible") };
+    }
+
+    /// Any level the operator has chosen is left alone — including a very
+    /// quiet one, which is a legitimate setting and not a fault to correct.
+    /// trace: FR-AUD-SESSION-01
+    #[test]
+    fn fr_aud_session_01_a_chosen_level_is_never_overridden() {
+        assert_eq!(session_af_floor(Some(1)), None, "1 is quiet, not silent");
+        for level in [2u8, 5, 30, 45, 60] {
+            assert_eq!(session_af_floor(Some(level)), None, "level {level}");
+        }
+    }
+
+    /// Before the radio has reported, do nothing. Writing a level to the radio
+    /// on the strength of a value we have not received would be acting on a
+    /// guess.
+    /// trace: FR-AUD-SESSION-01
+    #[test]
+    fn fr_aud_session_01_unreported_level_is_not_acted_on() {
+        assert_eq!(session_af_floor(None), None);
     }
 }
 

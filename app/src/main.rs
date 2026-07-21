@@ -264,6 +264,8 @@ struct App {
     // Mute the radio's TX monitor (ML=0) once per connect (remote-friendly).
     mute_mon: bool,
     mon_muted: bool,
+    // Whether the once-per-connect session-AF floor has been applied.
+    af_floored: bool,
     // PTT keyboard hotkey (push-to-talk): the configured combo, capture mode,
     // and press/keyed tracking. `arm_flash` blinks the ARM button when the
     // hotkey is pressed while disarmed.
@@ -909,6 +911,7 @@ impl App {
             pan_target_b: false,
             mute_mon,
             mon_muted: false,
+            af_floored: false,
             ptt_hotkey,
             ptt_toggle,
             mode_aware_ui,
@@ -2354,6 +2357,48 @@ impl App {
                         self.cache_current_peer(); // FR-CFG-04
                         self.peer_cached = true;
                     }
+                    // Never start a session that cannot be heard.
+                    //
+                    // On a remote link `AG` addresses the **client's** level,
+                    // not the radio's own — D12 documents this under `RS`
+                    // ("the AGnnn; command normally only applies to the
+                    // client"). So a session whose `AG` is 0 streams silence
+                    // no matter what the front-panel knob is doing, and the
+                    // operator has no way to tell from the radio: it sounds
+                    // fine in the shack. That cost a real debugging session.
+                    //
+                    // Once per connect, and only when the radio has actually
+                    // reported a zero, lift it to a usable level. A non-zero
+                    // level is left alone — this is a floor, not a policy.
+                    if !self.af_floored && self.seeded {
+                        self.af_floored = true;
+                        for (sub, level) in [
+                            (false, self.ui.radio.af_gain),
+                            (true, self.ui.radio.sub_af_gain),
+                        ] {
+                            let Some(floor) = ui::session_af_floor(level) else {
+                                continue;
+                            };
+                            {
+                                self.send(WorkerCmd::Note(format!(
+                                    "session AF gain was 0 on {} — raising to {} so the \
+                                     session is audible (the radio's own volume is untouched)",
+                                    if sub { "sub RX" } else { "main RX" },
+                                    floor
+                                )));
+                                self.send(WorkerCmd::Cat(target_rx(
+                                    k4_protocol::cat::set_af_gain(floor),
+                                    sub,
+                                )));
+                                // The RX-frame slider mirrors the *active*
+                                // receiver; the other is picked up by the
+                                // next read-back sync.
+                                if sub == self.active_sub() {
+                                    self.af_gain = floor;
+                                }
+                            }
+                        }
+                    }
                     // Mute the radio's TX monitor once, so a remote session never
                     // blares the shack speaker.
                     // trace: FR-AUD-MON-01
@@ -2398,6 +2443,7 @@ impl App {
                     self.peer_cached = false;
                     self.power_off_armed = false;
                     self.mon_muted = false;
+                    self.af_floored = false;
                     self.last_pwr_range = None;
                     self.resync_tick = 0;
                 }

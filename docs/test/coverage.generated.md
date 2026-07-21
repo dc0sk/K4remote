@@ -16,6 +16,7 @@ Legend: ✅ test-traced · 🟡 waived (see r3-waivers.md) · ⚪ not test-requi
 | `FR-AUD-LVL-01` | S | T/D | ✅ |
 | `FR-AUD-MON-01` | C | D | ⚪ |
 | `FR-AUD-RX-01` | M | T/D | ✅ |
+| `FR-AUD-SESSION-01` | S | T/D | ✅ |
 | `FR-AUD-TX-01` | M | T/D | ✅ |
 | `FR-AUTH-01` | M | T | ✅ |
 | `FR-AUTH-02` | S | T/D | ✅ |
