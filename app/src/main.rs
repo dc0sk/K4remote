@@ -6024,15 +6024,26 @@ impl App {
         } else {
             BtnKind::Ptt
         };
+        // The safety row's worst offender: "ARM TX" is 6 characters and
+        // "TX ARMED — DISARM" is 17, so arming shoved PTT and EMERGENCY STOP
+        // sideways — the two controls you least want to move under a cursor
+        // that may be reaching for them (FR-UI-STABLE-01).
+        const ARM_LABELS: [&str; 2] = ["ARM TX", "TX ARMED — DISARM"];
         let arm = Button::new(
             Text::new(if self.ui.tx_armed {
-                "TX ARMED — DISARM"
+                ARM_LABELS[1]
             } else {
-                "ARM TX"
+                ARM_LABELS[0]
             })
-            .size(13),
+            .size(13)
+            .center(),
         )
         .style(btn_style(arm_kind))
+        .width(Length::Fixed(ui::stable_label_width(
+            &ARM_LABELS,
+            13.0,
+            20.0,
+        )))
         .padding([6, 10])
         .on_press(Message::ToggleArm);
         let key =
