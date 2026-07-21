@@ -370,6 +370,15 @@ struct WorkerState {
     audio_dropped: u64,
     audio_suppressed: u64,
     audio_silence_reported: bool,
+    // Worker-loop instrumentation. The loop is paced by inbound frames, so its
+    // rate and what it spends per iteration decide whether the socket is
+    // drained fast enough; if it is not, the radio's stream backs up and the
+    // spectrum visibly lags.
+    loop_count: u64,
+    publish_count: u64,
+    publish_nanos: u128,
+    perf_since: Instant,
+    last_publish: Instant,
     /// Largest absolute sample seen in the decoded RX audio since the last
     /// report — the measurement that says whether the radio is sending sound.
     audio_peak: [f32; 2],
@@ -436,6 +445,11 @@ impl WorkerState {
             audio_dropped: 0,
             audio_suppressed: 0,
             audio_silence_reported: false,
+            loop_count: 0,
+            publish_count: 0,
+            publish_nanos: 0,
+            perf_since: Instant::now(),
+            last_publish: Instant::now(),
             audio_peak: [0.0, 0.0],
             audio_peak_reported: 0,
             af_zero_reported: false,
@@ -802,6 +816,38 @@ fn run(rx: Receiver<WorkerCmd>, snapshot: Arc<Mutex<UiSnapshot>>) {
 
 /// Pump the session once, demux inbound frames, and publish the snapshot.
 impl WorkerState {
+    /// Report the worker loop's rate and what publishing costs it, every ~5 s.
+    ///
+    /// The loop is paced by inbound frames rather than a timer, so if an
+    /// iteration gets expensive the socket stops being drained fast enough and
+    /// the radio's stream backs up — which the operator sees as the spectrum
+    /// and waterfall lagging. Rate and publish share are the two numbers that
+    /// say whether that is happening, and neither was observable.
+    fn report_worker_rate(&mut self) {
+        const INTERVAL: Duration = Duration::from_secs(5);
+        let elapsed = self.perf_since.elapsed();
+        if elapsed < INTERVAL {
+            return;
+        }
+        let secs = elapsed.as_secs_f64();
+        let publish_ms = self.publish_nanos as f64 / 1e6;
+        self.diag.log(
+            Level::Debug,
+            "perf",
+            &format!(
+                "worker {:.0} loops/s, publish {:.0}/s costing {:.1} ms/s ({:.1} % of one core)",
+                self.loop_count as f64 / secs,
+                self.publish_count as f64 / secs,
+                publish_ms / secs,
+                publish_ms / secs / 10.0,
+            ),
+        );
+        self.loop_count = 0;
+        self.publish_count = 0;
+        self.publish_nanos = 0;
+        self.perf_since = Instant::now();
+    }
+
     /// Say **once** why received audio is silent, when frames are arriving and
     /// decoding but none reach the speaker.
     ///
@@ -1023,7 +1069,22 @@ fn service(ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnapshot>>) {
     // Report a persistent silence once, with its reason, rather than leaving
     // the operator to infer it from a counter that keeps rising.
     ws.report_audio_silence();
-    publish(snapshot, ws);
+
+    // Publishing deep-copies both waterfalls, the spectrum, the mini-pan and
+    // the whole RadioState. This loop runs once per socket read — hundreds of
+    // times a second on a busy link — while the UI samples the snapshot at
+    // 10 Hz, so all but a few of those copies were thrown away, and the time
+    // spent on them was time not spent draining the socket.
+    const PUBLISH_INTERVAL: Duration = Duration::from_millis(50); // 20 Hz
+    ws.loop_count += 1;
+    if ws.last_publish.elapsed() >= PUBLISH_INTERVAL {
+        ws.last_publish = Instant::now();
+        let t0 = Instant::now();
+        publish(snapshot, ws);
+        ws.publish_nanos += t0.elapsed().as_nanos();
+        ws.publish_count += 1;
+    }
+    ws.report_worker_rate();
     if !connected {
         ws.session = None;
         // Auto-reconnect unless the user explicitly disconnected (params cleared).

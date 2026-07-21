@@ -181,6 +181,23 @@ Dismiss a popup by clicking outside it, pressing **ESC**, or with the **X** butt
 
 ## 4. Tuning & VFOs
 
+### Mode buttons
+
+Tap a mode to select it. **Tap the mode you are already in** to switch to its alternate — the
+reverse or opposite sideband, paired the way the radio pairs them:
+
+| Tap the lit… | …and you get |
+|---|---|
+| **LSB** | USB |
+| **USB** | LSB |
+| **CW** | CW-R |
+| **CW-R** | CW |
+| **DATA** | DATA-R |
+| **DATA-R** | DATA |
+
+Tapping again returns you, so it is always reversible. **AM** and **FM** have no alternate, so
+re-tapping them does nothing.
+
 ### Click-to-tune digits
 
 Click any digit of a VFO frequency to set the **tuning step** to that digit's place value

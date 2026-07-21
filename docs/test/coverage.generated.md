@@ -147,6 +147,7 @@ Legend: ✅ test-traced · 🟡 waived (see r3-waivers.md) · ⚪ not test-requi
 | `FR-UI-22` | C | T/D | ✅ |
 | `FR-UI-23` | S | D | ⚪ |
 | `FR-UI-24` | C | T | ✅ |
+| `FR-UI-ALT-01` | C | T/D | ✅ |
 | `FR-UI-HOLD-01` | S | T/D | ✅ |
 | `FR-UI-POPUP-01` | S | T/D | ✅ |
 | `FR-UI-STABLE-01` | S | T/D | ✅ |

@@ -488,6 +488,31 @@ pub fn stable_label_width(labels: &[&str], text_size: f32, padding: f32) -> f32 
     longest as f32 * text_size * 0.78 + padding
 }
 
+/// The **alternate** of a mode: its reverse or opposite-sideband partner, as
+/// the K4's own mode-button group pairs them (D12 `MA`, "Mode Alternates":
+/// CW normal/reverse, USB/LSB, DATA-A normal/reverse).
+///
+/// Returns the `MD` digit to send, or `None` for a mode that has no partner —
+/// AM and FM stand alone, so tapping them again has nothing to switch to.
+///
+/// This is what "tap the mode you are already in" should do. An earlier
+/// attempt used `MD/`, D12's toggle between the two *most recently used*
+/// modes; that made a button labelled `CW` jump to whatever you happened to be
+/// in before, and left CW-R reachable only from its own button.
+///
+/// trace: FR-UI-ALT-01
+pub fn alternate_of(mode: &str) -> Option<u8> {
+    match mode {
+        "LSB" => Some(2),    // USB
+        "USB" => Some(1),    // LSB
+        "CW" => Some(7),     // CW-R
+        "CW-R" => Some(3),   // CW
+        "DATA" => Some(9),   // DATA-R
+        "DATA-R" => Some(6), // DATA
+        _ => None,           // AM, FM: no alternate
+    }
+}
+
 /// Whether a key press should trigger the **emergency stop**.
 ///
 /// Two routes, and the distinction between them matters:
@@ -2083,6 +2108,72 @@ mod stable_width_tests {
     #[test]
     fn fr_ui_stable_01_empty_label_set_is_safe() {
         assert_eq!(stable_label_width(&[], 12.0, 8.0), 8.0);
+    }
+}
+
+#[cfg(test)]
+mod alternate_mode_tests {
+    use super::*;
+
+    /// Each paired mode maps to its reverse / opposite sideband.
+    /// trace: FR-UI-ALT-01
+    #[test]
+    fn fr_ui_alt_01_pairs_are_the_radios_own() {
+        assert_eq!(alternate_of("LSB"), Some(2), "LSB -> USB");
+        assert_eq!(alternate_of("USB"), Some(1), "USB -> LSB");
+        assert_eq!(alternate_of("CW"), Some(7), "CW -> CW-R");
+        assert_eq!(alternate_of("CW-R"), Some(3), "CW-R -> CW");
+        assert_eq!(alternate_of("DATA"), Some(9), "DATA -> DATA-R");
+        assert_eq!(alternate_of("DATA-R"), Some(6), "DATA-R -> DATA");
+    }
+
+    /// The pairing is symmetric: tapping twice returns where you started, so
+    /// the gesture is always reversible by repeating it.
+    /// trace: FR-UI-ALT-01
+    #[test]
+    fn fr_ui_alt_01_pairing_is_reversible() {
+        let digit_of = |m: &str| match m {
+            "LSB" => 1,
+            "USB" => 2,
+            "CW" => 3,
+            "CW-R" => 7,
+            "DATA" => 6,
+            "DATA-R" => 9,
+            _ => 0,
+        };
+        for (a, b) in [("LSB", "USB"), ("CW", "CW-R"), ("DATA", "DATA-R")] {
+            assert_eq!(alternate_of(a), Some(digit_of(b)));
+            assert_eq!(alternate_of(b), Some(digit_of(a)));
+        }
+    }
+
+    /// AM and FM have no partner, so re-tapping them must do nothing rather
+    /// than jump to some unrelated mode.
+    /// trace: FR-UI-ALT-01
+    #[test]
+    fn fr_ui_alt_01_modes_without_a_partner_have_none() {
+        assert_eq!(alternate_of("AM"), None);
+        assert_eq!(alternate_of("FM"), None);
+        assert_eq!(alternate_of(""), None);
+        assert_eq!(alternate_of("NOT A MODE"), None);
+    }
+
+    /// An alternate is never the mode you are already in — that was the whole
+    /// complaint about the first attempt, where re-tapping could land back on
+    /// the same button or somewhere unrelated.
+    /// trace: FR-UI-ALT-01
+    #[test]
+    fn fr_ui_alt_01_alternate_is_never_the_same_mode() {
+        for (m, digit) in [
+            ("LSB", 1u8),
+            ("USB", 2),
+            ("CW", 3),
+            ("CW-R", 7),
+            ("DATA", 6),
+            ("DATA-R", 9),
+        ] {
+            assert_ne!(alternate_of(m), Some(digit), "{m} must not map to itself");
+        }
     }
 }
 
