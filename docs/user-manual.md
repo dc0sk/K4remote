@@ -391,8 +391,10 @@ played`:
 - **Decoded rising, played stuck at 0** — audio arrives but cannot be played. The log says why
   (no output device, or playback suppressed because the app believes it is transmitting).
 - **Both rising, still silent** — the audio is reaching your speakers but carries no sound. That
-  points at the radio: check its AF gain (send `AG;` in the Diagnostics raw-CAT box; `AG000` means
-  the radio is muted), and the per-receiver **VOL**/**MUTE** above each spectrum pane.
+  points at the radio, not the app. The commonest cause is the radio's own AF gain being at zero:
+  the log says so outright (*"the radio's AF gain is 0 (AG000)"*), and you can confirm it by
+  filtering the log on `AG` — the reply reads `rx: AG000;`. Raise it with the app's **AF** slider
+  or the radio's knob. Also check the per-receiver **VOL** / **MUTE** above each spectrum pane.
 
 To test the playback path on its own, independently of the radio:
 

@@ -370,6 +370,7 @@ struct WorkerState {
     audio_dropped: u64,
     audio_suppressed: u64,
     audio_silence_reported: bool,
+    af_zero_reported: bool,
     spectrum_bins: usize,
     /// The last `<cmd>?;` rejection already reported, so a persisting error is
     /// announced once rather than on every pump (FR-CAT-03).
@@ -431,6 +432,7 @@ impl WorkerState {
             audio_dropped: 0,
             audio_suppressed: 0,
             audio_silence_reported: false,
+            af_zero_reported: false,
             spectrum_bins: 0,
             reported_error: None,
             spectrum_latest: [PanRow::default(), PanRow::default()],
@@ -504,6 +506,7 @@ impl WorkerState {
         self.audio_dropped = 0;
         self.audio_suppressed = 0;
         self.audio_silence_reported = false;
+        self.af_zero_reported = false;
         self.spectrum_bins = 0;
         for rx in 0..2 {
             self.spectrum_latest[rx] = PanRow::default();
@@ -800,6 +803,25 @@ impl WorkerState {
     /// or not anything was played.
     fn report_audio_silence(&mut self) {
         const ENOUGH: u64 = 200; // ~4 s of 20 ms frames
+
+        // Audio flowing and playing, but the **radio** is turned down: the
+        // stream is healthy and carries silence. This cost an operator a long
+        // debugging session — every counter looked right, the playback path
+        // tested good, and the answer was `AG000` on the radio. Say it.
+        if !self.af_zero_reported && self.audio_played >= ENOUGH {
+            let af = self.session.as_ref().and_then(|s| s.state().af_gain);
+            if af == Some(0) {
+                self.diag.log(
+                    Level::Warn,
+                    "audio",
+                    "the radio's AF gain is 0 (AG000) — received audio is being \
+                     played but the radio is sending silence; raise AF on the \
+                     radio or with the app's AF slider",
+                );
+                self.af_zero_reported = true;
+            }
+        }
+
         if self.audio_silence_reported || self.audio_played > 0 {
             return;
         }
