@@ -131,10 +131,14 @@ From top to bottom:
   headphones; it does not touch the radio's own AF gain, so it changes nothing at the front panel
   or for anyone else connected. **MUTE** beside it silences that receiver while keeping its level, so
   unmuting returns to where you had it; mute always starts clear when the app opens. The **Volume**
-  slider in Settings is the master over both. Both go up to 400 % (+12 dB) of headroom, for a
-  radio whose stream arrives quiet.
+  slider in Settings is the master over both.
 - **Transmit panel** — the TX arm, PTT, and mode-specific transmit controls.
 
+> **Volume levels.** The **Volume** slider in Settings is the master: it reads 0–100 % and follows a
+> perceptual curve, so **unity sits near 40 %** and the rest of the travel is boost — up to +24 dB,
+> because the K4's stream can arrive very quiet. Each pane's **VOL** is a trim between the two
+> receivers and only attenuates, so overall loudness stays one control's job.
+>
 > **If everything is quiet, raise the app's AF slider, not the radio's knob.** The level the K4
 > streams to a client is set by `AG` **sent over the link** — which is what the app's **AF** slider
 > does. Turning the volume knob on the radio changes what the *shack speaker* hears and leaves the

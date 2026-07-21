@@ -25,15 +25,41 @@ pub mod codec;
 #[cfg(feature = "opus")]
 pub use codec::{OpusDecoder, OpusEncoder};
 
-/// Maximum local playback gain, as a linear factor (+12 dB).
+/// Gain at the top of the master volume control, as a linear factor (+24 dB).
 ///
 /// The K4's streamed RX audio can arrive far below full scale — measured at
-/// about -45 dBFS on one radio — and the client has no way to raise it at
-/// source beyond what `AG` provides. Headroom here lets the operator make a
-/// quiet stream usable. Digital gain amplifies the stream's own noise equally,
-/// so this is a fallback for a quiet source, not a substitute for setting the
-/// level on the radio.
-pub const MAX_GAIN: f32 = 4.0;
+/// about -45 dBFS on one radio — and `AG` on the radio does not always bring it
+/// up far enough for a noisy room or outdoor use. Digital gain amplifies the
+/// stream's own noise equally, so this is headroom for a quiet source rather
+/// than a substitute for setting the level at the radio.
+pub const MAX_GAIN: f32 = 16.0;
+
+/// Convert a volume **control position** (0–100 %) to a playback gain.
+///
+/// The control reads 0–100 % because that is what a volume control means to
+/// an operator; a slider whose maximum says "400 %" invites the question of
+/// what 100 % was supposed to be. The range lives in the curve instead.
+///
+/// Cubic, so the useful settings are spread across the travel rather than
+/// bunched at the bottom: **unity sits near 40 %**, below that attenuates, and
+/// the top of the travel reaches [`MAX_GAIN`]. This is the same shape a
+/// physical audio taper has, and roughly matches loudness perception.
+///
+/// trace: FR-AUD-LVL-01
+pub fn gain_from_level(level_pct: u8) -> f32 {
+    let s = f32::from(level_pct.min(100)) / 100.0;
+    MAX_GAIN * s * s * s
+}
+
+/// The control position that best reproduces an existing linear `gain` — the
+/// inverse of [`gain_from_level`], for migrating settings saved when the
+/// sliders stored a raw multiplier.
+///
+/// trace: FR-AUD-LVL-01
+pub fn level_from_gain(gain: f32) -> u8 {
+    let g = (gain / MAX_GAIN).clamp(0.0, 1.0);
+    (g.cbrt() * 100.0).round().clamp(0.0, 100.0) as u8
+}
 
 /// Scale one receiver's channel by its local playback gain (FR-RX-VOL-01).
 ///
@@ -82,3 +108,62 @@ mod rx_volume_tests {
 pub mod device;
 #[cfg(feature = "device")]
 pub use device::{input_device_names, output_device_names, AudioInput, AudioOutput};
+
+#[cfg(test)]
+mod volume_curve_tests {
+    use super::*;
+
+    /// The ends of the travel mean what they say.
+    /// trace: FR-AUD-LVL-01
+    #[test]
+    fn fr_aud_lvl_01_curve_endpoints() {
+        assert_eq!(gain_from_level(0), 0.0, "0 % is silent");
+        assert!(
+            (gain_from_level(100) - MAX_GAIN).abs() < 1e-6,
+            "100 % is the top of the range"
+        );
+        assert_eq!(gain_from_level(200), gain_from_level(100), "clamped");
+    }
+
+    /// Unity gain sits partway up the travel, so there is room to cut as well
+    /// as boost — the control is a volume knob, not a boost-only slider.
+    /// trace: FR-AUD-LVL-01
+    #[test]
+    fn fr_aud_lvl_01_unity_is_reachable_mid_travel() {
+        let unity = (1..=100).find(|&p| gain_from_level(p) >= 1.0).unwrap();
+        assert!(
+            (30..=50).contains(&unity),
+            "unity at {unity} % — expected it around the middle-low of the travel"
+        );
+        assert!(gain_from_level(unity - 5) < 1.0, "below unity attenuates");
+    }
+
+    /// Monotonic: turning it up never makes it quieter.
+    /// trace: FR-AUD-LVL-01
+    #[test]
+    fn fr_aud_lvl_01_curve_is_monotonic() {
+        for p in 0..100u8 {
+            assert!(
+                gain_from_level(p + 1) > gain_from_level(p),
+                "{p} % -> {} % did not increase",
+                p + 1
+            );
+        }
+    }
+
+    /// A setting saved under the old raw-multiplier scheme maps back to the
+    /// same loudness, so upgrading does not change how loud the radio is.
+    /// trace: FR-AUD-LVL-01
+    #[test]
+    fn fr_aud_lvl_01_migration_preserves_loudness() {
+        for gain in [0.0f32, 0.5, 1.0, 1.6, 2.0, 4.0] {
+            let level = level_from_gain(gain);
+            let back = gain_from_level(level);
+            assert!(
+                (back - gain).abs() < 0.15 * gain.max(0.1),
+                "gain {gain} -> {level} % -> {back}"
+            );
+        }
+        assert_eq!(level_from_gain(99.0), 100, "above the range clamps to full");
+    }
+}

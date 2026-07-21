@@ -167,11 +167,15 @@ struct App {
     audio_inputs: Vec<String>,
     selected_output: Option<String>,
     selected_input: Option<String>,
-    volume: f32, // RX playback gain 0.0–2.0 (master over both receivers)
-    // Per-receiver local playback gain [main, sub] (FR-RX-VOL-01). Local to
-    // this app: the radio's own AF gain is untouched, so balancing the two
-    // receivers here cannot disturb the front panel or another client.
-    rx_volume: [f32; 2],
+    // Volume control positions, 0–100 % (FR-AUD-LVL-01). The gain they map to
+    // is `k4_audio::gain_from_level` — a perceptual curve, so the control can
+    // read 0–100 % while still reaching +24 dB for a quiet stream.
+    volume: u8,
+    // Per-receiver trim [main, sub], 0–100 % (FR-RX-VOL-01). Balances the two
+    // receivers against each other; overall loudness is the master's job, so
+    // these only attenuate. Local to this app — the radio's own AF gain is
+    // untouched, so this cannot disturb the front panel or another client.
+    rx_volume: [u8; 2],
     // Per-receiver mute [main, sub] (FR-RX-VOL-01). Deliberately **not**
     // persisted: an app that starts muted looks broken, and the operator has
     // no reason to suspect a setting from a previous session.
@@ -644,10 +648,10 @@ enum Message {
     // Audio device + level controls (FR-AUD-DEV-01, FR-AUD-LVL-01).
     SelectOutputDevice(String),
     SelectInputDevice(String),
-    VolumeChanged(f32),
+    VolumeChanged(u8),
     /// Set one receiver's **local** playback volume (is_b, 0.0–2.0), the
     /// per-pane control above the spectrum. FR-RX-VOL-01.
-    RxVolumeChanged(bool, f32),
+    RxVolumeChanged(bool, u8),
     /// Mute/unmute one receiver locally (is_b). FR-RX-VOL-01.
     ToggleRxMute(bool),
     MicGainChanged(f32),
@@ -744,18 +748,32 @@ impl App {
         let audio_inputs = k4_audio::input_device_names();
         let selected_output = prefs.audio_output.clone();
         let selected_input = prefs.audio_input.clone();
-        let volume = prefs.volume_pct as f32 / 100.0;
+        // Positions if this config has them; otherwise migrate the old raw
+        // multipliers, so upgrading does not change how loud the radio is.
+        let volume = prefs
+            .volume_level
+            .unwrap_or_else(|| k4_audio::level_from_gain(prefs.volume_pct as f32 / 100.0));
         let rx_volume = [
-            prefs.rx_volume_main_pct as f32 / 100.0,
-            prefs.rx_volume_sub_pct as f32 / 100.0,
+            prefs
+                .rx_volume_main_level
+                .unwrap_or_else(|| prefs.rx_volume_main_pct.min(100) as u8),
+            prefs
+                .rx_volume_sub_level
+                .unwrap_or_else(|| prefs.rx_volume_sub_pct.min(100) as u8),
         ];
         let mic_gain = prefs.mic_gain_pct as f32 / 100.0;
         // Seed the worker with the restored audio settings before any connect.
         let _ = cmd_tx.send(WorkerCmd::SetOutputDevice(selected_output.clone()));
         let _ = cmd_tx.send(WorkerCmd::SetInputDevice(selected_input.clone()));
-        let _ = cmd_tx.send(WorkerCmd::SetVolume(volume));
-        let _ = cmd_tx.send(WorkerCmd::SetRxVolume(false, rx_volume[0]));
-        let _ = cmd_tx.send(WorkerCmd::SetRxVolume(true, rx_volume[1]));
+        let _ = cmd_tx.send(WorkerCmd::SetVolume(k4_audio::gain_from_level(volume)));
+        let _ = cmd_tx.send(WorkerCmd::SetRxVolume(
+            false,
+            f32::from(rx_volume[0]) / 100.0,
+        ));
+        let _ = cmd_tx.send(WorkerCmd::SetRxVolume(
+            true,
+            f32::from(rx_volume[1]) / 100.0,
+        ));
         let _ = cmd_tx.send(WorkerCmd::SetMicGain(mic_gain));
         let kpod_enabled = prefs.kpod_enabled;
         let _ = cmd_tx.send(WorkerCmd::SetKpodEnabled(kpod_enabled));
@@ -1201,9 +1219,9 @@ impl App {
                 prefs: k4_config::Prefs {
                     audio_output: self.selected_output.clone(),
                     audio_input: self.selected_input.clone(),
-                    volume_pct: (self.volume * 100.0).round() as u16,
-                    rx_volume_main_pct: (self.rx_volume[0] * 100.0).round() as u16,
-                    rx_volume_sub_pct: (self.rx_volume[1] * 100.0).round() as u16,
+                    volume_level: Some(self.volume),
+                    rx_volume_main_level: Some(self.rx_volume[0]),
+                    rx_volume_sub_level: Some(self.rx_volume[1]),
                     mic_gain_pct: (self.mic_gain * 100.0).round() as u16,
                     theme: Some(theme_to_str(self.theme_mode).to_string()),
                     mute_radio_mon: self.mute_mon,
@@ -2091,7 +2109,7 @@ impl App {
             }
             Message::VolumeChanged(v) => {
                 self.volume = v;
-                self.send(WorkerCmd::SetVolume(v));
+                self.send(WorkerCmd::SetVolume(k4_audio::gain_from_level(v)));
             }
             Message::RxVolumeChanged(is_b, v) => {
                 let i = usize::from(is_b);
@@ -2100,7 +2118,7 @@ impl App {
                 // without unmuting — silently restoring audio because a slider
                 // moved would be its own surprise.
                 if !self.rx_muted[i] {
-                    self.send(WorkerCmd::SetRxVolume(is_b, v));
+                    self.send(WorkerCmd::SetRxVolume(is_b, f32::from(v) / 100.0));
                 }
                 self.save_config();
             }
@@ -2112,7 +2130,7 @@ impl App {
                 let gain = if self.rx_muted[i] {
                     0.0
                 } else {
-                    self.rx_volume[i]
+                    f32::from(self.rx_volume[i]) / 100.0
                 };
                 self.send(WorkerCmd::SetRxVolume(is_b, gain));
             }
@@ -5869,14 +5887,11 @@ impl App {
                             .color(role_color(ui::ColorRole::Inactive)),
                     )
                     .push(
-                        slider(0.0..=k4_audio::MAX_GAIN, vol, move |v| {
-                            Message::RxVolumeChanged(is_b, v)
-                        })
-                        .step(0.01_f32)
-                        .width(Length::Fixed(110.0)),
+                        slider(0..=100u8, vol, move |v| Message::RxVolumeChanged(is_b, v))
+                            .width(Length::Fixed(110.0)),
                     )
                     .push(
-                        Text::new(format!("{:.0}%", vol * 100.0))
+                        Text::new(format!("{vol}%"))
                             .size(11)
                             .color(role_color(ui::ColorRole::RxValue)),
                     )
@@ -6481,20 +6496,11 @@ impl App {
                     .align_y(Alignment::Center)
                     .push(label("Volume"))
                     .push(
-                        slider(
-                            0.0..=k4_audio::MAX_GAIN,
-                            self.volume,
-                            Message::VolumeChanged,
-                        )
-                        .step(0.05f32)
-                        .on_release(Message::SaveSettings)
-                        .width(Length::Fixed(240.0)),
+                        slider(0..=100u8, self.volume, Message::VolumeChanged)
+                            .on_release(Message::SaveSettings)
+                            .width(Length::Fixed(240.0)),
                     )
-                    .push(
-                        Text::new(format!("{:.0}%", self.volume * 100.0))
-                            .size(11)
-                            .color(dim),
-                    ),
+                    .push(Text::new(format!("{}%", self.volume)).size(11).color(dim)),
             )
             .push(
                 Row::new()

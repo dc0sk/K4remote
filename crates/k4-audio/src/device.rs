@@ -157,7 +157,7 @@ impl AudioOutput {
     /// not touch the radio's `AG`, so it cannot disturb the front panel or
     /// another connected client.
     pub fn set_rx_volume(&mut self, sub: bool, v: f32) {
-        let v = v.clamp(0.0, crate::MAX_GAIN);
+        let v = v.clamp(0.0, 1.0);
         if sub {
             self.vol_sub = v;
         } else {
@@ -197,10 +197,13 @@ impl AudioOutput {
                 }
             }
         }
-        // Apply the local volume gain (FR-AUD-LVL-01) before buffering.
+        // Apply the master gain, then clamp. The gain reaches +24 dB for the
+        // benefit of a quiet stream, so a loud passage would otherwise leave
+        // the sample range and arrive as harsh distortion rather than as
+        // clipping (FR-AUD-LVL-01).
         if self.volume != 1.0 {
             for s in out.iter_mut() {
-                *s *= self.volume;
+                *s = (*s * self.volume).clamp(-1.0, 1.0);
             }
         }
         if let Ok(mut rb) = self.ring.lock() {
