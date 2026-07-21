@@ -133,6 +133,7 @@ From top to bottom:
   unmuting returns to where you had it; mute always starts clear when the app opens. The **Volume**
   slider in Settings is the master over both. Both go up to 400 % (+12 dB) of headroom, for a
   radio whose stream arrives quiet.
+- **Transmit panel** — the TX arm, PTT, and mode-specific transmit controls.
 
 > **If everything is quiet, raise the app's AF slider, not the radio's knob.** The level the K4
 > streams to a client is set by `AG` **sent over the link** — which is what the app's **AF** slider
@@ -140,7 +141,6 @@ From top to bottom:
 > stream where it was. To keep the shack quiet while you listen remotely, switch the radio's
 > internal speaker off (menu *Speaker, Internal*, or `ME0001.0;` from the raw-CAT box) rather than
 > turning AF down.
-- **Transmit panel** — the TX arm, PTT, and mode-specific transmit controls.
 
 The **view mode** (A / B / A+B) picks which receiver(s) are shown; single-A or single-B also
 selects the active RX, while A+B leaves that to a click in the spectrum pane.
