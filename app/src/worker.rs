@@ -196,6 +196,8 @@ pub enum WorkerCmd {
     SetInputDevice(Option<String>),
     /// RX playback volume gain (FR-AUD-LVL-01), 0.0–2.0.
     SetVolume(f32),
+    /// Set one receiver's local playback gain (is_b, 0.0–2.0) — FR-RX-VOL-01.
+    SetRxVolume(bool, f32),
     /// TX mic capture gain (FR-AUD-LVL-01), 0.0–3.0.
     SetMicGain(f32),
     /// Enable/disable the K-Pod control surface at runtime (FR-KPOD-04).
@@ -242,6 +244,9 @@ pub struct UiSnapshot {
     pub xit_on: Option<bool>,
     /// Count of RX audio frames reassembled (jitter-buffer output).
     pub audio_frames: u64,
+    /// Frames actually submitted to the output device. `audio_frames` counts
+    /// decodes, which rise even when nothing is played.
+    pub audio_played: u64,
     /// Bin count of the most recent spectrum frame.
     pub spectrum_bins: usize,
     /// Latest spectrum trace for the main RX / VFO A (downsampled dBm bins).
@@ -358,6 +363,18 @@ struct WorkerState {
     tx_encoder: Option<OpusEncoder>,
     tx_seq: u8,
     audio_frames: u64,
+    /// Frames actually submitted to the output device, versus decoded but
+    /// discarded (no device) or suppressed (transmitting). `audio_frames`
+    /// alone cannot distinguish a healthy stream from a silent one.
+    audio_played: u64,
+    audio_dropped: u64,
+    audio_suppressed: u64,
+    audio_silence_reported: bool,
+    /// Largest absolute sample seen in the decoded RX audio since the last
+    /// report — the measurement that says whether the radio is sending sound.
+    audio_peak: [f32; 2],
+    audio_peak_reported: u64,
+    af_zero_reported: bool,
     spectrum_bins: usize,
     /// The last `<cmd>?;` rejection already reported, so a persisting error is
     /// announced once rather than on every pump (FR-CAT-03).
@@ -389,6 +406,9 @@ struct WorkerState {
     out_device: Option<String>,
     in_device: Option<String>,
     volume: f32,
+    /// Per-receiver local playback gains [main, sub], reapplied when the output
+    /// device is recreated (FR-RX-VOL-01).
+    rx_volume: [f32; 2],
     mic_gain: f32,
     // Elecraft K-Pod USB control surface (FR-KPOD-*), when the feature is built.
     #[cfg(feature = "kpod")]
@@ -412,6 +432,13 @@ impl WorkerState {
             tx_encoder: None,
             tx_seq: 0,
             audio_frames: 0,
+            audio_played: 0,
+            audio_dropped: 0,
+            audio_suppressed: 0,
+            audio_silence_reported: false,
+            audio_peak: [0.0, 0.0],
+            audio_peak_reported: 0,
+            af_zero_reported: false,
             spectrum_bins: 0,
             reported_error: None,
             spectrum_latest: [PanRow::default(), PanRow::default()],
@@ -430,6 +457,7 @@ impl WorkerState {
             out_device: None,
             in_device: None,
             volume: 1.0,
+            rx_volume: [1.0, 1.0],
             mic_gain: 1.0,
         }
     }
@@ -437,10 +465,41 @@ impl WorkerState {
     /// re-created per connection (decoders are stateful; devices may change).
     fn reset(&mut self) {
         self.rx_audio = JitterBuffer::new(8);
-        self.rx_decoder = OpusDecoder::rx().ok();
-        self.audio_out = AudioOutput::with_device(self.out_device.as_deref()).ok();
+        // Both of these used to be `.ok()`, so a failure to open the speaker or
+        // to build the decoder produced **silence with nothing in the log** —
+        // and the RX-audio frame counter kept climbing regardless, because
+        // frames are counted even when there is no decoder. An operator had no
+        // way to tell "no audio arriving" from "audio arriving, nowhere to
+        // play it". Say which it is.
+        self.rx_decoder = match OpusDecoder::rx() {
+            Ok(d) => Some(d),
+            Err(e) => {
+                self.diag.log(
+                    Level::Error,
+                    "audio",
+                    &format!("RX Opus decoder unavailable: {e} — there will be no received audio"),
+                );
+                None
+            }
+        };
+        self.audio_out = match AudioOutput::with_device(self.out_device.as_deref()) {
+            Ok(out) => Some(out),
+            Err(e) => {
+                self.diag.log(
+                    Level::Error,
+                    "audio",
+                    &format!(
+                        "RX audio output device unavailable ({}): {e} — there will be no received audio",
+                        self.out_device.as_deref().unwrap_or("system default")
+                    ),
+                );
+                None
+            }
+        };
         if let Some(out) = self.audio_out.as_mut() {
             out.set_volume(self.volume);
+            out.set_rx_volume(false, self.rx_volume[0]);
+            out.set_rx_volume(true, self.rx_volume[1]);
         }
         self.audio_in = AudioInput::with_device(self.in_device.as_deref()).ok();
         if let Some(inp) = self.audio_in.as_mut() {
@@ -449,6 +508,13 @@ impl WorkerState {
         self.tx_encoder = OpusEncoder::mono().ok();
         self.tx_seq = 0;
         self.audio_frames = 0;
+        self.audio_played = 0;
+        self.audio_dropped = 0;
+        self.audio_suppressed = 0;
+        self.audio_silence_reported = false;
+        self.audio_peak = [0.0, 0.0];
+        self.audio_peak_reported = 0;
+        self.af_zero_reported = false;
         self.spectrum_bins = 0;
         for rx in 0..2 {
             self.spectrum_latest[rx] = PanRow::default();
@@ -534,6 +600,7 @@ fn publish(snapshot: &Arc<Mutex<UiSnapshot>>, ws: &mut WorkerState) {
         s.rit_on = st.rit_on;
         s.xit_on = st.xit_on;
         s.audio_frames = ws.audio_frames;
+        s.audio_played = ws.audio_played;
         s.spectrum_bins = ws.spectrum_bins;
         s.spectrum_latest = ws.spectrum_latest[0].clone();
         s.spectrum_sub = ws.spectrum_latest[1].clone();
@@ -734,6 +801,94 @@ fn run(rx: Receiver<WorkerCmd>, snapshot: Arc<Mutex<UiSnapshot>>) {
 }
 
 /// Pump the session once, demux inbound frames, and publish the snapshot.
+impl WorkerState {
+    /// Say **once** why received audio is silent, when frames are arriving and
+    /// decoding but none reach the speaker.
+    ///
+    /// Added after an operator reported no audio and had nothing to go on: the
+    /// output device and the decoder were both built with `.ok()`, so their
+    /// failures were invisible, and the "RX audio frames" counter rose whether
+    /// or not anything was played.
+    fn report_audio_silence(&mut self) {
+        const ENOUGH: u64 = 200; // ~4 s of 20 ms frames
+
+        // Audio flowing and playing, but the **radio** is turned down: the
+        // stream is healthy and carries silence. This cost an operator a long
+        // debugging session — every counter looked right, the playback path
+        // tested good, and the answer was `AG000` on the radio. Say it.
+        if !self.af_zero_reported && self.audio_played >= ENOUGH {
+            let af = self.session.as_ref().and_then(|s| s.state().af_gain);
+            if af == Some(0) {
+                self.diag.log(
+                    Level::Warn,
+                    "audio",
+                    "this session's AF gain is 0 (AG000) — audio is arriving and \
+                     being played, but the K4 is streaming silence. `AG` over a \
+                     remote link sets the **client** level, not the radio's own \
+                     (D12 `RS`), so the front-panel knob will NOT fix this: raise \
+                     the app's AF slider",
+                );
+                self.af_zero_reported = true;
+            }
+        }
+
+        // Report the decoded peak every ~5 s of audio, whatever else is true:
+        // an operator hearing nothing needs to know whether the samples
+        // arriving contain sound at all, and no counter can tell them that.
+        if self.audio_frames >= self.audio_peak_reported + 250 {
+            self.audio_peak_reported = self.audio_frames;
+            let [main, sub] = self.audio_peak;
+            self.audio_peak = [0.0, 0.0];
+            // dBFS is the unit the level actually matters in: -45 vs -20 is
+            // the difference between "attenuated" and "a quiet band".
+            let db = |v: f32| {
+                if v > 0.0 {
+                    format!("{:.0} dBFS", 20.0 * v.log10())
+                } else {
+                    "-inf".to_string()
+                }
+            };
+            let note = if main.max(sub) < 0.0005 {
+                " — SILENCE (not a playback fault)"
+            } else {
+                ""
+            };
+            self.diag.log(
+                Level::Info,
+                "audio",
+                &format!(
+                    "RX audio peak  main {main:.4} ({})  sub {sub:.4} ({}){note}",
+                    db(main),
+                    db(sub)
+                ),
+            );
+        }
+        if self.audio_silence_reported || self.audio_played > 0 {
+            return;
+        }
+        let (n, why) = if self.audio_dropped >= ENOUGH {
+            (
+                self.audio_dropped,
+                "no output device — check Settings → Audio → Speaker",
+            )
+        } else if self.audio_suppressed >= ENOUGH {
+            (
+                self.audio_suppressed,
+                "playback is suppressed because the app believes it is transmitting \
+                 (FR-AUD-TX-01); press the emergency stop to clear it",
+            )
+        } else {
+            return;
+        };
+        self.diag.log(
+            Level::Warn,
+            "audio",
+            &format!("{n} RX audio frames decoded but none played: {why}"),
+        );
+        self.audio_silence_reported = true;
+    }
+}
+
 fn service(ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnapshot>>) {
     let Some(session) = ws.session.as_mut() else {
         return;
@@ -764,10 +919,27 @@ fn service(ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnapshot>>) {
             match ws.rx_decoder.as_mut() {
                 Some(dec) => {
                     if let Ok(pcm) = dec.decode_float(&opus_frame) {
+                        // Peaks of the decoded samples, before any gain of
+                        // ours, kept per channel: RX is stereo with L = Main
+                        // and R = Sub (FR-AUD-04), so a single max over both
+                        // would hide one dead receiver behind a live one.
+                        for (i, sample) in pcm.iter().enumerate() {
+                            let ch = i & 1; // interleaved L,R
+                            ws.audio_peak[ch] = ws.audio_peak[ch].max(sample.abs());
+                        }
                         if !txing {
-                            if let Some(out) = ws.audio_out.as_mut() {
-                                out.submit_stereo_12k(&pcm);
+                            match ws.audio_out.as_mut() {
+                                Some(out) => {
+                                    out.submit_stereo_12k(&pcm);
+                                    ws.audio_played += 1;
+                                }
+                                // Arriving and decoding, with nowhere to play
+                                // it. Silent until now, and indistinguishable
+                                // from a healthy stream in the frame counter.
+                                None => ws.audio_dropped += 1,
                             }
+                        } else {
+                            ws.audio_suppressed += 1;
                         }
                         ws.audio_frames += 1;
                     }
@@ -775,6 +947,7 @@ fn service(ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnapshot>>) {
                 None => ws.audio_frames += 1,
             }
         }
+
         // A `<cmd>?;` rejection is recorded in RadioState but was never read,
         // so the operator only ever saw it as one more Debug `rx` line among
         // the traffic. Announce it distinctly (FR-CAT-03).
@@ -847,6 +1020,9 @@ fn service(ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnapshot>>) {
     }
 
     let connected = session.is_connected();
+    // Report a persistent silence once, with its reason, rather than leaving
+    // the operator to infer it from a counter that keeps rising.
+    ws.report_audio_silence();
     publish(snapshot, ws);
     if !connected {
         ws.session = None;
@@ -1050,9 +1226,26 @@ fn handle_cmd(cmd: WorkerCmd, ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnaps
         WorkerCmd::SetOutputDevice(name) => {
             ws.out_device = name;
             if ws.audio_out.is_some() {
-                ws.audio_out = AudioOutput::with_device(ws.out_device.as_deref()).ok();
+                ws.audio_out = match AudioOutput::with_device(ws.out_device.as_deref()) {
+                    Ok(out) => Some(out),
+                    Err(e) => {
+                        ws.diag.log(
+                            Level::Error,
+                            "audio",
+                            &format!(
+                                "RX audio output device unavailable ({}): {e}",
+                                ws.out_device.as_deref().unwrap_or("system default")
+                            ),
+                        );
+                        None
+                    }
+                };
                 if let Some(out) = ws.audio_out.as_mut() {
                     out.set_volume(ws.volume);
+                    // A new device starts at unity, so the per-receiver gains
+                    // must be reapplied or they silently reset on a swap.
+                    out.set_rx_volume(false, ws.rx_volume[0]);
+                    out.set_rx_volume(true, ws.rx_volume[1]);
                 }
             }
         }
@@ -1069,6 +1262,12 @@ fn handle_cmd(cmd: WorkerCmd, ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnaps
             ws.volume = v;
             if let Some(out) = ws.audio_out.as_mut() {
                 out.set_volume(v);
+            }
+        }
+        WorkerCmd::SetRxVolume(is_b, v) => {
+            ws.rx_volume[usize::from(is_b)] = v;
+            if let Some(out) = ws.audio_out.as_mut() {
+                out.set_rx_volume(is_b, v);
             }
         }
         WorkerCmd::SetMicGain(g) => {

@@ -51,6 +51,22 @@ pub struct Prefs {
     /// RX playback volume, percent (0–200; 100 = unity).
     #[serde(default = "default_pct")]
     pub volume_pct: u16,
+    /// Volume-control **positions**, 0–100 (FR-AUD-LVL-01 / FR-RX-VOL-01).
+    /// Absent in configs written before the controls became 0–100 % with a
+    /// perceptual curve; the app then migrates from the `*_pct` fields below,
+    /// which stored a raw gain multiplier as a percentage.
+    #[serde(default)]
+    pub volume_level: Option<u8>,
+    #[serde(default)]
+    pub rx_volume_main_level: Option<u8>,
+    #[serde(default)]
+    pub rx_volume_sub_level: Option<u8>,
+    /// Legacy raw-multiplier percentages, kept only so an existing config can
+    /// be migrated. Not written by current versions.
+    #[serde(default = "pct_100")]
+    pub rx_volume_main_pct: u16,
+    #[serde(default = "pct_100")]
+    pub rx_volume_sub_pct: u16,
     /// TX mic capture gain, percent (0–300; 100 = unity).
     #[serde(default = "default_pct")]
     pub mic_gain_pct: u16,
@@ -308,7 +324,12 @@ impl Default for Prefs {
             tune_step_hz: 100,
             audio_output: None,
             audio_input: None,
+            volume_level: None,
+            rx_volume_main_level: None,
+            rx_volume_sub_level: None,
             volume_pct: 100,
+            rx_volume_main_pct: 100,
+            rx_volume_sub_pct: 100,
             mic_gain_pct: 100,
             theme: None,
             mute_radio_mon: true,
@@ -386,4 +407,9 @@ pub fn redact(text: &str, secret: &str) -> String {
     } else {
         text.replace(secret, "***")
     }
+}
+
+/// Serde default for the per-receiver volume percentages.
+fn pct_100() -> u16 {
+    100
 }

@@ -126,8 +126,31 @@ From top to bottom:
 - **Control row** — band, mode, bandwidth, filter edges, AGC, NB/NR, preamp, attenuator,
   RIT/XIT, split.
 - **Panadapter** — live spectrum trace + scrolling waterfall + mini-pan (GPU-drawn), with
-  click-to-QSY and mouse-wheel tuning.
+  click-to-QSY and mouse-wheel tuning. Beside each pane's **A** / **B** badge is that receiver's
+  **VOL** — its listening level *in this app*. Use it to balance the two receivers in your
+  headphones; it does not touch the radio's own AF gain, so it changes nothing at the front panel
+  or for anyone else connected. **MUTE** beside it silences that receiver while keeping its level, so
+  unmuting returns to where you had it; mute always starts clear when the app opens. The **Volume**
+  slider in Settings is the master over both.
 - **Transmit panel** — the TX arm, PTT, and mode-specific transmit controls.
+
+> **Volume levels.** The **Volume** slider in Settings is the master: it reads 0–100 % and follows a
+> perceptual curve, so **unity sits near 40 %** and the rest of the travel is boost — up to +24 dB,
+> because the K4's stream can arrive very quiet. Each pane's **VOL** is a trim between the two
+> receivers and only attenuates, so overall loudness stays one control's job.
+>
+> **If everything is quiet.** The K4 can stream audio at a very low level — on one radio it
+> measured about -45 dBFS, which is barely audible even with the master at full. Two levers:
+>
+> - The **AF** slider in the RX frame sends `AG` to the radio. Note this sets the **radio's** AF
+>   gain, so the shack speaker follows it. Whether it also raises the level the radio *streams* to
+>   you is **not established** — turning the radio's own volume knob demonstrably does not.
+> - The app's own **Volume** (Settings) and per-pane **VOL** raise it locally, up to +24 dB. This
+>   works regardless, at the cost of amplifying the stream's noise along with the signal.
+>
+> To keep the shack quiet while listening remotely, switch the radio's internal speaker off (menu
+> *Speaker, Internal*, or `ME0001.0;` from the raw-CAT box) rather than turning AF down — turning AF
+> down may be what silences your stream.
 
 The **view mode** (A / B / A+B) picks which receiver(s) are shown; single-A or single-B also
 selects the active RX, while A+B leaves that to a click in the spectrum pane.
@@ -356,6 +379,7 @@ The **theme** (dark / light / high-contrast / follow-system) cycles from the hea
 | **`Ctrl+Shift+X`** | **EMERGENCY STOP** — always, whatever the app thinks it is doing |
 | **PTT hotkey** (default `Ctrl+Space`) | Transmit — toggle or hold-to-talk (configurable) |
 | **ESC** *(not transmitting)* | Close a control popup, then the Settings or About dialog / cancel hotkey capture |
+| **ESC** *(in the Diagnostics window)* | Close the Diagnostics window |
 
 > ⚠️ **Stopping transmission.** Whenever you are **on air** — transmitting *or* running a tune —
 > **ESC** stops the radio. It is handled before everything else, so it works no matter where the
@@ -378,6 +402,35 @@ may need udev permission for the HID device (VID `0x04D8` / PID `0xF12D`). Watch
 console (filter `kpod`) for connect/disconnect messages.
 
 **No audio.**
+**First, find out where the silence is.** The Diagnostics window shows `RX audio: N decoded / M
+played`:
+
+- **Neither rising** — no audio is arriving; check the connection.
+- **Decoded rising, played stuck at 0** — audio arrives but cannot be played. The log says why
+  (no output device, or playback suppressed because the app believes it is transmitting).
+- **Both rising, still silent** — the audio is reaching your speakers but carries no sound. That
+  points at the radio, not the app. The commonest cause is **this session's** AF gain being at
+  zero: the log says so outright, and you can confirm it by filtering the log on `AG` — the reply
+  reads `rx: AG000;`.
+  
+  > **`AG` over a remote link is *your* level, not the radio's.** The K4 keeps the two apart: the
+  > front-panel AF knob feeds the radio's own speaker, while `AG` sent over the link sets what the
+  > connected client hears (K4 Programmer's Reference D12, `RS`). So if you have audio at the
+  > radio but silence in the app, **turning up the radio's knob will not help** — raise the app's
+  > **AF** slider instead.
+  
+  Also check the per-receiver **VOL** / **MUTE** above each spectrum pane.
+
+To test the playback path on its own, independently of the radio:
+
+```
+cargo run -p k4-audio --example test_tone --features device
+```
+
+That plays a tone through the same code the received audio uses — 1 kHz on the left (Main), 600 Hz
+on the right (Sub). If you hear it, the application's audio is working and the problem is upstream.
+`--example list_audio` prints the devices the app can see.
+
 Check **Settings → Audio** device selection, the **Volume** slider, and that the link is an
 Ethernet connection (serial carries CAT only). Confirm the OS isn't routing playback elsewhere.
 
