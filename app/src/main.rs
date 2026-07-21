@@ -5891,8 +5891,11 @@ impl App {
                             .width(Length::Fixed(110.0)),
                     )
                     .push(
+                        // Reserved for "100%" so the row does not shift as the
+                        // level changes (FR-UI-STABLE-01).
                         Text::new(format!("{vol}%"))
                             .size(11)
+                            .width(Length::Fixed(ui::stable_label_width(&["100%"], 11.0, 4.0)))
                             .color(role_color(ui::ColorRole::RxValue)),
                     )
                     .push(
@@ -6064,6 +6067,12 @@ impl App {
         } else {
             BtnKind::Plain
         }))
+        // Sized for the widest of its three labels (FR-UI-STABLE-01).
+        .width(Length::Fixed(ui::stable_label_width(
+            &["ATU", "ATU BYP", "ATU AUTO"],
+            13.0,
+            20.0,
+        )))
         .padding([6, 10])
         .on_press(Message::AtuToggle);
         // Tapping TUNE while a tune is running stops it — the same control
@@ -6075,6 +6084,11 @@ impl App {
                 } else {
                     BtnKind::Plain
                 }))
+                .width(Length::Fixed(ui::stable_label_width(
+                    &["ATU TUNE", "STOP TUNE"],
+                    13.0,
+                    20.0,
+                )))
                 .padding([6, 10])
                 .on_press(Message::TxTune(if tuning {
                     k4_protocol::cat::TuneAction::Exit

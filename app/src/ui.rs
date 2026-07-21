@@ -458,6 +458,31 @@ pub fn is_hold(elapsed: Option<std::time::Duration>) -> bool {
     matches!(elapsed, Some(d) if d >= HOLD_THRESHOLD)
 }
 
+/// Width to reserve for a control whose label varies over a **known** set, so
+/// it does not resize as the label changes (FR-UI-STABLE-01).
+///
+/// A button that reads `MUTE` and then `MUTED`, or a readout going from `7%`
+/// to `100%`, changes width — and everything beside it shifts. Across a panel
+/// of such controls the layout twitches continuously while the radio is being
+/// operated, which is distracting and makes controls harder to hit.
+///
+/// Sizing to the widest member fixes it wherever the set is known at compile
+/// time, which is the usual case: on/off labels, mode names, a percentage
+/// 0-100. Not a substitute for a fixed width where the content is genuinely
+/// unbounded (a callsign, a filter string).
+///
+/// The estimate is deliberately crude — longest label times a per-character
+/// advance, plus padding. It only has to be a stable upper bound, not a
+/// typographic measurement.
+///
+/// trace: FR-UI-STABLE-01
+pub fn stable_label_width(labels: &[&str], text_size: f32, padding: f32) -> f32 {
+    let longest = labels.iter().map(|l| l.chars().count()).max().unwrap_or(0);
+    // ~0.62 em per character is a safe upper bound for this UI's font at the
+    // sizes used here.
+    longest as f32 * text_size * 0.62 + padding
+}
+
 /// Whether a key press should trigger the **emergency stop**.
 ///
 /// Two routes, and the distinction between them matters:
@@ -1995,6 +2020,64 @@ mod opt_level_tests {
         o.set(9); // the operator moves it again, just before expiry
         o.reconcile(Some(21));
         assert!(o.is_pending(), "the new value must get a full hold");
+    }
+}
+
+#[cfg(test)]
+mod stable_width_tests {
+    use super::*;
+
+    /// The reserved width follows the **longest** label, so the control does
+    /// not resize when it switches to it.
+    /// trace: FR-UI-STABLE-01
+    #[test]
+    fn fr_ui_stable_01_width_follows_the_longest_label() {
+        assert!(
+            stable_label_width(&["MUTE", "MUTED"], 10.0, 14.0)
+                >= stable_label_width(&["MUTED"], 10.0, 14.0),
+            "must fit the longest member"
+        );
+        // Order must not matter: the set is what counts, not which is current.
+        assert_eq!(
+            stable_label_width(&["MUTE", "MUTED"], 10.0, 14.0),
+            stable_label_width(&["MUTED", "MUTE"], 10.0, 14.0)
+        );
+    }
+
+    /// Adding a longer label widens the reservation; adding a shorter one does
+    /// not narrow it. A control must never shrink below what it may display.
+    /// trace: FR-UI-STABLE-01
+    #[test]
+    fn fr_ui_stable_01_width_is_monotonic_in_the_label_set() {
+        let base = stable_label_width(&["ATU", "ATU BYP"], 13.0, 20.0);
+        assert!(stable_label_width(&["ATU", "ATU BYP", "ATU AUTO"], 13.0, 20.0) > base);
+        assert_eq!(
+            stable_label_width(&["ATU", "ATU BYP", "ON"], 13.0, 20.0),
+            base
+        );
+    }
+
+    /// A percentage readout is the common case: 0-100 % spans one to four
+    /// characters, and sizing for "100%" keeps the row still as it counts up.
+    /// trace: FR-UI-STABLE-01
+    #[test]
+    fn fr_ui_stable_01_percentage_readout_is_sized_for_its_widest() {
+        let widest = stable_label_width(&["100%"], 11.0, 0.0);
+        for pct in [0u8, 7, 42, 99, 100] {
+            let s = format!("{pct}%");
+            assert!(
+                stable_label_width(&[s.as_str()], 11.0, 0.0) <= widest,
+                "{s} must fit inside the reservation for 100%"
+            );
+        }
+    }
+
+    /// An empty set is not a panic — a control with nothing defined yet just
+    /// gets its padding.
+    /// trace: FR-UI-STABLE-01
+    #[test]
+    fn fr_ui_stable_01_empty_label_set_is_safe() {
+        assert_eq!(stable_label_width(&[], 12.0, 8.0), 8.0);
     }
 }
 
