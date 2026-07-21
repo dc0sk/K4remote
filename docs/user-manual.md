@@ -139,12 +139,18 @@ From top to bottom:
 > because the K4's stream can arrive very quiet. Each pane's **VOL** is a trim between the two
 > receivers and only attenuates, so overall loudness stays one control's job.
 >
-> **If everything is quiet, raise the app's AF slider, not the radio's knob.** The level the K4
-> streams to a client is set by `AG` **sent over the link** — which is what the app's **AF** slider
-> does. Turning the volume knob on the radio changes what the *shack speaker* hears and leaves the
-> stream where it was. To keep the shack quiet while you listen remotely, switch the radio's
-> internal speaker off (menu *Speaker, Internal*, or `ME0001.0;` from the raw-CAT box) rather than
-> turning AF down.
+> **If everything is quiet.** The K4 can stream audio at a very low level — on one radio it
+> measured about -45 dBFS, which is barely audible even with the master at full. Two levers:
+>
+> - The **AF** slider in the RX frame sends `AG` to the radio. Note this sets the **radio's** AF
+>   gain, so the shack speaker follows it. Whether it also raises the level the radio *streams* to
+>   you is **not established** — turning the radio's own volume knob demonstrably does not.
+> - The app's own **Volume** (Settings) and per-pane **VOL** raise it locally, up to +24 dB. This
+>   works regardless, at the cost of amplifying the stream's noise along with the signal.
+>
+> To keep the shack quiet while listening remotely, switch the radio's internal speaker off (menu
+> *Speaker, Internal*, or `ME0001.0;` from the raw-CAT box) rather than turning AF down — turning AF
+> down may be what silences your stream.
 
 The **view mode** (A / B / A+B) picks which receiver(s) are shown; single-A or single-B also
 selects the active RX, while A+B leaves that to a click in the spectrum pane.
