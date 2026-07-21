@@ -10,6 +10,21 @@ during the 0.4.0 release, so earlier detail lives in the git history and in the
 change ledgers under [`docs/test/test-strategy.md`](docs/test/test-strategy.md)
 and [`docs/requirements/system-requirements.md`](docs/requirements/system-requirements.md).
 
+## [Unreleased]
+
+### Added
+
+- **Frequency memories.** Click **MEM** in the top bar — or tap a VFO's MHz
+  digits, as the radio does — to store the current frequency and mode under an
+  optional name, recall one, or delete one. The bank holds 64 entries and is
+  saved with your app settings.
+
+  These are **the app's memories, not the radio's**: the K4's own memory
+  channels have no published remote-control command, so storing here does not
+  touch anything on the radio. Storing the same frequency *and* mode twice is
+  refused; the same frequency in a different mode is kept, so a net can live in
+  the bank on both CW and SSB.
+
 ## [0.6.0] — 2026-07-21
 
 ### Added

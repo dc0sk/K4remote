@@ -2,7 +2,7 @@
 title: "K4 Remote — User Manual"
 status: Draft
 version: "0.6.0"
-updated: 2026-07-20
+updated: 2026-07-21
 authors:
   - Simon Keimer (DC0SK)
 ---
@@ -207,6 +207,30 @@ to step it.
 
 > 📷 **Screenshot needed — `screenshots/vfo-digit-tune.png`:** Close-up of a VFO frame with the
 > underline cursor under, say, the 100 Hz digit.
+
+### Frequency memories
+
+Click **MEM** in the top bar — or tap the **MHz digits** of a VFO, the way the radio does — to
+open the memory bank.
+
+- **Store current VFO** saves the active receiver's frequency and mode. A name is optional; an
+  unnamed memory is listed by its frequency.
+- Click a memory to **recall** it: the app tunes to the frequency and sets the mode it was
+  stored in, then closes the window.
+- **Delete** removes one. **Close** or **ESC** dismisses the window.
+
+The bank holds 64 memories and is saved with your app settings, so it survives a restart.
+
+Two things worth knowing:
+
+- These are **the app's memories, not the radio's**. The K4's own memory channels have no
+  published remote-control command, so this app cannot read or change them. Storing here does
+  not touch anything on the radio, and the radio's front-panel memories are unaffected.
+- Storing the same frequency *and* mode twice is refused — that is nearly always a slip. The
+  same frequency in a **different** mode is kept, so you can store a net on both CW and SSB.
+
+If the bank is full, or nothing is connected yet, the window says so in place of the store
+button rather than leaving you with a button that does nothing.
 
 ### RIT / XIT
 

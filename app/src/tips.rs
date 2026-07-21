@@ -120,6 +120,7 @@ pub const TIPS: &[(&str, &str)] = &[
     ("conn.connect", "Connect to the radio, or disconnect if already connected."),
     ("conn.tls", "Use TLS-PSK (port 9204) instead of the plaintext port (9205)."),
     ("conn.remember", "Store the password in the operating system keychain, never in the config file."),
+    ("app.memories", "Frequency memories: store the current VFO, recall or delete one. Kept in this app."),
     ("app.settings", "Connection, audio devices, levels and application preferences."),
     ("app.about", "Version, licence, project links, and the update check."),
     ("app.diag", "Diagnostics console: every CAT command sent and received, filterable and copyable."),
