@@ -515,7 +515,7 @@ fn publish(snapshot: &Arc<Mutex<UiSnapshot>>, ws: &mut WorkerState) {
         }
         s.transmitting = session.is_transmitting();
         s.tx_armed = session.is_tx_armed();
-        s.tuning = session.is_tuning();
+        s.tuning = session.is_tuning() || session.is_raw_tx();
         s.vfo_a_hz = st.vfo_a_hz;
         s.vfo_b_hz = st.vfo_b_hz;
         s.mode_a = st.mode_a.map(mode_label);

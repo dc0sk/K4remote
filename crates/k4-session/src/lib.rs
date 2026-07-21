@@ -146,6 +146,10 @@ pub struct Session<L: CatLink, C: Clock> {
     /// A tune carrier is believed to be on air. Kept separate from
     /// `transmitting`, which gates the mic path — see [`Session::tune`].
     tuning: bool,
+    /// A transmit-capable **raw** command (switch emulation, DVR, console) was
+    /// let through. The radio is on air because of it, but no local method
+    /// tracked that — see `Session::send`.
+    raw_tx: bool,
     last_rx: Instant,
     last_ping: Instant,
 }
@@ -163,6 +167,7 @@ impl<L: CatLink, C: Clock> Session<L, C> {
             tx_armed: false,
             transmitting: false,
             tuning: false,
+            raw_tx: false,
             last_rx: t0,
             last_ping: t0,
         }
@@ -192,6 +197,11 @@ impl<L: CatLink, C: Clock> Session<L, C> {
                     if let Some(text) = decode_cat_text(&payload) {
                         if !text.starts_with("PONG") {
                             self.state.apply_cat(&text);
+                            // The radio says it is receiving, so whatever a raw
+                            // command put on air has ended.
+                            if self.state.transmitting == Some(false) {
+                                self.raw_tx = false;
+                            }
                         }
                         inbound.cat.push(text);
                     }
@@ -307,6 +317,13 @@ impl<L: CatLink, C: Clock> Session<L, C> {
         self.tuning
     }
 
+    /// Whether a **raw** transmit-capable command has put the radio on air.
+    /// Distinct from [`Session::is_transmitting`] (which gates the mic path)
+    /// and [`Session::is_tuning`] (which only knows about `Session::tune`).
+    pub fn is_raw_tx(&self) -> bool {
+        self.raw_tx
+    }
+
     /// Configure the radio-side CW key-down initial delay (`KZL`; FR-TX-CW-02).
     pub fn set_cw_delay(&mut self, ms: u16) -> io::Result<()> {
         self.link.send_cat(&encode_kzl(ms))
@@ -342,6 +359,7 @@ impl<L: CatLink, C: Clock> Session<L, C> {
     pub fn emergency_stop(&mut self) -> io::Result<()> {
         self.transmitting = false;
         self.tx_armed = false;
+        self.raw_tx = false;
         // A tune carrier is on air without `transmitting` being set, so stop it
         // explicitly rather than relying on the radio's automatic `TU0` on
         // dropping transmit (D12 `TU`). Best-effort, then the unconditional
@@ -383,6 +401,17 @@ impl<L: CatLink, C: Clock> Session<L, C> {
                 io::ErrorKind::PermissionDenied,
                 "transmit is disarmed",
             ));
+        }
+        // Letting a transmit-capable command through puts the radio on air, and
+        // nothing else records that: the switch emulations bypass `tune`, so
+        // without this the emergency stop had no idea the radio was keyed and
+        // ESC did nothing (FR-TX-SAFE-05, found on a live radio). Cleared by a
+        // stop command below, by the radio reporting receive (`pump`), or by
+        // the stop/fail-safe paths.
+        if cat::keys_transmitter(command) {
+            self.raw_tx = true;
+        } else if cat::stops_transmitter(command) {
+            self.raw_tx = false;
         }
         self.link.send_cat(command)
     }

@@ -2366,6 +2366,17 @@ impl App {
                     if self.resync_tick.is_multiple_of(13) {
                         self.send(WorkerCmd::Cat("UT;".into()));
                     }
+                    // `IF;` every ~500 ms, because its `t` flag is how we learn
+                    // the radio is transmitting for any reason we did not
+                    // originate — front-panel PTT, VOX, the K-Pod. It was
+                    // otherwise only re-read in the ~5.3 s settings burst, which
+                    // is far too slow for the emergency stop to depend on
+                    // (FR-TX-SAFE-05): a whole tune can begin and end inside one
+                    // interval. One short command twice a second is nothing
+                    // beside the spectrum stream.
+                    if self.resync_tick.is_multiple_of(5) {
+                        self.send(WorkerCmd::Cat("IF;".into()));
+                    }
                     if self.resync_tick.is_multiple_of(53) {
                         for cmd in k4_protocol::state::connect_state_seed() {
                             // Skip one-shot enables (`TM1;`) — only re-GET settings.

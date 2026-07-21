@@ -1018,3 +1018,16 @@ pub fn keys_transmitter(command: &str) -> bool {
         _ => false,
     }
 }
+
+/// Whether `command` **stops** transmission.
+///
+/// The counterpart to [`keys_transmitter`]: these clear the "on air" belief
+/// that one sets. Never gated by the TX arm — stopping must always be
+/// possible.
+///
+/// trace: FR-TX-SAFE-03, FR-TX-SAFE-04
+pub fn stops_transmitter(command: &str) -> bool {
+    let cmd = command.trim();
+    let cmd = cmd.strip_suffix(';').unwrap_or(cmd);
+    matches!(cmd, "RX" | "TU0" | "PB0")
+}

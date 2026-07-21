@@ -442,3 +442,52 @@ fn fr_tx_safe_03_raw_transmit_commands_are_arm_gated() {
     s.send("SW16;").expect("TUNE must work once armed");
     assert_eq!(link.last_sent().as_deref(), Some("SW16;"));
 }
+
+/// A raw transmit-capable command makes the session report **on air**, so the
+/// emergency stop can reach it.
+///
+/// The gap this closes: the switch-emulation `TUNE`/`TUNE LP`/`XMIT` buttons
+/// bypass `Session::tune`, so `is_tuning()` stayed false while the radio was
+/// keyed. With the arm on, the radio transmitted and **ESC did nothing** —
+/// found on a live radio. Stopping clears it again, or ESC would stop
+/// dismissing dialogs forever after one tune.
+///
+/// trace: FR-TX-SAFE-05, FR-UI-TX-01
+#[test]
+fn fr_tx_safe_05_raw_transmit_is_visible_to_the_emergency_stop() {
+    let (_link, _clock, mut s) = build();
+    s.arm_tx();
+    assert!(!s.is_raw_tx(), "idle");
+
+    s.send("SW16;").expect("armed, so TUNE goes through");
+    assert!(
+        s.is_raw_tx(),
+        "a switch-tap TUNE keys the radio; the session must know, or the \
+         emergency stop cannot reach it"
+    );
+
+    // An explicit stop clears it.
+    s.send("TU0;").unwrap();
+    assert!(!s.is_raw_tx(), "exiting the tune clears the on-air belief");
+
+    // So does the emergency stop.
+    s.arm_tx();
+    s.send("SW131;").unwrap();
+    assert!(s.is_raw_tx());
+    s.emergency_stop().unwrap();
+    assert!(!s.is_raw_tx(), "emergency stop clears it");
+}
+
+/// Receive-side commands never set the on-air belief — otherwise ESC would
+/// stop dismissing dialogs after any ordinary command.
+///
+/// trace: FR-TX-SAFE-05
+#[test]
+fn fr_tx_safe_05_receive_commands_do_not_mark_on_air() {
+    let (_link, _clock, mut s) = build();
+    s.arm_tx();
+    for cmd in ["FA00014074000;", "MD3;", "SW42;", "AG030;", "IF;"] {
+        s.send(cmd).unwrap();
+        assert!(!s.is_raw_tx(), "{cmd} must not read as on air");
+    }
+}
