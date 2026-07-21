@@ -384,6 +384,26 @@ may need udev permission for the HID device (VID `0x04D8` / PID `0xF12D`). Watch
 console (filter `kpod`) for connect/disconnect messages.
 
 **No audio.**
+**First, find out where the silence is.** The Diagnostics window shows `RX audio: N decoded / M
+played`:
+
+- **Neither rising** — no audio is arriving; check the connection.
+- **Decoded rising, played stuck at 0** — audio arrives but cannot be played. The log says why
+  (no output device, or playback suppressed because the app believes it is transmitting).
+- **Both rising, still silent** — the audio is reaching your speakers but carries no sound. That
+  points at the radio: check its AF gain (send `AG;` in the Diagnostics raw-CAT box; `AG000` means
+  the radio is muted), and the per-receiver **VOL**/**MUTE** above each spectrum pane.
+
+To test the playback path on its own, independently of the radio:
+
+```
+cargo run -p k4-audio --example test_tone --features device
+```
+
+That plays a tone through the same code the received audio uses — 1 kHz on the left (Main), 600 Hz
+on the right (Sub). If you hear it, the application's audio is working and the problem is upstream.
+`--example list_audio` prints the devices the app can see.
+
 Check **Settings → Audio** device selection, the **Volume** slider, and that the link is an
 Ethernet connection (serial carries CAT only). Confirm the OS isn't routing playback elsewhere.
 
