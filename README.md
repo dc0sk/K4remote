@@ -9,8 +9,8 @@ stakeholder needs down to individual tests, enforced by a build gate.
 
 ![K4 Remote main window](docs/screenshots/main.png)
 
-> **Status:** v0.4.1 — feature-complete; hardware bring-up in progress.
-> 269 hardware-free tests pass · clippy/fmt clean · traceability gate green · CI green on Linux/macOS/Windows.
+> **Status:** v0.5.0 — feature-complete; hardware bring-up in progress.
+> 275 hardware-free tests pass · clippy/fmt clean · traceability gate green · CI green on Linux/macOS/Windows.
 > VFO tuning, RIT/XIT, split, band, panadapter click-to-QSY, and the K-Pod (incl. F1–F8 tap/hold macros)
 > are validated against a real K4; audio / PTT / waterfall rendering / serial bring-up is ongoing.
 > 0.4.0 closed **four transmit-safety faults** found on a live K4 — most seriously, the transmitter
@@ -26,7 +26,12 @@ stakeholder needs down to individual tests, enforced by a build gate.
 > radio — plus **ATU and TUNE control**, an About-box **update check**, and **switchable control
 > tooltips**.
 >
-> **New in 0.4.x:** the K4's **interaction grammar** on every control chip — **tap** for the
+> **New in 0.5.0:** **per-receiver volume and mute** beside each spectrum pane, volume controls that
+> read 0–100 % on a perceptual curve reaching **+24 dB** (the K4 streams quietly — see the
+> changelog), and **audio diagnostics** that say *why* there is no sound rather than leaving you to
+> guess.
+>
+> **In 0.4.x:** the K4's **interaction grammar** on every control chip — **tap** for the
 > switch's own function, and **hold** (or right-click) to bring up that control's settings popup
 > with its level, mode and on/off together, exactly as holding the switch does on the radio. Plus panadapter correctness fixes
 > from operating against a live K4 — per-pan span, trace/waterfall alignment — and a protocol fix
@@ -120,7 +125,7 @@ was recovered from the GPLv3 [QK4](https://github.com/mikeg-dal/QK4) project and
 ## Development
 
 ```sh
-cargo test --workspace                       # 161 hardware-free tests
+cargo test --workspace                       # 275 hardware-free tests
 cargo clippy --all-targets -- -D warnings
 cargo fmt --all -- --check
 cargo xtask                                  # requirement → test traceability gate (R3/R4)

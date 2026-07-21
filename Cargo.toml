@@ -20,7 +20,7 @@ members = [
 
 [workspace.package]
 edition = "2021"
-version = "0.4.1"
+version = "0.5.0"
 authors = ["Simon Keimer (DC0SK)"]
 rust-version = "1.90"
 license = "GPL-3.0-or-later"
