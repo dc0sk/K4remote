@@ -401,3 +401,44 @@ fn fr_cat_03_rejection_reaches_the_session_state() {
     s.pump().unwrap();
     assert_eq!(s.state().last_error.as_deref(), Some("MD"));
 }
+
+/// The arm interlock covers the **raw** command path, not only `begin_tx` /
+/// `send_cw` / `tune`.
+///
+/// This is the seam the front panel uses: the UI's `TUNE`, `TUNE LP`,
+/// `ATU TUNE` and `XMIT` buttons emulate front-panel switches by sending raw
+/// `SW` commands, and DVR playback sends `PB`. Those went straight through an
+/// ungated `Session::send`, so **they transmitted with the arm off** — found on
+/// a live radio, where TUNE and TUNE LP keyed the transmitter while disarmed.
+///
+/// trace: FR-TX-SAFE-03
+#[test]
+fn fr_tx_safe_03_raw_transmit_commands_are_arm_gated() {
+    let (link, _clock, mut s) = build();
+    // Disarmed: every transmit-capable raw command must be refused and must
+    // put nothing on the wire.
+    for cmd in ["SW16;", "SW131;", "SW40;", "SW30;", "TU1;", "PB1;", "TX;"] {
+        let r = s.send(cmd);
+        assert!(r.is_err(), "{cmd} must be refused while disarmed");
+        assert!(
+            link.sent().is_empty(),
+            "{cmd} reached the radio while disarmed"
+        );
+    }
+
+    // Receive-side commands are unaffected — the gate must not break tuning
+    // the radio, changing mode, or reading state.
+    for cmd in ["FA00014074000;", "MD3;", "SW42;", "IF;"] {
+        s.send(cmd)
+            .unwrap_or_else(|e| panic!("{cmd} must pass: {e}"));
+    }
+
+    // Stopping must never be gated, even disarmed.
+    s.send("TU0;").expect("exit tune must always be allowed");
+    s.send("RX;").expect("stop transmit must always be allowed");
+
+    // Armed: the same transmit commands now reach the radio.
+    s.arm_tx();
+    s.send("SW16;").expect("TUNE must work once armed");
+    assert_eq!(link.last_sent().as_deref(), Some("SW16;"));
+}

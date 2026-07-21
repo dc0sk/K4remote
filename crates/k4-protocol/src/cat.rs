@@ -972,3 +972,49 @@ pub fn set_text_decode(mode: u8, threshold: u8, lines: u8) -> String {
 pub fn set_power(n: u8) -> String {
     format!("PS{n};")
 }
+
+/// Whether `command` can put the radio **on air**.
+///
+/// The TX arm (`FR-TX-SAFE-03`) was originally enforced per call site — in
+/// `Session::begin_tx`, `send_cw` and `tune` — while `Session::send` stayed an
+/// ungated passthrough. Every switch tap goes through that passthrough, so the
+/// front-panel `TUNE`, `TUNE LP`, `ATU TUNE` and `XMIT` emulations keyed the
+/// transmitter with the arm **off**, as did DVR playback and anything typed
+/// into the diagnostics console. Found on a live radio.
+///
+/// This is the classifier for the interlock at that seam. It errs toward
+/// *refusing*: a command wrongly held back is an inconvenience the operator
+/// can see and correct, whereas one wrongly let through puts RF on the air
+/// with the safety off.
+///
+/// Deliberately **not** matched: `TU0` (exit a tune) and `RX` — stopping
+/// transmission must never be gated — and query forms (`TU;`), which only ask.
+///
+/// trace: FR-TX-SAFE-03
+pub fn keys_transmitter(command: &str) -> bool {
+    let cmd = command.trim();
+    let cmd = cmd.strip_suffix(';').unwrap_or(cmd);
+    // A query asks, it does not act.
+    if cmd.ends_with('$') || cmd.is_empty() {
+        return false;
+    }
+    let (head, arg) = cmd.split_at(cmd.len().min(2));
+    match head {
+        // Begin transmit. `TX` with no argument; the query is `TX;` too, but
+        // the K4 treats a bare TX as the SET, so it is gated.
+        "TX" => arg.is_empty(),
+        // Tune: every action but 0 (exit) keys a carrier.
+        "TU" => matches!(arg, "1" | "2" | "3" | "4"),
+        // CW keying stream and text send — both key the transmitter.
+        "KZ" | "KY" => !arg.is_empty(),
+        // DVR playback transmits the recorded message; `PB0` stops.
+        "PB" => !arg.is_empty() && arg != "0",
+        // Front-panel switch emulation: the transmit-capable codes.
+        "SW" => matches!(
+            arg.trim_start_matches('0'),
+            // TUNE | TUNE LP | ATU TUNE | XMIT
+            "16" | "131" | "40" | "30"
+        ),
+        _ => false,
+    }
+}

@@ -117,7 +117,7 @@ Legend: ✅ test-traced · 🟡 waived (see r3-waivers.md) · ⚪ not test-requi
 | `FR-TX-PTT-01` | C | D | ⚪ |
 | `FR-TX-SAFE-01` | M | T | ✅ |
 | `FR-TX-SAFE-02` | M | T | ✅ |
-| `FR-TX-SAFE-03` | M | T | ✅ |
+| `FR-TX-SAFE-03` | M | T/D | ✅ |
 | `FR-TX-SAFE-04` | M | T | ✅ |
 | `FR-TX-SAFE-05` | M | T/D | ✅ |
 | `FR-TX-TUNE-01` | S | T/D | ✅ |

@@ -984,8 +984,14 @@ fn handle_cmd(cmd: WorkerCmd, ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnaps
         }
         WorkerCmd::SendRawCat(cmd) => {
             if let Some(s) = ws.session.as_mut() {
-                let _ = s.send(&cmd);
-                ws.diag.log(Level::Info, "tx", &cmd);
+                match s.send(&cmd) {
+                    Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => ws.diag.log(
+                        Level::Warn,
+                        "tx",
+                        &format!("{cmd} refused: transmit is disarmed (ARM TX first)"),
+                    ),
+                    _ => ws.diag.log(Level::Info, "tx", &cmd),
+                }
             }
         }
         WorkerCmd::SetRxEq(bands) => {
@@ -1005,15 +1011,38 @@ fn handle_cmd(cmd: WorkerCmd, ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnaps
         }
         WorkerCmd::Cat(cmd) => {
             if let Some(s) = ws.session.as_mut() {
-                let _ = s.send(&cmd);
+                // A refusal is silent on the wire, so say so in the console
+                // rather than leaving the operator wondering why TUNE did
+                // nothing (FR-TX-SAFE-03).
+                match s.send(&cmd) {
+                    Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                        ws.diag.log(
+                            Level::Warn,
+                            "tx",
+                            &format!("{cmd} refused: transmit is disarmed (ARM TX first)"),
+                        );
+                        return;
+                    }
+                    _ => {}
+                }
                 ws.diag.log(Level::Debug, "tx", &cmd);
             }
         }
         WorkerCmd::CatLocal(cmd) => {
             if let Some(s) = ws.session.as_mut() {
-                let _ = s.send(&cmd);
-                s.apply_local(&cmd);
-                ws.diag.log(Level::Debug, "tx", &cmd);
+                // A refused command must not be folded into local state, or
+                // the UI would show a change the radio never made.
+                match s.send(&cmd) {
+                    Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => ws.diag.log(
+                        Level::Warn,
+                        "tx",
+                        &format!("{cmd} refused: transmit is disarmed (ARM TX first)"),
+                    ),
+                    _ => {
+                        s.apply_local(&cmd);
+                        ws.diag.log(Level::Debug, "tx", &cmd);
+                    }
+                }
             }
         }
         // Audio device / level control (FR-AUD-DEV-01 / FR-AUD-LVL-01). Device

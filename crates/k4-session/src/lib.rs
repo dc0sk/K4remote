@@ -372,6 +372,18 @@ impl<L: CatLink, C: Clock> Session<L, C> {
     /// Send a non-transmit control command (e.g. `"FA00014074000;"`, `"MD3;"`).
     /// TX commands must go through [`Session::begin_tx`]/[`Session::end_tx`].
     pub fn send(&mut self, command: &str) -> io::Result<()> {
+        // The arm interlock lives here, at the seam every raw command passes
+        // through — not only in `begin_tx`/`send_cw`/`tune`. Those three were
+        // gated while this passthrough was not, so the switch-emulation
+        // `TUNE`/`TUNE LP`/`ATU TUNE`/`XMIT`, DVR playback, and anything typed
+        // into the diagnostics console could key the transmitter with the arm
+        // off (FR-TX-SAFE-03, found on a live radio).
+        if cat::keys_transmitter(command) && (!self.tx_armed || !self.connected) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "transmit is disarmed",
+            ));
+        }
         self.link.send_cat(command)
     }
 
