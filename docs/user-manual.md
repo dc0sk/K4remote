@@ -2,6 +2,7 @@
 title: "K4 Remote — User Manual"
 status: Draft
 version: "0.6.0"
+updated: 2026-07-22
 updated: 2026-07-21
 authors:
   - Simon Keimer (DC0SK)
@@ -208,6 +209,28 @@ to step it.
 > 📷 **Screenshot needed — `screenshots/vfo-digit-tune.png`:** Close-up of a VFO frame with the
 > underline cursor under, say, the 100 Hz digit.
 
+### The AF recorder
+
+The strip below the mini-pan drives the **radio's own** 90-second receive-audio
+recorder — the same one behind the K4's AF REC and AF PLAY switches.
+
+| Control | What it does |
+|---|---|
+| **AF REC** | Start recording what you are hearing. Press again to stop. |
+| **PLAY** | Play the recording back through the receivers. Press again to stop. |
+| **«5s** / **5s»** | Jump back or forward five seconds while playing. |
+| **PREV** / **NEXT** | Step between recording sessions. |
+| **CLEAR** | Empty the recording buffers. Saved DVR voice messages are not touched. |
+
+The readout shows position and buffer length, and `REC 3` names the session
+being played.
+
+**The recordings live in the radio, not in this app.** They are the same ones
+your front panel sees, and they survive this app closing.
+
+The recorder shares one engine with the DVR voice messages. While a voice
+message is recording or transmitting, the AF buttons go inactive and the strip
+says *voice message in progress* — the radio can only do one of these at a time.
 ### Frequency memories
 
 Click **MEM** in the top bar — or tap the **MHz digits** of a VFO, the way the radio does — to

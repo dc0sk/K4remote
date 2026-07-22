@@ -611,3 +611,97 @@ fn fr_rx_02_attenuator_set_and_readback_agree() {
         assert_eq!(s.atten_on, Some(on), "{db} dB on/off flag");
     }
 }
+
+/// The `DA` status forms all parse, including the ones that belong to the DVR
+/// rather than the AF recorder — they share one engine and one status command,
+/// so a display that only understood its own half would go blank exactly when
+/// something was happening.
+/// trace: FR-AUD-REC-01
+#[test]
+fn fr_aud_rec_01_digital_audio_status_forms_parse() {
+    use k4_protocol::state::{AfPlayback, DigitalAudio};
+
+    let da = |resp: &str| {
+        let mut s = RadioState::new();
+        assert!(s.apply_cat(resp), "{resp} not parsed");
+        s.digital_audio.expect("digital_audio set")
+    };
+
+    assert_eq!(da("DA0;"), DigitalAudio::Idle);
+    assert_eq!(
+        da("DAPW01500;"),
+        DigitalAudio::WaitingRepeat { remaining_ms: 1500 }
+    );
+    assert_eq!(
+        da("DARS1234590000;"),
+        DigitalAudio::RecordingAf {
+            pos_ms: 12345,
+            max_ms: 90000
+        }
+    );
+    assert_eq!(
+        da("DARM0500090000;"),
+        DigitalAudio::RecordingMessage {
+            pos_ms: 5000,
+            max_ms: 90000
+        }
+    );
+    // Built field by field (nnnnn ttttt m s c) rather than written as one
+    // literal — the counters are fixed-width and adjacent, so a miscounted
+    // digit silently shifts every field after it.
+    let playing = format!("DAPS{}{}{}{}{};", "12000", "90000", "0", "3", "1");
+    assert_eq!(
+        da(&playing),
+        DigitalAudio::PlayingAf {
+            pos_ms: 12000,
+            max_ms: 90000,
+            playback: Some(AfPlayback::Both),
+            session: Some(3),
+            last: true,
+        },
+        "the mode/session/last tail is read"
+    );
+    // `c` is 0 when this is not the last session.
+    let not_last = format!("DAPS{}{}{}{}{};", "00000", "90000", "A", "1", "0");
+    assert!(matches!(
+        da(&not_last),
+        DigitalAudio::PlayingAf {
+            playback: Some(AfPlayback::Main),
+            session: Some(1),
+            last: false,
+            ..
+        }
+    ));
+
+    // Playing a *message* is the one state that has the radio on air. D12 also
+    // allows `m` = `M` here, meaning a voice message rather than an AF
+    // recording is on air; that is not an `AfPlayback`, so it reads as `None`
+    // — the tag already carries the distinction that matters for safety.
+    let msg = format!("DAPM{}{}{}{}{};", "00000", "90000", "M", "1", "1");
+    assert!(da(&msg).is_transmitting(), "DAPM transmits");
+    assert!(!da(&playing).is_transmitting());
+    assert!(!da("DARS1234590000;").is_transmitting());
+}
+
+/// An unrecognised `DA` form leaves the last known state alone. Blanking the
+/// display on a variant a later firmware adds would be worse than lagging by
+/// one poll — and guessing at its layout worse still.
+/// trace: FR-AUD-REC-01
+#[test]
+fn fr_aud_rec_01_unknown_digital_audio_form_is_ignored() {
+    use k4_protocol::state::DigitalAudio;
+
+    let mut s = RadioState::new();
+    assert!(s.apply_cat("DARS0100090000;"));
+    let known = s.digital_audio;
+    assert!(matches!(known, Some(DigitalAudio::RecordingAf { .. })));
+
+    s.apply_cat("DAZZ999;"); // not a documented form
+    assert_eq!(s.digital_audio, known, "unknown form left the state alone");
+
+    s.apply_cat("DARS;"); // documented tag, but the counters are missing
+    assert_eq!(
+        s.digital_audio, known,
+        "a truncated form is not half-applied"
+    );
+}

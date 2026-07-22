@@ -379,6 +379,11 @@ impl<L: CatLink, C: Clock> Session<L, C> {
         // last one carries the result.
         let _ = self.link.send_cat(&cat::tune(TuneAction::Exit)); // end any tune
         let _ = self.link.send_cat("PB0;"); // end DVR playback
+                                            // `DA0` ends any digital-audio action. It matters most for `DAMP`,
+                                            // which plays a stored voice message on an auto-repeat interval: that
+                                            // one re-keys by itself, so an emergency stop that only left transmit
+                                            // would be followed by the radio transmitting again a moment later.
+        let _ = self.link.send_cat("DA0;");
         self.link.send_cat("RX;") // leave transmit
     }
 

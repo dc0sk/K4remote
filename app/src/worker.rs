@@ -176,6 +176,12 @@ pub enum WorkerCmd {
     AtuToggle,
     /// Send an arbitrary raw CAT command (diagnostics console, FR-DIAG-02).
     SendRawCat(String),
+    /// AF recorder (FR-AUD-REC-01): the radio's own 90 s buffer.
+    AfRecord,
+    AfPlay,
+    AfStop,
+    AfClear,
+    AfJump(k4_protocol::cat::AfJump),
     /// Set the 8-band RX graphic equalizer (`RE`, FR-EQ-01).
     SetRxEq([i8; 8]),
     /// Set the 8-band TX graphic equalizer (`TE`, FR-EQ-01).
@@ -218,6 +224,9 @@ pub struct UiSnapshot {
     /// A tune carrier is on air. Separate from `transmitting`, which tracks the
     /// mic path (FR-TX-TUNE-01).
     pub tuning: bool,
+    /// Digital-audio engine status (`DA`) — the AF recorder and the DVR share
+    /// it, so the UI must decide which of the two a given state belongs to.
+    pub digital_audio: Option<k4_protocol::state::DigitalAudio>,
     pub vfo_a_hz: Option<u64>,
     pub vfo_b_hz: Option<u64>,
     pub mode_a: Option<&'static str>,
@@ -370,6 +379,9 @@ struct WorkerState {
     audio_dropped: u64,
     audio_suppressed: u64,
     audio_silence_reported: bool,
+    /// When the digital-audio engine (`DA`) was last queried — see
+    /// [`poll_digital_audio`].
+    last_da_poll: Instant,
     // Worker-loop instrumentation. The loop is paced by inbound frames, so its
     // rate and what it spends per iteration decide whether the socket is
     // drained fast enough; if it is not, the radio's stream backs up and the
@@ -450,6 +462,7 @@ impl WorkerState {
             publish_nanos: 0,
             perf_since: Instant::now(),
             last_publish: Instant::now(),
+            last_da_poll: Instant::now(),
             audio_peak: [0.0, 0.0],
             audio_peak_reported: 0,
             af_zero_reported: false,
@@ -578,6 +591,48 @@ fn refresh_diag_lines(ws: &mut WorkerState) {
     ws.diag_lines = Arc::new(ws.diag.recent(4000));
 }
 
+/// Query the radio's digital-audio engine (`DA`) on an adaptive cadence.
+///
+/// The status carries a position in milliseconds, so while something is
+/// recording or playing the readout wants refreshing several times a second to
+/// move smoothly. While idle it wants almost nothing — but not *nothing*: the
+/// recorder can also be started from the radio's front panel, and a client
+/// that only polled after its own commands would never notice.
+///
+/// trace: FR-AUD-REC-01
+fn poll_digital_audio(ws: &mut WorkerState) {
+    const ACTIVE: Duration = Duration::from_millis(250);
+    const IDLE: Duration = Duration::from_millis(1000);
+    let busy = ws
+        .session
+        .as_ref()
+        .and_then(|s| s.state().digital_audio)
+        .is_some_and(|da| da != k4_protocol::state::DigitalAudio::Idle);
+    let interval = if busy { ACTIVE } else { IDLE };
+    if ws.last_da_poll.elapsed() < interval {
+        return;
+    }
+    ws.last_da_poll = Instant::now();
+    if let Some(s) = ws.session.as_mut() {
+        let _ = s.send(k4_protocol::cat::query_digital_audio());
+    }
+}
+
+/// Send one CAT command on the live session, logging a transmit refusal so it
+/// is not silent (the arm gate lives in `Session::send`).
+fn send_cat(ws: &mut WorkerState, cmd: &str) {
+    if let Some(s) = ws.session.as_mut() {
+        match s.send(cmd) {
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => ws.diag.log(
+                Level::Warn,
+                "tx",
+                &format!("{cmd} refused: transmit is disarmed (ARM TX first)"),
+            ),
+            _ => {}
+        }
+    }
+}
+
 fn publish(snapshot: &Arc<Mutex<UiSnapshot>>, ws: &mut WorkerState) {
     if ws.session.is_none() {
         return;
@@ -596,6 +651,7 @@ fn publish(snapshot: &Arc<Mutex<UiSnapshot>>, ws: &mut WorkerState) {
         s.transmitting = session.is_transmitting();
         s.tx_armed = session.is_tx_armed();
         s.tuning = session.is_tuning() || session.is_raw_tx();
+        s.digital_audio = st.digital_audio;
         s.vfo_a_hz = st.vfo_a_hz;
         s.vfo_b_hz = st.vfo_b_hz;
         s.mode_a = st.mode_a.map(mode_label);
@@ -789,6 +845,7 @@ fn run(rx: Receiver<WorkerCmd>, snapshot: Arc<Mutex<UiSnapshot>>) {
         // 3. Service the link, start a scheduled (re)connect, or idle.
         if ws.session.is_some() {
             service(&mut ws, &snapshot);
+            poll_digital_audio(&mut ws);
         } else {
             // Start the next attempt when due and none is already in flight.
             if ws.pending_connect.is_none() {
@@ -1219,6 +1276,13 @@ fn handle_cmd(cmd: WorkerCmd, ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnaps
                     .log(Level::Info, "tx", k4_protocol::cat::atu_toggle());
             }
         }
+        WorkerCmd::AfRecord => send_cat(ws, k4_protocol::cat::af_record()),
+        // Playback always starts at the top of the buffer; seeking is what the
+        // jump controls are for.
+        WorkerCmd::AfPlay => send_cat(ws, &k4_protocol::cat::af_play(0)),
+        WorkerCmd::AfStop => send_cat(ws, k4_protocol::cat::digital_audio_stop()),
+        WorkerCmd::AfClear => send_cat(ws, k4_protocol::cat::clear_recordings()),
+        WorkerCmd::AfJump(t) => send_cat(ws, &k4_protocol::cat::af_jump(t)),
         WorkerCmd::SendRawCat(cmd) => {
             if let Some(s) = ws.session.as_mut() {
                 match s.send(&cmd) {
