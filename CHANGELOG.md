@@ -91,6 +91,11 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
   touch anything on the radio. Storing the same frequency *and* mode twice is
   refused; the same frequency in a different mode is kept, so a net can live in
   the bank on both CW and SSB.
+- **TX TEST now shows that it is on.** The TEST button gave no indication
+  either way, so there was nothing to tell you the radio was in test mode —
+  where it keys but puts out no power. The button is now lit whenever test
+  mode is active, including when it was switched on at the radio or by
+  another client.
 
 ## [0.6.0] — 2026-07-21
 
