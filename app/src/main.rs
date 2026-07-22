@@ -2844,8 +2844,19 @@ impl App {
                         .style(meter_style(strong)),
                 )
                 .push(
+                    // The bar to the left of this takes `Length::Fill`, so
+                    // every character the reading gains is a character the bar
+                    // loses — the meter visibly rescales as the signal moves,
+                    // which is the one place in the app where that is actively
+                    // misleading (FR-UI-STABLE-01). Reserved for the widest
+                    // reading `fmt_dbm` can produce.
                     Text::new(fmt_dbm(dbm))
                         .size(12)
+                        .width(Length::Fixed(ui::stable_label_width(
+                            &[S_METER_WIDEST],
+                            12.0,
+                            4.0,
+                        )))
                         .color(role_color(meter_role)),
                 )
                 .into()
@@ -2977,8 +2988,17 @@ impl App {
                     .align_y(Alignment::Center)
                     .push(step_btn("−", -10))
                     .push(
+                        // The `+` step button sits immediately right of this,
+                        // so an offset gaining a digit moves the control the
+                        // operator is repeatedly clicking (FR-UI-STABLE-01).
                         Text::new(format!("{off:+} Hz"))
                             .size(12)
+                            .width(Length::Fixed(ui::stable_label_width(
+                                &["+9990 Hz"],
+                                12.0,
+                                4.0,
+                            )))
+                            .align_x(Alignment::Center)
                             .color(role_color(ui::ColorRole::RxValue)),
                     )
                     .push(step_btn("+", 10))
@@ -3399,8 +3419,18 @@ impl App {
             )
         };
         let apf_bw = || {
-            small_btn_string(
+            // `APF 150` is three characters wider than `APF 30`, with SPOT and
+            // the decode control to its right (FR-UI-STABLE-01). The label set
+            // lives beside `apf_width_label`, so a new width cannot be added
+            // without the reservation following it.
+            let labels: Vec<String> = ui::APF_WIDTH_LABELS
+                .iter()
+                .map(|w| format!("APF {w}"))
+                .collect();
+            let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
+            small_btn_stable(
                 format!("APF {}", ui::apf_width_label(self.rx_apf_width())),
+                &refs,
                 Message::CycleApfWidth,
             )
         };
@@ -5238,13 +5268,34 @@ impl App {
         let conn_btn = Button::new(Text::new(conn_label).size(12))
             .style(btn_style(connect_kind(conn_action)))
             .padding([5, 10])
+            // Settings, theme and About all sit to the right of this, and it
+            // changes on every connect and disconnect (FR-UI-STABLE-01).
+            .width(Length::Fixed(ui::stable_label_width(
+                &ui::CONNECT_LABELS,
+                12.0,
+                20.0,
+            )))
             .on_press(connect_msg(conn_action));
         // Theme selector (FR-UI-17) and About (FR-UI-18), top-right; About is
         // rightmost with the theme toggle to its left.
+        let theme_names: Vec<String> = ui::ThemeMode::LABELS
+            .iter()
+            .map(|l| format!("Theme: {l}"))
+            .collect();
+        let theme_labels: Vec<&str> = theme_names.iter().map(String::as_str).collect();
         let theme_btn =
             Button::new(Text::new(format!("Theme: {}", self.theme_mode.label())).size(12))
                 .style(btn_style(BtnKind::Plain))
                 .padding([5, 10])
+                // "Theme: Contrast" against "Theme: Dark", with About to the
+                // right (FR-UI-STABLE-01). Reserved from the rendered strings
+                // rather than the bare names, so the "Theme: " prefix is
+                // counted once, here, instead of being estimated separately.
+                .width(Length::Fixed(ui::stable_label_width(
+                    &theme_labels,
+                    12.0,
+                    20.0,
+                )))
                 .on_press(Message::CycleTheme);
         let about_btn = tipped(
             self.tips_on(),
@@ -5292,8 +5343,16 @@ impl App {
             .align_y(Alignment::Center)
             .push(status_dot)
             .push(
+                // "connecting..." is four characters longer than "CONNECTED",
+                // so without a reservation the status message beside it slides
+                // every time the phase changes (FR-UI-STABLE-01).
                 Text::new(status_text)
                     .size(12)
+                    .width(Length::Fixed(ui::stable_label_width(
+                        &ui::CONN_STATUS_LABELS,
+                        12.0,
+                        4.0,
+                    )))
                     .color(role_color(status_role)),
             );
         // Status strip: radio UTC clock + remote client count (FR-UI-STATUS-01).
@@ -5306,6 +5365,19 @@ impl App {
                 status_bits.push(format!("{n} clients"));
             }
         }
+        // Deliberately NOT width-reserved, unlike the rest of this sweep.
+        //
+        // It sits *after* the `Length::Fill` status text, so it does shift the
+        // controls to its right when the clock appears or a second client
+        // joins — a genuine instance of what FR-UI-STABLE-01 forbids. But its
+        // widest form is 27 characters, and reserving that takes ~257 px from
+        // the status message, which then wraps to three lines and grows the
+        // whole header, pushing every panel below it down. Measured, not
+        // assumed: the reservation was written, screenshotted, and reverted.
+        //
+        // Trading an occasional horizontal shift for a permanent vertical one
+        // is a bad trade, so this stays as it is until the status message has
+        // somewhere else to go.
         let status_strip = Text::new(status_bits.join("  ·  ")).size(12).color(dim);
         let header = Row::new()
             .spacing(12)
@@ -5611,7 +5683,21 @@ impl App {
                 .align_y(Alignment::Center)
                 .push(Text::new(label).size(11).color(dim))
                 .push(slider(0..=max, val, msg).width(Length::Fixed(110.0)))
-                .push(Text::new(format!("{val}{unit}")).size(11).color(vcol(d)))
+                .push(
+                    // Reserve the widest reading this slider can produce. Taken
+                    // from the same `max` the slider is built from, so the two
+                    // cannot drift apart (FR-UI-STABLE-01) — every one of these
+                    // sits mid-row with more controls to its right, so a digit
+                    // appearing shifts the rest of the strip.
+                    Text::new(format!("{val}{unit}"))
+                        .size(11)
+                        .width(Length::Fixed(ui::stable_label_width(
+                            &[&format!("{max}{unit}")],
+                            11.0,
+                            4.0,
+                        )))
+                        .color(vcol(d)),
+                )
                 .into()
         };
         // Third row: SHIFT, then AF / RF / SQL, then PITCH — all for the active VFO.
@@ -5626,7 +5712,16 @@ impl App {
                             .step(10u16)
                             .width(Length::Fixed(110.0)),
                     )
-                    .push(Text::new(format!("{val} Hz")).size(11).color(vcol(d)))
+                    .push(
+                        Text::new(format!("{val} Hz"))
+                            .size(11)
+                            .width(Length::Fixed(ui::stable_label_width(
+                                &[&format!("{hi} Hz")],
+                                11.0,
+                                4.0,
+                            )))
+                            .color(vcol(d)),
+                    )
             };
         let level_slider = |label: &'static str, val: u8, max: u8, msg: fn(u8) -> Message| {
             Row::new()
@@ -5638,7 +5733,16 @@ impl App {
                         .step(1u8)
                         .width(Length::Fixed(96.0)),
                 )
-                .push(Text::new(format!("{val}")).size(11).color(rxv))
+                .push(
+                    Text::new(format!("{val}"))
+                        .size(11)
+                        .width(Length::Fixed(ui::stable_label_width(
+                            &[&format!("{max}")],
+                            11.0,
+                            4.0,
+                        )))
+                        .color(rxv),
+                )
         };
         // Filter view toggles the SHIFT slider for LO/HI-cut edges (FR-FIL-02);
         // it sits in the gain row, right of NR LVL.
@@ -5662,6 +5766,13 @@ impl App {
             )
             .style(btn_style(shift_kind))
             .padding([5, 8])
+            // First item of the filter group: the label, slider and readout to
+            // its right all move when this toggles (FR-UI-STABLE-01).
+            .width(Length::Fixed(ui::stable_label_width(
+                &["HI/LO", "SHFT"],
+                11.0,
+                16.0,
+            )))
             .on_press(Message::ToggleFilterEdgeView),
         );
         filter_ctl = if self.filter_edge_view {
@@ -6071,6 +6182,14 @@ impl App {
                     BtnKind::Ptt
                 }))
                 .padding([6, 10])
+                // The one control in this row still moving its neighbours:
+                // EMERGENCY STOP is immediately to the right, and it must not
+                // slide out from under a hand reaching for it (FR-UI-STABLE-01).
+                .width(Length::Fixed(ui::stable_label_width(
+                    &["UNKEY", "PTT"],
+                    13.0,
+                    20.0,
+                )))
                 .on_press(Message::ToggleKey);
         let estop = Button::new(Text::new("EMERGENCY STOP").size(13))
             .style(btn_style(BtnKind::Danger))
@@ -6206,12 +6325,10 @@ impl App {
         };
         // Options and actions on separate rows so the buttons never get
         // squeezed in the third-width panel (glyph-wrapped labels).
-        let mut conn_options = Row::new().spacing(6).push(small_btn(
-            if self.serial_mode {
-                "ETHERNET"
-            } else {
-                "SERIAL"
-            },
+        let mut conn_options = Row::new().spacing(6).push(small_btn_pair(
+            self.serial_mode,
+            "ETHERNET",
+            "SERIAL",
             Message::ToggleSerialMode,
         ));
         if !self.serial_mode {
@@ -6429,10 +6546,7 @@ impl App {
                         .size(13)
                         .width(Length::Fixed(220.0)),
                     )
-                    .push(small_btn(
-                        if set { "UNLOCK" } else { "SET" },
-                        Message::UnlockMaster,
-                    )),
+                    .push(small_btn_pair(set, "UNLOCK", "SET", Message::UnlockMaster)),
             );
         }
         if !self.peer_status.is_empty() {
@@ -6565,12 +6679,10 @@ impl App {
                 Row::new()
                     .spacing(8)
                     .align_y(Alignment::Center)
-                    .push(small_btn(
-                        if self.mute_mon {
-                            "Mute radio MON on connect: ON"
-                        } else {
-                            "Mute radio MON on connect: OFF"
-                        },
+                    .push(small_btn_pair(
+                        self.mute_mon,
+                        "Mute radio MON on connect: ON",
+                        "Mute radio MON on connect: OFF",
                         Message::ToggleMuteMon,
                     ))
                     .push(
@@ -6587,12 +6699,10 @@ impl App {
                         self.tips_on(),
                         self.hover,
                         "app.diag",
-                        small_btn(
-                            if self.diag_window.is_some() {
-                                "Diagnostics window: ON"
-                            } else {
-                                "Diagnostics window: OFF"
-                            },
+                        small_btn_pair(
+                            self.diag_window.is_some(),
+                            "Diagnostics window: ON",
+                            "Diagnostics window: OFF",
                             Message::ToggleDiagWindow,
                         ),
                     ))
@@ -6606,20 +6716,16 @@ impl App {
                 Row::new()
                     .spacing(8)
                     .align_y(Alignment::Center)
-                    .push(small_btn(
-                        if self.capturing_hotkey {
-                            "PTT hotkey: press keys…"
-                        } else {
-                            "Set PTT hotkey"
-                        },
+                    .push(small_btn_pair(
+                        self.capturing_hotkey,
+                        "PTT hotkey: press keys…",
+                        "Set PTT hotkey",
                         Message::StartCaptureHotkey,
                     ))
-                    .push(small_btn(
-                        if self.ptt_toggle {
-                            "Mode: Toggle"
-                        } else {
-                            "Mode: Hold"
-                        },
+                    .push(small_btn_pair(
+                        self.ptt_toggle,
+                        "Mode: Toggle",
+                        "Mode: Hold",
                         Message::TogglePttMode,
                     ))
                     .push(
@@ -6632,12 +6738,10 @@ impl App {
                 Row::new()
                     .spacing(8)
                     .align_y(Alignment::Center)
-                    .push(small_btn(
-                        if self.mode_aware_ui {
-                            "Mode-adaptive UI: ON"
-                        } else {
-                            "Mode-adaptive UI: OFF"
-                        },
+                    .push(small_btn_pair(
+                        self.mode_aware_ui,
+                        "Mode-adaptive UI: ON",
+                        "Mode-adaptive UI: OFF",
                         Message::ToggleModeAwareUi,
                     ))
                     .push(
@@ -6673,12 +6777,10 @@ impl App {
                 Row::new()
                     .spacing(8)
                     .align_y(Alignment::Center)
-                    .push(small_btn(
-                        if self.kpod_enabled {
-                            "K-Pod: ON"
-                        } else {
-                            "K-Pod: OFF"
-                        },
+                    .push(small_btn_pair(
+                        self.kpod_enabled,
+                        "K-Pod: ON",
+                        "K-Pod: OFF",
                         Message::ToggleKpod,
                     ))
                     .push(
@@ -7548,6 +7650,46 @@ fn small_btn(label: &'static str, msg: Message) -> Element<'static, Message> {
         .into()
 }
 
+/// Small plain action button that shows one of **two** known labels, sized to
+/// the wider so the row does not reflow when it flips (`FR-UI-STABLE-01`).
+///
+/// The two-label case is common enough — every ON/OFF setting toggle — that
+/// spelling out a reservation at each site invites someone to skip it.
+fn small_btn_pair(
+    on: bool,
+    on_label: &'static str,
+    off_label: &'static str,
+    msg: Message,
+) -> Element<'static, Message> {
+    Button::new(Text::new(if on { on_label } else { off_label }).size(12))
+        .style(btn_style(BtnKind::Plain))
+        .padding([5, 10])
+        .width(Length::Fixed(ui::stable_label_width(
+            &[on_label, off_label],
+            12.0,
+            20.0,
+        )))
+        .on_press(msg)
+        .into()
+}
+
+/// Small plain action button whose label varies over a **known set**, sized to
+/// the widest member so the row does not reflow when it changes
+/// (`FR-UI-STABLE-01`).
+///
+/// `labels` must list every string this button can show; passing only the
+/// current one silently reintroduces the resizing. Where the set comes from a
+/// function, keep the list beside that function (see `ui::CONNECT_LABELS`)
+/// rather than writing it out here.
+fn small_btn_stable(label: String, labels: &[&str], msg: Message) -> Element<'static, Message> {
+    Button::new(Text::new(label).size(12))
+        .style(btn_style(BtnKind::Plain))
+        .padding([5, 10])
+        .width(Length::Fixed(ui::stable_label_width(labels, 12.0, 20.0)))
+        .on_press(msg)
+        .into()
+}
+
 /// Small plain action button with an owned (dynamic) label.
 fn small_btn_string(label: String, msg: Message) -> Element<'static, Message> {
     Button::new(Text::new(label).size(12))
@@ -7637,6 +7779,14 @@ fn secret<'a>(
 }
 
 /// S-meter label from a dBm value alone (per-VFO, FR-UI-12).
+/// The widest reading [`fmt_dbm`] can produce, for width reservation.
+///
+/// `S9+60dB` is the top of the S-unit ladder and `-121 dBm` the bottom of the
+/// range, so no single real reading is this wide — which is the point: the
+/// reservation has to cover the widest *unit* and the widest *number*
+/// independently, because which pairs actually occur is the radio's business.
+const S_METER_WIDEST: &str = "S9+60dB (-121 dBm)";
+
 fn fmt_dbm(dbm: Option<i32>) -> String {
     match dbm {
         Some(dbm) => format!("{} ({dbm} dBm)", k4_protocol::s_unit_label(dbm)),
@@ -8005,5 +8155,44 @@ mod pan_target_tests {
         // Span is still targeted, so the two panes stay independently settable.
         assert_eq!(on_wire("#SPN50000;", false), "#SPN50000;");
         assert_eq!(on_wire("#SPN50000;", true), "#SPN$50000;");
+    }
+}
+
+#[cfg(test)]
+mod stable_width_tests {
+    use super::{fmt_dbm, S_METER_WIDEST};
+
+    /// No reading the S-meter can produce may exceed the width reserved for
+    /// it. The reservation sits beside a `Length::Fill` bar, so an unexpectedly
+    /// long reading does not merely shift a neighbour — it steals width from
+    /// the meter, and the bar reads short for a strong signal.
+    ///
+    /// Swept across the whole plausible dBm range rather than spot-checked:
+    /// the S-unit label changes shape partway up (`S0`..`S9`, then `S9+nndB`),
+    /// so the widest string is not at either end of the range.
+    /// trace: FR-UI-STABLE-01
+    #[test]
+    fn fr_ui_stable_01_s_meter_reservation_covers_every_reading() {
+        let reserved = S_METER_WIDEST.chars().count();
+        let mut widest = String::new();
+        for dbm in -140..=10 {
+            let s = fmt_dbm(Some(dbm));
+            if s.chars().count() > widest.chars().count() {
+                widest = s.clone();
+            }
+            assert!(
+                s.chars().count() <= reserved,
+                "{dbm} dBm renders {s:?} ({} chars), over the {reserved} reserved",
+                s.chars().count()
+            );
+        }
+        // The placeholder must fit too — it is what a disconnected app shows.
+        assert!(fmt_dbm(None).chars().count() <= reserved);
+        // Not an exact-fit assertion: the constant deliberately combines the
+        // widest unit with the widest number, which need not co-occur.
+        assert!(
+            widest.chars().count() <= reserved,
+            "widest real reading was {widest:?}"
+        );
     }
 }

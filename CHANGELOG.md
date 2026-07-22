@@ -10,6 +10,17 @@ during the 0.4.0 release, so earlier detail lives in the git history and in the
 change ledgers under [`docs/test/test-strategy.md`](docs/test/test-strategy.md)
 and [`docs/requirements/system-requirements.md`](docs/requirements/system-requirements.md).
 
+## [Unreleased]
+
+### Fixed
+
+- **More controls hold still as their labels change.** Continuing the
+  no-bouncing-wireframe pass: **PTT/UNKEY** no longer shoves EMERGENCY STOP
+  sideways when you key, the AF/RF/SQL/NOTCH/NB/NR slider readings no longer
+  ripple the filter strip as they count, and the connect button, theme
+  selector, SHFT/HI-LO toggle, APF width, RIT/XIT offset, S-meter reading and
+  the settings toggles all keep one width.
+
 ## [0.6.0] — 2026-07-21
 
 ### Added

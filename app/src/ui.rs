@@ -146,6 +146,10 @@ impl ThemeMode {
 
     /// Button label for the current mode.
     /// trace: FR-UI-17
+    /// Every label [`ThemeMode::label`] can return, for width reservation
+    /// (`FR-UI-STABLE-01`).
+    pub const LABELS: [&'static str; 4] = ["Dark", "Light", "Contrast", "System"];
+
     pub fn label(self) -> &'static str {
         match self {
             ThemeMode::Dark => "Dark",
@@ -286,6 +290,14 @@ pub enum ConnectAction {
 /// tapping it aborts; once connected it shows **Disconnect**. Pure so the
 /// label/action contract is unit-testable without iced.
 /// trace: FR-UI-16
+/// Every label [`connect_button`] can return, for width reservation
+/// (`FR-UI-STABLE-01`).
+///
+/// Kept beside the function rather than at the call site so the two cannot
+/// drift: a phase added without extending this list is caught by a test, not
+/// by an operator noticing the row twitch.
+pub const CONNECT_LABELS: [&str; 3] = ["Connect", "Cancel", "Disconnect"];
+
 pub fn connect_button(phase: ConnPhase) -> (&'static str, ConnectAction) {
     match phase {
         ConnPhase::Disconnected => ("Connect", ConnectAction::Connect),
@@ -297,6 +309,9 @@ pub fn connect_button(phase: ConnPhase) -> (&'static str, ConnectAction) {
 /// The header connection indicator's label and colour role for each phase
 /// (FR-UI-22): green when connected, amber while connecting, grey when idle.
 /// trace: FR-UI-22
+/// Every label [`conn_status`] can return, for width reservation.
+pub const CONN_STATUS_LABELS: [&str; 3] = ["CONNECTED", "connecting...", "disconnected"];
+
 pub fn conn_status(phase: ConnPhase) -> (&'static str, ColorRole) {
     match phase {
         ConnPhase::Connected => ("CONNECTED", ColorRole::VfoB),
@@ -648,6 +663,11 @@ pub fn atten_snap(db: u8) -> u8 {
 /// Human label for an `AP` audio-peaking-filter bandwidth (D12 `AP`).
 ///
 /// trace: FR-UI-POPUP-01
+/// Every label [`apf_width_label`] can return, for width reservation
+/// (`FR-UI-STABLE-01`). `150` is the widest; the unknown placeholder is the
+/// narrowest, so a disconnected app must not size the control from it.
+pub const APF_WIDTH_LABELS: [&str; 4] = ["30", "50", "150", UNKNOWN];
+
 pub fn apf_width_label(width: Option<u8>) -> &'static str {
     match width {
         Some(0) => "30",
@@ -2477,6 +2497,15 @@ mod rx_popup_tests {
         assert_eq!(apf_width_label(Some(0)), "30");
         assert_eq!(apf_width_label(Some(1)), "50");
         assert_eq!(apf_width_label(Some(2)), "150");
+        // The reservation list must cover every label, or the control resizes
+        // as the width changes (FR-UI-STABLE-01).
+        for w in [Some(0), Some(1), Some(2), Some(9), None] {
+            let label = apf_width_label(w);
+            assert!(
+                APF_WIDTH_LABELS.contains(&label),
+                "{w:?} renders {label:?}, missing from APF_WIDTH_LABELS"
+            );
+        }
         assert_eq!(apf_width_label(None), UNKNOWN);
         assert_eq!(apf_width_label(Some(9)), UNKNOWN, "out of range is unknown");
     }
@@ -2635,5 +2664,41 @@ mod on_air_tests {
         );
         assert!(on_air(true, false, None), "a local transmit still counts");
         assert!(on_air(false, true, None), "a local tune still counts");
+    }
+}
+
+#[cfg(test)]
+mod stable_label_set_tests {
+    use super::{conn_status, connect_button, ConnPhase, CONNECT_LABELS, CONN_STATUS_LABELS};
+
+    /// The reserved-width label sets must list *every* label their function
+    /// can return. A width is reserved from these lists, so a phase added
+    /// without extending them silently reintroduces the resizing the
+    /// requirement exists to prevent — and it would show up as a twitching
+    /// header, which is exactly the symptom nobody files a bug about.
+    /// trace: FR-UI-STABLE-01
+    #[test]
+    fn fr_ui_stable_01_label_sets_cover_every_phase() {
+        // Listed explicitly rather than iterated: adding a variant should
+        // break this line and make the author look at the lists.
+        let phases = [
+            ConnPhase::Disconnected,
+            ConnPhase::Connecting,
+            ConnPhase::Connected,
+        ];
+        for p in phases {
+            let (label, _) = connect_button(p);
+            assert!(
+                CONNECT_LABELS.contains(&label),
+                "{p:?} renders {label:?}, missing from CONNECT_LABELS"
+            );
+            let (status, _) = conn_status(p);
+            assert!(
+                CONN_STATUS_LABELS.contains(&status),
+                "{p:?} renders {status:?}, missing from CONN_STATUS_LABELS"
+            );
+        }
+        assert_eq!(CONNECT_LABELS.len(), phases.len(), "no unused reservations");
+        assert_eq!(CONN_STATUS_LABELS.len(), phases.len());
     }
 }
