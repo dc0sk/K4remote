@@ -1068,6 +1068,12 @@ pub fn set_power(n: u8) -> String {
 pub fn keys_transmitter(command: &str) -> bool {
     let cmd = command.trim();
     let cmd = cmd.strip_suffix(';').unwrap_or(cmd);
+    // D12: "Commands may use upper or lower case alphabetic characters." The
+    // radio honours `tx;` exactly as it honours `TX;`, so a gate that matched
+    // only uppercase was no gate at all for anyone typing into the raw-CAT
+    // console. Classify on an upper-cased *copy*; the caller sends the command
+    // unchanged, which matters because `KY` payload case is significant in PSK.
+    let cmd = &cmd.to_ascii_uppercase();
     // A query asks, it does not act.
     if cmd.ends_with('$') || cmd.is_empty() {
         return false;
@@ -1110,6 +1116,11 @@ pub fn keys_transmitter(command: &str) -> bool {
 pub fn stops_transmitter(command: &str) -> bool {
     let cmd = command.trim();
     let cmd = cmd.strip_suffix(';').unwrap_or(cmd);
+    // Case-insensitive for the same reason as `keys_transmitter`: a stop the
+    // classifier does not recognise leaves the session believing it is still
+    // on air.
+    let cmd = cmd.to_ascii_uppercase();
+    let cmd = cmd.as_str();
     // `DA0` stops every digital-audio action, which per D12 includes any it
     // started on the transmitter.
     matches!(cmd, "RX" | "TU0" | "PB0" | "DA0")

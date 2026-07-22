@@ -25,6 +25,13 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
 
 ### Fixed
 
+- **Transmit safety: the TX arm could be bypassed by typing a command in lower
+  case.** The K4 accepts `tx;` exactly as it accepts `TX;`, but the arm gate
+  recognised only upper case — so every transmit-capable command (`TX`, `TU`,
+  `KY`, `KZ`, `PB`, `SW`, `DA`) could be sent from the diagnostics console with
+  transmit disarmed. Commands are still sent exactly as typed; only the
+  safety check is now case-insensitive.
+
 - **Transmit safety: the `DA` (digital audio) commands are now behind the TX
   arm.** `DAPM` plays the last recorded voice message *through the
   transmitter*, and `DAMP` plays a stored one with an optional auto-repeat

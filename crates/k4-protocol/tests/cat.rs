@@ -643,3 +643,42 @@ fn fr_aud_rec_01_af_recorder_commands_encode() {
     assert_eq!(af_jump(AfJump::Session(0)), "DAPJ1;");
     assert_eq!(af_jump(AfJump::Session(99)), "DAPJ9;");
 }
+
+/// The arm gate must not be bypassable by typing the command in lower case.
+///
+/// D12: "Commands may use upper or lower case alphabetic characters. The only
+/// command that differentiates between the two is the CW/DATA text-send
+/// command (KY <text>), when used in PSK mode." So the radio honours `tx;`
+/// exactly as it honours `TX;` — but the classifier matched uppercase
+/// mnemonics only, leaving the diagnostics console's raw-CAT field an open
+/// route to the transmitter with the arm off.
+///
+/// Classification upper-cases a *copy* for matching; the command itself is
+/// sent unchanged, because `KY` payload case is significant in PSK.
+///
+/// trace: FR-TX-SAFE-03
+#[test]
+fn fr_tx_safe_03_the_gate_is_case_insensitive() {
+    use k4_protocol::cat::{keys_transmitter, stops_transmitter};
+    for cmd in [
+        "tx;",
+        "tu1;",
+        "sw16;",
+        "pb1;",
+        "ky hello;",
+        "kz0102;",
+        "damp1;",
+        "dapm00000;",
+        "Tx;",
+        "tU1;",
+        "dAmP1;",
+    ] {
+        assert!(keys_transmitter(cmd), "{cmd} must be gated by the TX arm");
+    }
+    // Stopping must be recognised in either case too — a stop that is not
+    // understood is a stop that does not clear the on-air belief.
+    for cmd in ["rx;", "tu0;", "pb0;", "da0;", "Rx;"] {
+        assert!(stops_transmitter(cmd), "{cmd} must count as a stop");
+        assert!(!keys_transmitter(cmd), "{cmd} must not be gated");
+    }
+}
