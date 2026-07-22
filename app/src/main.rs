@@ -3619,7 +3619,16 @@ impl App {
                     .step(1u8)
                     .width(Length::Fixed(120.0)),
             ))
-            .push(Text::new(format!("{mon}")).size(10).color(rxv));
+            // Reserved for "100": the DVR buttons now sit immediately after
+            // this, so an extra digit here would move them (FR-UI-STABLE-01).
+            // While this readout was the last thing in the row it could vary
+            // freely, which is why it was left alone in the earlier sweep.
+            .push(
+                Text::new(format!("{mon}"))
+                    .size(10)
+                    .width(Length::Fixed(ui::stable_label_width(&["100"], 10.0, 4.0)))
+                    .color(rxv),
+            );
         // Compact ± stepper for the TX mode strip.
         let step_ctl = |label: &'static str,
                         val: String,
@@ -3704,10 +3713,13 @@ impl App {
                 .push(dvr_full())
                 .into()
         };
-        let (mon_row, action_row): (Element<'_, Message>, Element<'_, Message>) = if adaptive {
+        // `levels` is the *mode-specific* part only — MON is universal and is
+        // emitted separately, so the action group can sit directly after it.
+        let extras = || Row::new().spacing(14).align_y(Alignment::Center);
+        let (levels, action_row): (Element<'_, Message>, Element<'_, Message>) = if adaptive {
             match tx_class {
                 ui::ModeClass::Cw => (
-                    mon_base
+                    extras()
                         .push(tipped(
                             self.tips_on(),
                             self.hover,
@@ -3739,7 +3751,7 @@ impl App {
                     ),
                 ),
                 ui::ModeClass::Voice | ui::ModeClass::Am => (
-                    mon_base
+                    extras()
                         .push(vox_slider(
                             "VOX G",
                             self.vox_gain,
@@ -3757,7 +3769,7 @@ impl App {
                     voice_dvr(),
                 ),
                 ui::ModeClass::Data => (
-                    mon_base
+                    extras()
                         .push(vox_slider(
                             "VOX G",
                             self.vox_gain,
@@ -3767,11 +3779,11 @@ impl App {
                         .into(),
                     Row::new().height(Length::Fixed(26.0)).into(),
                 ),
-                ui::ModeClass::Fm => (mon_base.into(), voice_dvr()),
+                ui::ModeClass::Fm => (extras().into(), voice_dvr()),
             }
         } else {
             (
-                mon_base
+                extras()
                     .push(vox_slider(
                         "VOX G",
                         self.vox_gain,
@@ -3801,8 +3813,17 @@ impl App {
                 Row::new()
                     .spacing(16)
                     .align_y(Alignment::Center)
-                    .push(mon_row)
-                    .push(action_row),
+                    // MON, then the action group, then the mode-specific
+                    // levels. The action group used to come last, so the DVR
+                    // buttons sat at a different x in every mode — four level
+                    // controls ahead of them in voice, one in DATA, none in FM
+                    // — and moved again as MON's own readout gained a digit.
+                    // MON is the one control present in every mode, so placing
+                    // them right after it is the only position that holds
+                    // still (FR-UI-STABLE-01).
+                    .push(mon_base)
+                    .push(action_row)
+                    .push(levels),
             )
             .into()
     }
