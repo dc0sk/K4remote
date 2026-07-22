@@ -224,6 +224,10 @@ pub struct UiSnapshot {
     /// A tune carrier is on air. Separate from `transmitting`, which tracks the
     /// mic path (FR-TX-TUNE-01).
     pub tuning: bool,
+    /// Number of transmit-capable commands the arm gate has refused. The UI
+    /// watches this for changes and flashes ARM TX (FR-TX-SAFE-06); a counter
+    /// rather than a flag so two refusals in quick succession are distinct.
+    pub tx_refusals: u64,
     /// Digital-audio engine status (`DA`) — the AF recorder and the DVR share
     /// it, so the UI must decide which of the two a given state belongs to.
     pub digital_audio: Option<k4_protocol::state::DigitalAudio>,
@@ -379,6 +383,8 @@ struct WorkerState {
     audio_dropped: u64,
     audio_suppressed: u64,
     audio_silence_reported: bool,
+    /// Running count of arm-gate refusals, published to the UI.
+    tx_refusals: u64,
     /// When the digital-audio engine (`DA`) was last queried — see
     /// [`poll_digital_audio`].
     last_da_poll: Instant,
@@ -463,6 +469,7 @@ impl WorkerState {
             perf_since: Instant::now(),
             last_publish: Instant::now(),
             last_da_poll: Instant::now(),
+            tx_refusals: 0,
             audio_peak: [0.0, 0.0],
             audio_peak_reported: 0,
             af_zero_reported: false,
@@ -623,11 +630,14 @@ fn poll_digital_audio(ws: &mut WorkerState) {
 fn send_cat(ws: &mut WorkerState, cmd: &str) {
     if let Some(s) = ws.session.as_mut() {
         match s.send(cmd) {
-            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => ws.diag.log(
-                Level::Warn,
-                "tx",
-                &format!("{cmd} refused: transmit is disarmed (ARM TX first)"),
-            ),
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                ws.tx_refusals += 1;
+                ws.diag.log(
+                    Level::Warn,
+                    "tx",
+                    &format!("{cmd} refused: transmit is disarmed (ARM TX first)"),
+                );
+            }
             _ => {}
         }
     }
@@ -651,6 +661,7 @@ fn publish(snapshot: &Arc<Mutex<UiSnapshot>>, ws: &mut WorkerState) {
         s.transmitting = session.is_transmitting();
         s.tx_armed = session.is_tx_armed();
         s.tuning = session.is_tuning() || session.is_raw_tx();
+        s.tx_refusals = ws.tx_refusals;
         s.digital_audio = st.digital_audio;
         s.vfo_a_hz = st.vfo_a_hz;
         s.vfo_b_hz = st.vfo_b_hz;
@@ -1241,11 +1252,24 @@ fn handle_cmd(cmd: WorkerCmd, ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnaps
         }
         WorkerCmd::Key(key) => {
             if let Some(s) = ws.session.as_mut() {
-                let _ = if key {
-                    s.begin_tx().map(|_| ())
+                if key {
+                    // `begin_tx` returns whether it actually keyed. The result
+                    // was discarded, so pressing PTT with the arm off did
+                    // nothing at all — no log line and no flash. The hotkey
+                    // route had its own local flash; the button had nothing
+                    // (FR-TX-SAFE-06).
+                    match s.begin_tx() {
+                        Ok(false) => {
+                            ws.tx_refusals += 1;
+                            ws.diag
+                                .log(Level::Warn, "tx", "PTT refused: transmit is not armed");
+                        }
+                        Ok(true) => {}
+                        Err(e) => ws.diag.log(Level::Warn, "tx", &format!("PTT failed: {e}")),
+                    }
                 } else {
-                    s.end_tx()
-                };
+                    let _ = s.end_tx();
+                }
             }
         }
         WorkerCmd::EmergencyStop => {
@@ -1259,8 +1283,9 @@ fn handle_cmd(cmd: WorkerCmd, ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnaps
                     // A refusal is silent on the wire, so say so in the console
                     // rather than leaving the operator wondering (FR-TX-SAFE-03).
                     Ok(false) => {
+                        ws.tx_refusals += 1;
                         ws.diag
-                            .log(Level::Warn, "tx", "tune refused: transmit is not armed")
+                            .log(Level::Warn, "tx", "tune refused: transmit is not armed");
                     }
                     Ok(true) => ws
                         .diag
@@ -1286,11 +1311,14 @@ fn handle_cmd(cmd: WorkerCmd, ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnaps
         WorkerCmd::SendRawCat(cmd) => {
             if let Some(s) = ws.session.as_mut() {
                 match s.send(&cmd) {
-                    Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => ws.diag.log(
-                        Level::Warn,
-                        "tx",
-                        &format!("{cmd} refused: transmit is disarmed (ARM TX first)"),
-                    ),
+                    Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                        ws.tx_refusals += 1;
+                        ws.diag.log(
+                            Level::Warn,
+                            "tx",
+                            &format!("{cmd} refused: transmit is disarmed (ARM TX first)"),
+                        );
+                    }
                     _ => ws.diag.log(Level::Info, "tx", &cmd),
                 }
             }
@@ -1317,11 +1345,15 @@ fn handle_cmd(cmd: WorkerCmd, ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnaps
                 // nothing (FR-TX-SAFE-03).
                 match s.send(&cmd) {
                     Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
-                        ws.diag.log(
-                            Level::Warn,
-                            "tx",
-                            &format!("{cmd} refused: transmit is disarmed (ARM TX first)"),
-                        );
+                        {
+                            ws.tx_refusals += 1;
+
+                            ws.diag.log(
+                                Level::Warn,
+                                "tx",
+                                &format!("{cmd} refused: transmit is disarmed (ARM TX first)"),
+                            );
+                        };
                         return;
                     }
                     _ => {}
@@ -1334,11 +1366,14 @@ fn handle_cmd(cmd: WorkerCmd, ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnaps
                 // A refused command must not be folded into local state, or
                 // the UI would show a change the radio never made.
                 match s.send(&cmd) {
-                    Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => ws.diag.log(
-                        Level::Warn,
-                        "tx",
-                        &format!("{cmd} refused: transmit is disarmed (ARM TX first)"),
-                    ),
+                    Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                        ws.tx_refusals += 1;
+                        ws.diag.log(
+                            Level::Warn,
+                            "tx",
+                            &format!("{cmd} refused: transmit is disarmed (ARM TX first)"),
+                        );
+                    }
                     _ => {
                         s.apply_local(&cmd);
                         ws.diag.log(Level::Debug, "tx", &cmd);

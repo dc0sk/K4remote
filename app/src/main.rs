@@ -251,6 +251,9 @@ struct App {
     // old value". Held until the radio confirms, expired if it never does.
     /// When a drag-driven CAT command was last sent — see `send_dragged`.
     last_drag_send: Instant,
+    /// Refusal count last seen from the worker, so a *new* refusal can be
+    /// distinguished from the running total (FR-TX-SAFE-06).
+    last_tx_refusals: u64,
     opt_atten: ui::OptLevel,
     // Optimistic overrides for the controls the operator drags or clicks.
     //
@@ -943,6 +946,7 @@ impl App {
             nr_level: 5,
             atten_db: 0,
             last_drag_send: Instant::now(),
+            last_tx_refusals: 0,
             opt_atten: ui::OptLevel::default(),
             opt_af: ui::OptLevel::default(),
             opt_rf: ui::OptLevel::default(),
@@ -2024,7 +2028,9 @@ impl App {
                 } else if hotkey_string(&key, mods) == self.ptt_hotkey && !self.hotkey_down {
                     self.hotkey_down = true; // guard against key-repeat
                     if !self.ui.tx_armed {
-                        self.arm_flash = 18; // blink ARM ~3× (must arm first)
+                        // Local fast path: flash without waiting for the gate's
+                        // refusal to come back through the worker.
+                        self.arm_flash = ui::ARM_FLASH_TICKS;
                     } else if self.ptt_toggle {
                         // Toggle mode: press flips TX (like the PTT button).
                         self.send(WorkerCmd::Key(!self.ui.transmitting));
@@ -2081,7 +2087,7 @@ impl App {
                 // refused, matching the PTT-while-disarmed feedback
                 // (FR-TX-PTT-01, FR-TX-SAFE-03).
                 if action.transmits() && !self.ui.tx_armed {
-                    self.arm_flash = 18; // blink ARM ~3x (must arm first)
+                    self.arm_flash = ui::ARM_FLASH_TICKS;
                 } else {
                     self.send(WorkerCmd::Tune(action));
                 }
@@ -2549,6 +2555,14 @@ impl App {
                 });
                 self.opt_apf_width
                     .reconcile(if sub { r.sub_apf_width } else { r.apf_width });
+                // A refusal at the arm gate flashes ARM TX, so the operator is
+                // told on the control they pressed rather than only in the
+                // diagnostics window — which is a different window, usually
+                // closed (FR-TX-SAFE-06).
+                if self.ui.tx_refusals != self.last_tx_refusals {
+                    self.last_tx_refusals = self.ui.tx_refusals;
+                    self.arm_flash = ui::ARM_FLASH_TICKS;
+                }
                 // Expire the momentary switch-tap highlight.
                 if self.switch_flash_ticks > 0 {
                     self.switch_flash_ticks -= 1;
@@ -6302,7 +6316,7 @@ impl App {
         // that fill amber while engaged; a red emergency stop.
         // Blink the ARM button (~3×) when the PTT hotkey is pressed while
         // disarmed, to cue the operator to arm first.
-        let arm_blink = self.arm_flash > 0 && (self.arm_flash / 3) % 2 == 1;
+        let arm_blink = ui::arm_flash_lit(self.arm_flash);
         let arm_kind = if arm_blink {
             BtnKind::Danger
         } else if self.ui.tx_armed {

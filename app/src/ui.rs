@@ -1654,6 +1654,24 @@ pub fn af_recorder(da: Option<DigitalAudio>) -> AfRecorder {
     }
 }
 
+/// How many UI ticks the ARM TX control flashes after refusing an action
+/// (`FR-TX-SAFE-06`), and whether it is lit on a given tick.
+///
+/// A *flash*, not a steady highlight: the control already has a resting lit
+/// state for "armed", so holding it lit would say the opposite of what
+/// happened. Alternating makes it unmistakably an alarm.
+pub const ARM_FLASH_TICKS: u8 = 18;
+
+/// Whether the ARM TX control should be drawn lit on this tick of the flash.
+///
+/// `remaining` counts down from [`ARM_FLASH_TICKS`] to 0; 0 means not flashing.
+/// Three ticks on, three off, twice over: it starts lit so the refusal is seen
+/// at once, and **ends dark** so the control settles back to its resting
+/// appearance rather than snapping out of a lit phase.
+pub fn arm_flash_lit(remaining: u8) -> bool {
+    remaining != 0 && (remaining - 1) / 3 % 2 == 1
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3061,5 +3079,32 @@ mod opt_override_tests {
         o.reconcile(Some(2_400));
         assert_eq!(o.or(Some(2_400)), Some(2_400));
         assert!(!o.is_pending());
+    }
+}
+
+#[cfg(test)]
+mod arm_flash_tests {
+    use super::{arm_flash_lit, ARM_FLASH_TICKS};
+
+    /// The refusal flash alternates and always ends dark, so the control
+    /// returns to its resting appearance rather than sticking lit.
+    ///
+    /// It must alternate rather than hold: ARM TX has a resting *lit* state
+    /// meaning "armed", so a steady highlight on refusal would assert the
+    /// opposite of what just happened.
+    /// trace: FR-TX-SAFE-06
+    #[test]
+    fn fr_tx_safe_06_refusal_flash_alternates_and_ends_dark() {
+        assert!(!arm_flash_lit(0), "not flashing when the counter is spent");
+
+        let phases: Vec<bool> = (1..=ARM_FLASH_TICKS).rev().map(arm_flash_lit).collect();
+        assert!(phases[0], "starts lit, so the refusal is seen immediately");
+        assert!(
+            !phases[phases.len() - 1],
+            "ends dark, so the control settles back"
+        );
+        // At least two transitions — one on/off change is a glitch, not a flash.
+        let changes = phases.windows(2).filter(|w| w[0] != w[1]).count();
+        assert!(changes >= 2, "must actually blink: {phases:?}");
     }
 }

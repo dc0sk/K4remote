@@ -14,6 +14,17 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
 
 ### Fixed
 
+- **ARM TX now flashes whenever it refuses an action.** Pressing a control that
+  would transmit while the arm is off used to be answered only in the
+  diagnostics window — a different window, usually closed — so the interlock
+  worked but looked broken. Every route is covered now: PTT, TUNE, XMIT and the
+  other switch emulations, DVR playback, text send, and raw console commands.
+
+  The **PTT button** in particular did nothing at all when disarmed: not even a
+  log line. Only the PTT keyboard shortcut gave feedback.
+
+### Fixed
+
 - **The NB chip no longer overflows its own box.** It read `On · WIDE`, which
   did not fit and wrapped to a second line, making that chip taller than the
   rest of the row. It now shows just the filter — `WIDE`, `NAR`, `NONE` —
