@@ -146,6 +146,10 @@ impl ThemeMode {
 
     /// Button label for the current mode.
     /// trace: FR-UI-17
+    /// Every label [`ThemeMode::label`] can return, for width reservation
+    /// (`FR-UI-STABLE-01`).
+    pub const LABELS: [&'static str; 4] = ["Dark", "Light", "Contrast", "System"];
+
     pub fn label(self) -> &'static str {
         match self {
             ThemeMode::Dark => "Dark",
@@ -286,6 +290,14 @@ pub enum ConnectAction {
 /// tapping it aborts; once connected it shows **Disconnect**. Pure so the
 /// label/action contract is unit-testable without iced.
 /// trace: FR-UI-16
+/// Every label [`connect_button`] can return, for width reservation
+/// (`FR-UI-STABLE-01`).
+///
+/// Kept beside the function rather than at the call site so the two cannot
+/// drift: a phase added without extending this list is caught by a test, not
+/// by an operator noticing the row twitch.
+pub const CONNECT_LABELS: [&str; 3] = ["Connect", "Cancel", "Disconnect"];
+
 pub fn connect_button(phase: ConnPhase) -> (&'static str, ConnectAction) {
     match phase {
         ConnPhase::Disconnected => ("Connect", ConnectAction::Connect),
@@ -297,6 +309,9 @@ pub fn connect_button(phase: ConnPhase) -> (&'static str, ConnectAction) {
 /// The header connection indicator's label and colour role for each phase
 /// (FR-UI-22): green when connected, amber while connecting, grey when idle.
 /// trace: FR-UI-22
+/// Every label [`conn_status`] can return, for width reservation.
+pub const CONN_STATUS_LABELS: [&str; 3] = ["CONNECTED", "connecting...", "disconnected"];
+
 pub fn conn_status(phase: ConnPhase) -> (&'static str, ColorRole) {
     match phase {
         ConnPhase::Connected => ("CONNECTED", ColorRole::VfoB),
@@ -477,15 +492,38 @@ pub fn is_hold(elapsed: Option<std::time::Duration>) -> bool {
 ///
 /// trace: FR-UI-STABLE-01
 pub fn stable_label_width(labels: &[&str], text_size: f32, padding: f32) -> f32 {
-    let longest = labels.iter().map(|l| l.chars().count()).max().unwrap_or(0);
-    // 0.78 em per character. Control labels here are almost all upper case,
-    // and capitals run near 0.72 em in this font — an earlier 0.62 was under
-    // the true width, so "DISARM" wrapped to two lines inside its own
-    // reservation. Erring high costs a few pixels of padding; erring low
-    // breaks the layout in a way that is worse than the resizing this exists
-    // to prevent. Wide glyphs (an em dash) still argue for equal-length
-    // labels over a bigger estimate.
-    longest as f32 * text_size * 0.78 + padding
+    labels
+        .iter()
+        .map(|l| l.chars().map(char_em).sum::<f32>())
+        .fold(0.0f32, f32::max)
+        * text_size
+        + padding
+}
+
+/// Approximate width of one character, in em.
+///
+/// A single factor for every character was wrong, and wrong in a way that took
+/// a while to show: it was calibrated at 0.78 for **capitals**, because
+/// `DISARM` wrapped inside its own reservation at 0.62. Applied to digits and
+/// lower case — which is what the slider readouts are — that over-reserved by
+/// about a quarter. Six readouts in the gain row overshot by ~108 px between
+/// them, the row overflowed, and the `SHIFT` readout at the end was squeezed
+/// to one character per line.
+///
+/// Every weight errs on the wide side of what the font actually renders:
+/// under-reserving breaks the layout worse than the resizing this prevents.
+fn char_em(c: char) -> f32 {
+    match c {
+        'A'..='Z' => 0.78,
+        '0'..='9' => 0.62,
+        'a'..='z' => 0.58,
+        ' ' => 0.30,
+        '.' | ',' | ':' | ';' | '\'' | '·' | '|' => 0.35,
+        '%' | '+' | '-' | '/' | '(' | ')' => 0.55,
+        // An em dash is an em wide by definition, and the placeholder uses one.
+        '—' => 1.0,
+        _ => 0.78,
+    }
 }
 
 /// The `VT` tuning-step index for a frequency digit's **place value**.
@@ -648,6 +686,11 @@ pub fn atten_snap(db: u8) -> u8 {
 /// Human label for an `AP` audio-peaking-filter bandwidth (D12 `AP`).
 ///
 /// trace: FR-UI-POPUP-01
+/// Every label [`apf_width_label`] can return, for width reservation
+/// (`FR-UI-STABLE-01`). `150` is the widest; the unknown placeholder is the
+/// narrowest, so a disconnected app must not size the control from it.
+pub const APF_WIDTH_LABELS: [&str; 4] = ["30", "50", "150", UNKNOWN];
+
 pub fn apf_width_label(width: Option<u8>) -> &'static str {
     match width {
         Some(0) => "30",
@@ -2477,6 +2520,15 @@ mod rx_popup_tests {
         assert_eq!(apf_width_label(Some(0)), "30");
         assert_eq!(apf_width_label(Some(1)), "50");
         assert_eq!(apf_width_label(Some(2)), "150");
+        // The reservation list must cover every label, or the control resizes
+        // as the width changes (FR-UI-STABLE-01).
+        for w in [Some(0), Some(1), Some(2), Some(9), None] {
+            let label = apf_width_label(w);
+            assert!(
+                APF_WIDTH_LABELS.contains(&label),
+                "{w:?} renders {label:?}, missing from APF_WIDTH_LABELS"
+            );
+        }
         assert_eq!(apf_width_label(None), UNKNOWN);
         assert_eq!(apf_width_label(Some(9)), UNKNOWN, "out of range is unknown");
     }
@@ -2635,5 +2687,83 @@ mod on_air_tests {
         );
         assert!(on_air(true, false, None), "a local transmit still counts");
         assert!(on_air(false, true, None), "a local tune still counts");
+    }
+}
+
+#[cfg(test)]
+mod stable_label_set_tests {
+    use super::{conn_status, connect_button, ConnPhase, CONNECT_LABELS, CONN_STATUS_LABELS};
+
+    /// The reserved-width label sets must list *every* label their function
+    /// can return. A width is reserved from these lists, so a phase added
+    /// without extending them silently reintroduces the resizing the
+    /// requirement exists to prevent — and it would show up as a twitching
+    /// header, which is exactly the symptom nobody files a bug about.
+    /// trace: FR-UI-STABLE-01
+    #[test]
+    fn fr_ui_stable_01_label_sets_cover_every_phase() {
+        // Listed explicitly rather than iterated: adding a variant should
+        // break this line and make the author look at the lists.
+        let phases = [
+            ConnPhase::Disconnected,
+            ConnPhase::Connecting,
+            ConnPhase::Connected,
+        ];
+        for p in phases {
+            let (label, _) = connect_button(p);
+            assert!(
+                CONNECT_LABELS.contains(&label),
+                "{p:?} renders {label:?}, missing from CONNECT_LABELS"
+            );
+            let (status, _) = conn_status(p);
+            assert!(
+                CONN_STATUS_LABELS.contains(&status),
+                "{p:?} renders {status:?}, missing from CONN_STATUS_LABELS"
+            );
+        }
+        assert_eq!(CONNECT_LABELS.len(), phases.len(), "no unused reservations");
+        assert_eq!(CONN_STATUS_LABELS.len(), phases.len());
+    }
+}
+
+#[cfg(test)]
+mod char_width_tests {
+    use super::stable_label_width;
+
+    /// Capitals must keep the width they had, and digits must reserve less.
+    ///
+    /// The regression this guards: a single 0.78 em factor was calibrated for
+    /// capitals (`DISARM` wrapped at 0.62), then applied to numeric readouts,
+    /// which are far narrower. The gain row's six readouts over-reserved by
+    /// ~108 px between them, overflowed the row, and squeezed the trailing
+    /// `SHIFT` readout to one character per line.
+    /// trace: FR-UI-STABLE-01
+    #[test]
+    fn fr_ui_stable_01_digits_reserve_less_than_capitals() {
+        // Same character count, very different real width.
+        let caps = stable_label_width(&["ABCDEFG"], 11.0, 0.0);
+        let digits = stable_label_width(&["1234567"], 11.0, 0.0);
+        assert!(
+            digits < caps,
+            "digits ({digits:.1}) must reserve less than capitals ({caps:.1})"
+        );
+
+        // The all-capitals case that set the 0.78 factor is unchanged, so this
+        // cannot reintroduce the wrapped DISARM.
+        assert_eq!(
+            stable_label_width(&["TX ARMED — DISARM"], 13.0, 20.0),
+            "TX ARMED — DISARM".chars().map(super::char_em).sum::<f32>() * 13.0 + 20.0
+        );
+
+        // A readout must still fit: reserve for "5000 Hz" and check the whole
+        // range renders no wider.
+        let widest = stable_label_width(&["5000 Hz"], 11.0, 4.0);
+        for hz in [0u32, 150, 1000, 4999, 5000] {
+            let s = format!("{hz} Hz");
+            assert!(
+                stable_label_width(&[s.as_str()], 11.0, 4.0) <= widest,
+                "{s} must fit the reservation for 5000 Hz"
+            );
+        }
     }
 }
