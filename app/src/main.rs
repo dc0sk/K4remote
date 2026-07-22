@@ -662,6 +662,12 @@ enum Message {
     UpdateChecked(update::UpdateStatus),
     // Settings dialog + peer cache (FR-UI-23, FR-CFG-04).
     ToggleSettings,
+    /// AF recorder (FR-AUD-REC-01): the radio's own 90 s receive-audio buffer.
+    AfRecord,
+    AfPlay,
+    AfStop,
+    AfClear,
+    AfJump(k4_protocol::cat::AfJump),
     UseMasterToggled(bool),
     MasterPasswordChanged(String),
     UnlockMaster,
@@ -2132,6 +2138,11 @@ impl App {
                 );
             }
             Message::UpdateChecked(status) => self.update_status = status,
+            Message::AfRecord => self.send(WorkerCmd::AfRecord),
+            Message::AfPlay => self.send(WorkerCmd::AfPlay),
+            Message::AfStop => self.send(WorkerCmd::AfStop),
+            Message::AfClear => self.send(WorkerCmd::AfClear),
+            Message::AfJump(t) => self.send(WorkerCmd::AfJump(t)),
             Message::ToggleSettings => self.settings_open = !self.settings_open,
             Message::UseMasterToggled(v) => self.use_master = v,
             Message::MasterPasswordChanged(v) => self.master_password = v,
@@ -6249,9 +6260,17 @@ impl App {
             Some(active) => self.menu_screen(active),
             None => band_inner,
         };
+        // The AF recorder sits with the mini-pan: both are full-width strips
+        // that belong to the radio as a whole rather than to one receiver, and
+        // both are always present so the layout never shifts (FR-UI-STABLE-01).
+        let af_frame = Container::new(self.af_recorder_strip())
+            .style(pane_style(false))
+            .padding([4, 8])
+            .width(Length::Fill);
         let panadapter_slot: Element<Message> = Column::new()
             .spacing(10)
             .push(mini_frame)
+            .push(af_frame)
             .push(below)
             .into();
 
@@ -7237,6 +7256,129 @@ impl App {
         )
         .on_press(Message::CloseRxPopup)
         .into()
+    }
+
+    /// The AF-recorder strip (FR-AUD-REC-01): remote control of the **radio's
+    /// own** 90-second receive-audio buffer.
+    ///
+    /// Not a client-side recorder. The K4 already has this behind its AF
+    /// REC/PLAY switches, with numbered sessions and its own buffer; a second
+    /// recorder in the app would be a different 90 seconds from the one the
+    /// operator's front panel knows about.
+    ///
+    /// The buttons stand down while the DVR has the engine — the two share it,
+    /// and a REC button lit because a *voice message* is going out would be
+    /// saying the opposite of what is true.
+    fn af_recorder_strip(&self) -> Element<'_, Message> {
+        let dim = role_color(ui::ColorRole::Inactive);
+        let st = ui::af_recorder(self.ui.digital_audio);
+        let live = self.ui.connected;
+        let btn = |label: &'static str, kind: BtnKind, msg: Option<Message>| -> Element<Message> {
+            let b = Button::new(Text::new(label).size(11))
+                .style(btn_style(kind))
+                .padding([4, 9]);
+            match msg {
+                Some(m) => b.on_press(m).into(),
+                None => b.into(),
+            }
+        };
+        // Each transport control is its own toggle: pressing the lit one stops.
+        let rec = btn(
+            "AF REC",
+            if st.recording {
+                BtnKind::Danger
+            } else {
+                BtnKind::Plain
+            },
+            (live && !st.busy_elsewhere).then_some(if st.recording {
+                Message::AfStop
+            } else {
+                Message::AfRecord
+            }),
+        );
+        let play = btn(
+            "PLAY",
+            if st.playing {
+                BtnKind::Active
+            } else {
+                BtnKind::Plain
+            },
+            (live && !st.busy_elsewhere).then_some(if st.playing {
+                Message::AfStop
+            } else {
+                Message::AfPlay
+            }),
+        );
+        // Seeking only means anything with something playing.
+        let seekable = live && st.playing;
+        let jump = |label: &'static str, target: k4_protocol::cat::AfJump| {
+            btn(
+                label,
+                BtnKind::Plain,
+                seekable.then_some(Message::AfJump(target)),
+            )
+        };
+        use k4_protocol::cat::AfJump;
+        // Position reads as `0:12 / 1:30`, reserving the width of its longest
+        // form so the controls beside it hold still while it counts
+        // (FR-UI-STABLE-01).
+        let pos = match st.progress {
+            Some((pos, max)) => format!("{} / {}", ui::format_pos(pos), ui::format_pos(max)),
+            None => "—".to_string(),
+        };
+        let session = match st.session {
+            Some(n) => format!("REC {n}"),
+            None => String::new(),
+        };
+        let status: Element<Message> = if st.busy_elsewhere {
+            Text::new("voice message in progress")
+                .size(11)
+                .color(role_color(ui::ColorRole::Caution))
+                .into()
+        } else if !live {
+            Text::new("connect to use the radio's recorder")
+                .size(11)
+                .color(dim)
+                .into()
+        } else {
+            Text::new(session)
+                .size(11)
+                .width(Length::Fixed(ui::stable_label_width(&["REC 9"], 11.0, 4.0)))
+                .color(dim)
+                .into()
+        };
+        tipped(
+            self.tips_on(),
+            self.hover,
+            "af.recorder",
+            Row::new()
+                .spacing(6)
+                .align_y(Alignment::Center)
+                .push(Text::new("AF RECORDER").size(11).color(dim))
+                .push(rec)
+                .push(play)
+                .push(jump("«5s", AfJump::Millis(-5_000)))
+                .push(jump("5s»", AfJump::Millis(5_000)))
+                .push(jump("PREV", AfJump::PrevSession))
+                .push(jump("NEXT", AfJump::NextSession))
+                .push(
+                    Text::new(pos)
+                        .size(11)
+                        .width(Length::Fixed(ui::stable_label_width(
+                            &["0:00 / 1:30"],
+                            11.0,
+                            4.0,
+                        )))
+                        .color(role_color(ui::ColorRole::RxValue)),
+                )
+                .push(status)
+                .push(horizontal_space())
+                .push(btn(
+                    "CLEAR",
+                    BtnKind::Plain,
+                    (live && !st.busy_elsewhere && !st.recording).then_some(Message::AfClear),
+                )),
+        )
     }
 
     /// The About overlay (FR-UI-18): author, license, and project URL, each on

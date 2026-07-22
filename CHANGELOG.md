@@ -49,6 +49,37 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
   selector, SHFT/HI-LO toggle, APF width, RIT/XIT offset, S-meter reading and
   the settings toggles all keep one width.
 
+### Added
+
+- **AF recorder.** A strip below the mini-pan drives the radio's own
+  90-second receive-audio recorder — the same buffer behind the K4's AF
+  REC/PLAY switches: record, play back, jump five seconds either way, step
+  between recording sessions, and clear.
+
+  The recordings live **in the radio**, not in this app, so they are the same
+  ones the front panel sees. While a DVR voice message is recording or
+  transmitting the AF controls go inactive, since the two share one engine.
+
+### Fixed
+
+- **Transmit safety: the TX arm could be bypassed by typing a command in lower
+  case.** The K4 accepts `tx;` exactly as it accepts `TX;`, but the arm gate
+  recognised only upper case — so every transmit-capable command (`TX`, `TU`,
+  `KY`, `KZ`, `PB`, `SW`, `DA`) could be sent from the diagnostics console with
+  transmit disarmed. Commands are still sent exactly as typed; only the
+  safety check is now case-insensitive.
+
+- **Transmit safety: the `DA` (digital audio) commands are now behind the TX
+  arm.** `DAPM` plays the last recorded voice message *through the
+  transmitter*, and `DAMP` plays a stored one with an optional auto-repeat
+  interval — so it re-keys by itself. Neither was recognised as
+  transmit-capable, and both could be sent from the diagnostics console's
+  raw-CAT field with TX disarmed.
+
+  **Emergency stop now also sends `DA0;`.** Without it, stopping an
+  auto-repeating voice message dropped transmit and then let the radio go back
+  on air a moment later.
+
 ## [0.6.0] — 2026-07-21
 
 ### Added
