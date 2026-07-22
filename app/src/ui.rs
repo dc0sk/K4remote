@@ -542,6 +542,79 @@ fn char_em(c: char) -> f32 {
     }
 }
 
+/// Most memories the bank will hold (`FR-MEM-01`).
+///
+/// A bound rather than a policy: the list is written to the config file on
+/// every change and scrolled in a window, so it should not grow without limit
+/// from an operator leaning on the store button.
+pub const MAX_MEMORIES: usize = 64;
+
+/// Why the current VFO cannot be stored, or `None` if it can.
+///
+/// A store button that quietly does nothing reads as a broken app, so the
+/// window says which of the two reasons applies: the bank is full, or there is
+/// no frequency to capture yet (nothing is connected).
+pub fn store_blocked(count: usize, has_freq: bool) -> Option<String> {
+    if count >= MAX_MEMORIES {
+        Some(format!("bank full ({MAX_MEMORIES} max)"))
+    } else if !has_freq {
+        Some("no frequency yet — connect first".to_string())
+    } else {
+        None
+    }
+}
+
+/// Add a memory, returning `false` if it was not stored.
+///
+/// Refuses an exact duplicate — same frequency *and* mode — because storing
+/// the VFO twice is the easy accident, and a bank full of the same entry is
+/// worse than a refusal. A different mode on the same frequency is a genuine
+/// second entry (the same net on CW and on SSB), so that is kept.
+///
+/// trace: FR-MEM-01
+pub fn store_memory(bank: &mut Vec<k4_config::Memory>, entry: k4_config::Memory) -> bool {
+    if bank.len() >= MAX_MEMORIES {
+        return false;
+    }
+    if bank
+        .iter()
+        .any(|m| m.hz == entry.hz && m.mode == entry.mode)
+    {
+        return false;
+    }
+    bank.push(entry);
+    true
+}
+
+/// Remove the memory at `index`, if it exists. Out-of-range is ignored rather
+/// than panicking: the list can change under a click.
+///
+/// trace: FR-MEM-01
+pub fn delete_memory(bank: &mut Vec<k4_config::Memory>, index: usize) -> bool {
+    if index < bank.len() {
+        bank.remove(index);
+        true
+    } else {
+        false
+    }
+}
+
+/// How a memory reads in the list: its name if it has one, else its frequency.
+///
+/// An unnamed memory is the common case — stored in a hurry off the VFO — so
+/// it must still be identifiable.
+///
+/// trace: FR-MEM-01
+pub fn memory_label(entry: &k4_config::Memory) -> String {
+    let mhz = format!("{:.4}", entry.hz as f64 / 1_000_000.0);
+    match (entry.name.trim(), entry.mode.as_deref()) {
+        ("", Some(mode)) => format!("{mhz} {mode}"),
+        ("", None) => mhz,
+        (name, Some(mode)) => format!("{name} — {mhz} {mode}"),
+        (name, None) => format!("{name} — {mhz}"),
+    }
+}
+
 /// The `VT` tuning-step index for a frequency digit's **place value**.
 ///
 /// The K4 numbers its tuning rates 0–5 for 1 Hz, 10 Hz, 100 Hz, 1 kHz, 10 kHz
@@ -561,6 +634,28 @@ pub fn tune_step_index(place: u64) -> Option<u8> {
         return None;
     }
     (index <= 5).then_some(index as u8)
+}
+
+/// The `MD` digit for a mode as the radio names it — the inverse of the
+/// labels shown on the mode buttons.
+///
+/// Needed because a stored memory keeps the mode's *label* (so it reads
+/// sensibly in the list and survives a config file being edited by hand),
+/// while recalling it needs the digit.
+///
+/// trace: FR-MEM-01, FR-MODE-01
+pub fn mode_digit(label: &str) -> Option<u8> {
+    match label {
+        "LSB" => Some(1),
+        "USB" => Some(2),
+        "CW" => Some(3),
+        "FM" => Some(4),
+        "AM" => Some(5),
+        "DATA" => Some(6),
+        "CW-R" => Some(7),
+        "DATA-R" => Some(9),
+        _ => None,
+    }
 }
 
 /// The **alternate** of a mode: its reverse or opposite-sideband partner, as
@@ -2279,6 +2374,158 @@ mod stable_width_tests {
     #[test]
     fn fr_ui_stable_01_empty_label_set_is_safe() {
         assert_eq!(stable_label_width(&[], 12.0, 8.0), 8.0);
+    }
+}
+
+#[cfg(test)]
+mod mode_digit_tests {
+    use super::*;
+
+    /// Every mode the buttons offer round-trips to a digit and back, so a
+    /// memory stored from any mode can be recalled into it.
+    /// trace: FR-MEM-01, FR-MODE-01
+    #[test]
+    fn fr_mem_01_every_button_mode_has_a_digit() {
+        for (label, digit) in [
+            ("LSB", 1u8),
+            ("USB", 2),
+            ("CW", 3),
+            ("FM", 4),
+            ("AM", 5),
+            ("DATA", 6),
+            ("CW-R", 7),
+            ("DATA-R", 9),
+        ] {
+            assert_eq!(mode_digit(label), Some(digit), "{label}");
+        }
+    }
+
+    /// An unrecognised label yields nothing rather than a wrong mode — a
+    /// hand-edited config must not silently put the radio somewhere else.
+    /// trace: FR-MEM-01
+    #[test]
+    fn fr_mem_01_unknown_label_yields_no_digit() {
+        assert_eq!(mode_digit(""), None);
+        assert_eq!(mode_digit("SSB"), None);
+        assert_eq!(mode_digit("cw"), None, "labels are exact, not case-folded");
+    }
+
+    /// The digits agree with `alternate_of`, which returns digits for the same
+    /// labels — two mappings of the same thing must not drift apart.
+    /// trace: FR-MEM-01, FR-UI-ALT-01
+    #[test]
+    fn fr_mem_01_agrees_with_the_alternate_mapping() {
+        for (from, to) in [("LSB", "USB"), ("CW", "CW-R"), ("DATA", "DATA-R")] {
+            assert_eq!(alternate_of(from), mode_digit(to), "{from} -> {to}");
+            assert_eq!(alternate_of(to), mode_digit(from), "{to} -> {from}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod memory_bank_tests {
+    use super::*;
+    use k4_config::Memory;
+
+    fn mem(hz: u64, mode: Option<&str>, name: &str) -> Memory {
+        Memory {
+            name: name.to_string(),
+            hz,
+            mode: mode.map(str::to_string),
+        }
+    }
+
+    /// Storing the same frequency and mode twice is refused — leaning on the
+    /// store button is the easy accident, and a bank of duplicates is worse
+    /// than a refusal.
+    /// trace: FR-MEM-01
+    #[test]
+    fn fr_mem_01_exact_duplicates_are_refused() {
+        let mut bank = Vec::new();
+        assert!(store_memory(&mut bank, mem(7_030_000, Some("CW"), "")));
+        assert!(!store_memory(
+            &mut bank,
+            mem(7_030_000, Some("CW"), "again")
+        ));
+        assert_eq!(bank.len(), 1);
+    }
+
+    /// The same frequency in a different mode is a real second entry — the
+    /// same net runs on CW and on SSB.
+    /// trace: FR-MEM-01
+    #[test]
+    fn fr_mem_01_same_frequency_different_mode_is_kept() {
+        let mut bank = Vec::new();
+        assert!(store_memory(&mut bank, mem(7_030_000, Some("CW"), "")));
+        assert!(store_memory(&mut bank, mem(7_030_000, Some("LSB"), "")));
+        assert_eq!(bank.len(), 2);
+    }
+
+    /// The bank is bounded, and refuses rather than silently dropping the
+    /// oldest — losing a memory the operator stored would be worse.
+    /// trace: FR-MEM-01
+    #[test]
+    fn fr_mem_01_bank_is_bounded_and_refuses_when_full() {
+        let mut bank = Vec::new();
+        for i in 0..MAX_MEMORIES as u64 {
+            assert!(store_memory(&mut bank, mem(7_000_000 + i, Some("CW"), "")));
+        }
+        assert!(!store_memory(&mut bank, mem(14_000_000, Some("USB"), "")));
+        assert_eq!(bank.len(), MAX_MEMORIES);
+        assert_eq!(bank[0].hz, 7_000_000, "the first entry is still there");
+    }
+
+    /// The window explains a store it cannot perform. Disconnected there is no
+    /// frequency to capture, and the button would otherwise be a dead control.
+    /// trace: FR-MEM-01
+    #[test]
+    fn fr_mem_01_store_says_why_it_cannot_store() {
+        assert_eq!(store_blocked(0, true), None, "storable: room, and a VFO");
+        assert!(
+            store_blocked(0, false).is_some_and(|w| w.contains("connect")),
+            "disconnected, the reason names the connection"
+        );
+        assert!(
+            store_blocked(MAX_MEMORIES, true).is_some_and(|w| w.contains("full")),
+            "a full bank says so"
+        );
+        // Full *and* disconnected reports full — the bound is the harder stop.
+        assert!(store_blocked(MAX_MEMORIES, false).is_some_and(|w| w.contains("full")));
+    }
+
+    /// Deleting removes the right entry, and an index that no longer exists is
+    /// ignored rather than panicking — the list can change under a click.
+    /// trace: FR-MEM-01
+    #[test]
+    fn fr_mem_01_delete_removes_the_right_entry_and_tolerates_a_stale_index() {
+        let mut bank = vec![
+            mem(7_030_000, Some("CW"), "a"),
+            mem(14_074_000, Some("DATA"), "b"),
+            mem(3_573_000, Some("DATA"), "c"),
+        ];
+        assert!(delete_memory(&mut bank, 1));
+        assert_eq!(bank.len(), 2);
+        assert_eq!(bank[1].name, "c", "the entry after it shifted down");
+        assert!(!delete_memory(&mut bank, 99), "stale index is ignored");
+        assert!(!delete_memory(&mut Vec::new(), 0), "empty bank is safe");
+    }
+
+    /// An unnamed memory is still identifiable by its frequency — that is the
+    /// common case, stored in a hurry off the VFO.
+    /// trace: FR-MEM-01
+    #[test]
+    fn fr_mem_01_label_identifies_an_unnamed_memory() {
+        assert_eq!(memory_label(&mem(7_030_000, Some("CW"), "")), "7.0300 CW");
+        assert_eq!(memory_label(&mem(7_030_000, None, "")), "7.0300");
+        assert_eq!(
+            memory_label(&mem(14_074_000, Some("DATA"), "FT8")),
+            "FT8 — 14.0740 DATA"
+        );
+        // Whitespace is not a name.
+        assert_eq!(
+            memory_label(&mem(7_030_000, Some("CW"), "   ")),
+            "7.0300 CW"
+        );
     }
 }
 
