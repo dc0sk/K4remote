@@ -405,6 +405,20 @@ impl ButtonState {
 /// popup and the chip it opened from say "unknown" the same way.
 pub const UNKNOWN: &str = "—";
 
+/// Width of a two-line receiver chip, in pixels, and the horizontal padding
+/// inside it.
+///
+/// Named here rather than left as a literal in the view so the chip values can
+/// be checked against it by a test: a value that does not fit does not clip,
+/// it **wraps**, and the chip grows taller than its neighbours — which is the
+/// bouncing `FR-UI-STABLE-01` forbids, arriving by the back door.
+pub const CHIP_W: f32 = 66.0;
+/// Horizontal padding inside a chip, per side — the `6` in `padding([4, 6])`
+/// at both view call sites.
+pub const CHIP_PAD_H: u16 = 6;
+/// Font size of a chip's value line.
+pub const CHIP_VALUE_SIZE: f32 = 13.0;
+
 /// AGC button state from the `AG`/`GT` mode code (0 off / 1 slow / 2 fast).
 /// trace: FR-UI-11
 pub fn agc_button(mode: Option<u8>) -> ButtonState {
@@ -603,10 +617,17 @@ pub fn on_air(local_tx: bool, tuning: bool, radio_tx: Option<bool>) -> bool {
 ///
 /// trace: FR-UI-11, FR-UI-HOLD-01
 pub fn nb_button(on: Option<bool>, filter: Option<u8>) -> ButtonState {
-    let value = match on {
-        Some(true) => format!("On · {}", nb_filter_label(filter)),
-        Some(false) => "Off".to_string(),
-        None => UNKNOWN.to_string(),
+    // The filter name alone, exactly as ATT shows `6 dB` and AGC shows `Slow`
+    // — the chip is lit when the control is on, so an "On · " prefix restates
+    // what the colour already says. It also did not fit: `On · WIDE` wrapped
+    // to a second line inside a 66 px chip, making NB taller than every other
+    // chip in the row (`FR-UI-STABLE-01`).
+    let value = match (on, filter) {
+        (Some(true), Some(_)) => nb_filter_label(filter).to_string(),
+        // On, but the radio has not said which filter yet.
+        (Some(true), None) => "On".to_string(),
+        (Some(false), _) => "Off".to_string(),
+        (None, _) => UNKNOWN.to_string(),
     };
     ButtonState::new("NB", value)
 }
@@ -2635,5 +2656,57 @@ mod on_air_tests {
         );
         assert!(on_air(true, false, None), "a local transmit still counts");
         assert!(on_air(false, true, None), "a local tune still counts");
+    }
+}
+
+#[cfg(test)]
+mod chip_fit_tests {
+    use super::*;
+
+    /// Every value a receiver chip can display must fit its 66 px box.
+    ///
+    /// This is not the usual `FR-UI-STABLE-01` case. The chips are already
+    /// width-*stable* — the width is hardcoded — so nothing shifts sideways.
+    /// What happens instead is that an over-long value **wraps** to a second
+    /// line and the chip grows *taller* than its neighbours, breaking the row.
+    /// That is the same defect arriving vertically, and the fixed width is
+    /// exactly what hides it from the horizontal checks.
+    ///
+    /// Found on screen: `NB` used to render `On · WIDE`, which needed roughly
+    /// 91 px of text in a 54 px opening.
+    /// trace: FR-UI-STABLE-01
+    #[test]
+    fn fr_ui_stable_01_every_chip_value_fits_its_chip() {
+        let mut values: Vec<String> = Vec::new();
+
+        // NB: on with each filter, on with none reported, off, unknown.
+        for f in [Some(0u8), Some(1), Some(2), Some(9), None] {
+            values.push(nb_button(Some(true), f).value);
+        }
+        values.push(nb_button(Some(false), None).value);
+        values.push(nb_button(None, None).value);
+
+        // ATT: the full documented ladder, plus its off/unknown forms.
+        for db in [0u8, 3, 6, 9, 12, 15, 18, 21] {
+            values.push(atten_button(Some(true), Some(db)).value);
+        }
+        values.push(atten_button(Some(true), None).value);
+        values.push(atten_button(Some(false), None).value);
+        values.push(atten_button(None, None).value);
+
+        // AGC across its modes.
+        for m in [Some(0u8), Some(1), Some(2), Some(9), None] {
+            values.push(agc_button(m).value);
+        }
+
+        for v in &values {
+            let needed =
+                stable_label_width(&[v.as_str()], CHIP_VALUE_SIZE, CHIP_PAD_H as f32 * 2.0);
+            assert!(
+                needed <= CHIP_W,
+                "chip value {v:?} needs {needed:.1} px, chip is {CHIP_W} px \
+                 — it will wrap to a second line and make the chip taller"
+            );
+        }
     }
 }

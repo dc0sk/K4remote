@@ -10,6 +10,16 @@ during the 0.4.0 release, so earlier detail lives in the git history and in the
 change ledgers under [`docs/test/test-strategy.md`](docs/test/test-strategy.md)
 and [`docs/requirements/system-requirements.md`](docs/requirements/system-requirements.md).
 
+## [Unreleased]
+
+### Fixed
+
+- **The NB chip no longer overflows its own box.** It read `On · WIDE`, which
+  did not fit and wrapped to a second line, making that chip taller than the
+  rest of the row. It now shows just the filter — `WIDE`, `NAR`, `NONE` —
+  matching ATT (`6 dB`) and AGC (`Slow`); the chip lights up when the noise
+  blanker is on, so the `On ·` prefix was saying what the colour already said.
+
 ## [0.6.0] — 2026-07-21
 
 ### Added

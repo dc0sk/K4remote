@@ -7411,7 +7411,7 @@ fn two_line_btn_visual(
     } else {
         role_color(ui::ColorRole::Inactive)
     };
-    let value = Text::new(state.value).size(13);
+    let value = Text::new(state.value).size(ui::CHIP_VALUE_SIZE);
     let value = if dim {
         value.color(role_color(ui::ColorRole::Inactive))
     } else {
@@ -7430,8 +7430,8 @@ fn two_line_btn_visual(
             };
             inner(t, status)
         })
-        .width(Length::Fixed(66.0))
-        .padding([4, 6])
+        .width(Length::Fixed(ui::CHIP_W))
+        .padding([4, ui::CHIP_PAD_H])
         .into()
 }
 
@@ -7500,7 +7500,7 @@ fn two_line_btn_dim(
     } else {
         role_color(ui::ColorRole::Inactive)
     };
-    let value = Text::new(state.value).size(13);
+    let value = Text::new(state.value).size(ui::CHIP_VALUE_SIZE);
     let value = if dim {
         value.color(role_color(ui::ColorRole::Inactive))
     } else {
@@ -7512,8 +7512,8 @@ fn two_line_btn_dim(
         .push(value);
     let mut b = Button::new(content)
         .style(btn_style(kind))
-        .width(Length::Fixed(66.0))
-        .padding([4, 6]);
+        .width(Length::Fixed(ui::CHIP_W))
+        .padding([4, ui::CHIP_PAD_H]);
     if let Some(m) = msg {
         b = b.on_press(m);
     }
