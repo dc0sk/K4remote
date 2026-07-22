@@ -14,6 +14,12 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
 
 ### Fixed
 
+- **The NB chip no longer overflows its own box.** It read `On · WIDE`, which
+  did not fit and wrapped to a second line, making that chip taller than the
+  rest of the row. It now shows just the filter — `WIDE`, `NAR`, `NONE` —
+  matching ATT (`6 dB`) and AGC (`Slow`); the chip lights up when the noise
+  blanker is on, so the `On ·` prefix was saying what the colour already said.
+
 - **Sliders no longer fight you.** Dragging AF, RF, SQL, notch or shift could
   snap the value backwards mid-drag: the radio's read-back for an earlier step
   overwrote the value you were setting. Your value is now held until the radio
