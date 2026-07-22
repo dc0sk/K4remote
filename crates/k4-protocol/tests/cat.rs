@@ -553,19 +553,22 @@ fn fr_pan_ctl_01_fixed_tune_encode() {
 fn fr_tx_safe_03_transmit_capable_commands_are_classified() {
     use k4_protocol::cat::keys_transmitter;
     for cmd in [
-        "TX;",       // begin transmit
-        "TU1;",      // tune
-        "TU2;",      // tune low power
-        "TU3;",      // ATU tune
-        "TU4;",      // ATU extended search
-        "SW16;",     // front-panel TUNE
-        "SW131;",    // front-panel TUNE LP
-        "SW40;",     // front-panel ATU TUNE
-        "SW30;",     // front-panel XMIT
-        "SW016;",    // zero-padded spelling of the same switch
-        "PB1;",      // DVR playback transmits the recorded message
-        "KY HELLO;", // text send
-        "KZ0102;",   // CW keying stream
+        "TX;",        // begin transmit
+        "TU1;",       // tune
+        "TU2;",       // tune low power
+        "TU3;",       // ATU tune
+        "TU4;",       // ATU extended search
+        "SW16;",      // front-panel TUNE
+        "SW131;",     // front-panel TUNE LP
+        "SW40;",      // front-panel ATU TUNE
+        "SW30;",      // front-panel XMIT
+        "SW016;",     // zero-padded spelling of the same switch
+        "PB1;",       // DVR playback transmits the recorded message
+        "KY HELLO;",  // text send
+        "KZ0102;",    // CW keying stream
+        "DAPM00000;", // plays the last voice message *through the transmitter*
+        "DAMP1;",     // plays stored voice message 1 through the transmitter
+        "DAMP10500;", // ...and this one auto-repeats, so it re-keys on its own
     ] {
         assert!(keys_transmitter(cmd), "{cmd} must be gated by the TX arm");
     }
@@ -599,6 +602,84 @@ fn fr_tx_safe_03_stop_and_receive_commands_are_not_gated() {
             !keys_transmitter(cmd),
             "{cmd} must not be blocked by the TX arm"
         );
+    }
+}
+
+/// The AF-recorder encoders match D12's `DA` field layouts.
+///
+/// The `DAPJ` overload is the trap: a *single* digit selects a recording
+/// session, while two or more characters are a relative jump in milliseconds.
+/// A 5 ms nudge written as `DAPJ5;` would therefore jump to session 5 instead
+/// — so the millisecond arm always writes at least two digits.
+/// trace: FR-AUD-REC-01
+#[test]
+fn fr_aud_rec_01_af_recorder_commands_encode() {
+    use k4_protocol::cat::{af_jump, af_play, af_record, clear_recordings, AfJump};
+    use k4_protocol::cat::{digital_audio_stop, query_digital_audio};
+
+    assert_eq!(af_record(), "DARS;");
+    assert_eq!(clear_recordings(), "DARC;");
+    assert_eq!(digital_audio_stop(), "DA0;");
+    assert_eq!(query_digital_audio(), "DA;");
+
+    assert_eq!(af_play(0), "DAPS00000;", "offset is 5 digits, zero-padded");
+    assert_eq!(af_play(12_345), "DAPS12345;");
+    assert_eq!(af_play(999_999), "DAPS90000;", "clamped to the 90 s buffer");
+
+    assert_eq!(af_jump(AfJump::LastSession), "DAPJ0;");
+    assert_eq!(af_jump(AfJump::Session(3)), "DAPJ3;");
+    assert_eq!(af_jump(AfJump::NextSession), "DAPJ>;");
+    assert_eq!(af_jump(AfJump::PrevSession), "DAPJ<;");
+    assert_eq!(af_jump(AfJump::Millis(5_000)), "DAPJ5000;");
+    assert_eq!(af_jump(AfJump::Millis(-5_000)), "DAPJ-5000;");
+    // The whole reason the millisecond arm is separate from Session.
+    assert_eq!(
+        af_jump(AfJump::Millis(5)),
+        "DAPJ05;",
+        "a small jump must not be spelled like a session id"
+    );
+    assert_eq!(af_jump(AfJump::Millis(-5)), "DAPJ-05;");
+    // Session ids are 1-9; 0 has its own meaning, so it is not reachable here.
+    assert_eq!(af_jump(AfJump::Session(0)), "DAPJ1;");
+    assert_eq!(af_jump(AfJump::Session(99)), "DAPJ9;");
+}
+
+/// The arm gate must not be bypassable by typing the command in lower case.
+///
+/// D12: "Commands may use upper or lower case alphabetic characters. The only
+/// command that differentiates between the two is the CW/DATA text-send
+/// command (KY <text>), when used in PSK mode." So the radio honours `tx;`
+/// exactly as it honours `TX;` — but the classifier matched uppercase
+/// mnemonics only, leaving the diagnostics console's raw-CAT field an open
+/// route to the transmitter with the arm off.
+///
+/// Classification upper-cases a *copy* for matching; the command itself is
+/// sent unchanged, because `KY` payload case is significant in PSK.
+///
+/// trace: FR-TX-SAFE-03
+#[test]
+fn fr_tx_safe_03_the_gate_is_case_insensitive() {
+    use k4_protocol::cat::{keys_transmitter, stops_transmitter};
+    for cmd in [
+        "tx;",
+        "tu1;",
+        "sw16;",
+        "pb1;",
+        "ky hello;",
+        "kz0102;",
+        "damp1;",
+        "dapm00000;",
+        "Tx;",
+        "tU1;",
+        "dAmP1;",
+    ] {
+        assert!(keys_transmitter(cmd), "{cmd} must be gated by the TX arm");
+    }
+    // Stopping must be recognised in either case too — a stop that is not
+    // understood is a stop that does not clear the on-air belief.
+    for cmd in ["rx;", "tu0;", "pb0;", "da0;", "Rx;"] {
+        assert!(stops_transmitter(cmd), "{cmd} must count as a stop");
+        assert!(!keys_transmitter(cmd), "{cmd} must not be gated");
     }
 }
 

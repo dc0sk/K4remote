@@ -19,7 +19,7 @@ use ui::ViewMode;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use k4_config::{Config, KpodButton, Profile, SecretStore};
 
@@ -249,7 +249,25 @@ struct App {
     // when the level was set reports the *previous* one, and the resync would
     // copy it over the operator's choice — the intermittent "jumps back to the
     // old value". Held until the radio confirms, expired if it never does.
+    /// When a drag-driven CAT command was last sent — see `send_dragged`.
+    last_drag_send: Instant,
     opt_atten: ui::OptLevel,
+    // Optimistic overrides for the controls the operator drags or clicks.
+    //
+    // Without these the resync below overwrites the local value with whatever
+    // the radio last reported — which, mid-drag, is an *earlier* step of the
+    // same drag. The slider snaps backwards under the finger and the operator
+    // ends up fighting the read-back. Reported from the radio: "the sliders
+    // are laggy and the values jump back and forth".
+    //
+    // APF is the same bug undressed: it had no local state at all, so the
+    // button could not change until the radio answered — about two seconds.
+    opt_af: ui::OptLevel,
+    opt_rf: ui::OptLevel,
+    opt_sql: ui::OptLevel,
+    opt_apf_width: ui::OptLevel,
+    opt_notch: ui::Opt<u16>,
+    opt_shift: ui::Opt<u16>,
     vox_gain: u8,
     anti_vox: u8,
     // CW sidetone pitch Hz (FR-KEY-02); full-QSK + VOX/QSK delay 10-ms (FR-TX-DLY-01).
@@ -525,6 +543,10 @@ enum Message {
     PaneQsy(bool, u64),
     PaneWheel(bool, i32),
     SetAfGain(u8),
+    /// A drag ended: re-send the settled value unthrottled. Without this the
+    /// last step of a drag can be swallowed by the throttle and the radio
+    /// keeps a value the operator did not stop on.
+    CommitDrag,
     SetRfGain(u8),
     SetSquelch(u8),
     SetDataSubmode(u8),
@@ -640,6 +662,12 @@ enum Message {
     UpdateChecked(update::UpdateStatus),
     // Settings dialog + peer cache (FR-UI-23, FR-CFG-04).
     ToggleSettings,
+    /// AF recorder (FR-AUD-REC-01): the radio's own 90 s receive-audio buffer.
+    AfRecord,
+    AfPlay,
+    AfStop,
+    AfClear,
+    AfJump(k4_protocol::cat::AfJump),
     UseMasterToggled(bool),
     MasterPasswordChanged(String),
     UnlockMaster,
@@ -914,7 +942,14 @@ impl App {
             nb_level: 5,
             nr_level: 5,
             atten_db: 0,
+            last_drag_send: Instant::now(),
             opt_atten: ui::OptLevel::default(),
+            opt_af: ui::OptLevel::default(),
+            opt_rf: ui::OptLevel::default(),
+            opt_sql: ui::OptLevel::default(),
+            opt_apf_width: ui::OptLevel::default(),
+            opt_notch: ui::Opt::default(),
+            opt_shift: ui::Opt::default(),
             vox_gain: 20,
             anti_vox: 0,
             compression: 0,
@@ -1603,26 +1638,42 @@ impl App {
                 }
             }
             Message::PaneWheel(is_b, dir) => self.pan_wheel(is_b, dir > 0),
+            Message::CommitDrag => {
+                // Push every dragged control's current value once. Cheap (a
+                // handful of commands) and it happens only on mouse-up, so it
+                // costs nothing during the drag itself.
+                let sub = self.active_sub();
+                self.last_drag_send = Instant::now() - Duration::from_secs(1);
+                let af = target_rx(k4_protocol::cat::set_af_gain(self.af_gain), sub);
+                self.send(WorkerCmd::Cat(af));
+                let rf = target_rx(k4_protocol::cat::set_rf_gain(self.rf_gain), sub);
+                self.send(WorkerCmd::Cat(rf));
+                let sql = target_rx(k4_protocol::cat::set_squelch(self.squelch), sub);
+                self.send(WorkerCmd::Cat(sql));
+                let on = self.rx_notch_on() == Some(true);
+                let nm = target_rx(
+                    k4_protocol::cat::set_manual_notch(on, self.notch_pitch),
+                    sub,
+                );
+                self.send(WorkerCmd::Cat(nm));
+            }
             Message::SetAfGain(v) => {
                 self.af_gain = v;
-                self.send(WorkerCmd::Cat(target_rx(
-                    k4_protocol::cat::set_af_gain(v),
-                    self.active_sub(),
-                )));
+                self.opt_af.set(v);
+                let sub = self.active_sub();
+                self.send_dragged(target_rx(k4_protocol::cat::set_af_gain(v), sub));
             }
             Message::SetRfGain(v) => {
                 self.rf_gain = v;
-                self.send(WorkerCmd::Cat(target_rx(
-                    k4_protocol::cat::set_rf_gain(v),
-                    self.active_sub(),
-                )));
+                self.opt_rf.set(v);
+                let sub = self.active_sub();
+                self.send_dragged(target_rx(k4_protocol::cat::set_rf_gain(v), sub));
             }
             Message::SetSquelch(v) => {
                 self.squelch = v;
-                self.send(WorkerCmd::Cat(target_rx(
-                    k4_protocol::cat::set_squelch(v),
-                    self.active_sub(),
-                )));
+                self.opt_sql.set(v);
+                let sub = self.active_sub();
+                self.send_dragged(target_rx(k4_protocol::cat::set_squelch(v), sub));
             }
             // DATA sub-mode selector (DT/DT$). trace: FR-DATA-01
             Message::SetDataSubmode(n) => {
@@ -1761,12 +1812,10 @@ impl App {
             }
             Message::SetNotchPitch(p) => {
                 self.notch_pitch = p;
+                self.opt_notch.set(p);
                 let on = self.rx_notch_on() == Some(true);
                 let sub = self.active_sub();
-                self.send(WorkerCmd::Cat(target_rx(
-                    k4_protocol::cat::set_manual_notch(on, p),
-                    sub,
-                )));
+                self.send_dragged(target_rx(k4_protocol::cat::set_manual_notch(on, p), sub));
             }
             Message::ToggleAutoNotch => {
                 let on = self.rx_auto_notch() != Some(true);
@@ -1789,6 +1838,7 @@ impl App {
             }
             Message::CycleApfWidth => {
                 let w = (self.rx_apf_width().unwrap_or(0) + 1) % 3;
+                self.opt_apf_width.set(w);
                 let on = self.rx_apf_on() == Some(true);
                 self.send(WorkerCmd::Cat(target_rx(
                     k4_protocol::cat::set_apf(on, w),
@@ -2088,6 +2138,11 @@ impl App {
                 );
             }
             Message::UpdateChecked(status) => self.update_status = status,
+            Message::AfRecord => self.send(WorkerCmd::AfRecord),
+            Message::AfPlay => self.send(WorkerCmd::AfPlay),
+            Message::AfStop => self.send(WorkerCmd::AfStop),
+            Message::AfClear => self.send(WorkerCmd::AfClear),
+            Message::AfJump(t) => self.send(WorkerCmd::AfJump(t)),
             Message::ToggleSettings => self.settings_open = !self.settings_open,
             Message::UseMasterToggled(v) => self.use_master = v,
             Message::MasterPasswordChanged(v) => self.master_password = v,
@@ -2483,6 +2538,27 @@ impl App {
                     self.ui.atten_db
                 };
                 self.opt_atten.reconcile(atten_snap);
+                // Same reconciliation for every other optimistic control: drop
+                // the override as soon as the radio agrees, and expire it if
+                // the radio never does, so a dropped command cannot leave the
+                // UI permanently showing a value the radio does not hold.
+                let sub = self.active_sub();
+                let r = &self.ui.radio;
+                self.opt_af
+                    .reconcile(if sub { r.sub_af_gain } else { r.af_gain });
+                self.opt_rf
+                    .reconcile(if sub { r.sub_rf_gain_db } else { r.rf_gain_db });
+                self.opt_sql
+                    .reconcile(if sub { r.sub_squelch } else { r.squelch });
+                self.opt_shift
+                    .reconcile(if sub { r.sub_shift_hz } else { r.shift_hz });
+                self.opt_notch.reconcile(if sub {
+                    r.sub_notch_pitch
+                } else {
+                    r.notch_pitch
+                });
+                self.opt_apf_width
+                    .reconcile(if sub { r.sub_apf_width } else { r.apf_width });
                 // Expire the momentary switch-tap highlight.
                 if self.switch_flash_ticks > 0 {
                     self.switch_flash_ticks -= 1;
@@ -2854,8 +2930,19 @@ impl App {
                         .style(meter_style(strong)),
                 )
                 .push(
+                    // The bar to the left of this takes `Length::Fill`, so
+                    // every character the reading gains is a character the bar
+                    // loses — the meter visibly rescales as the signal moves,
+                    // which is the one place in the app where that is actively
+                    // misleading (FR-UI-STABLE-01). Reserved for the widest
+                    // reading `fmt_dbm` can produce.
                     Text::new(fmt_dbm(dbm))
                         .size(12)
+                        .width(Length::Fixed(ui::stable_label_width(
+                            &[S_METER_WIDEST],
+                            12.0,
+                            4.0,
+                        )))
                         .color(role_color(meter_role)),
                 )
                 .into()
@@ -2987,8 +3074,17 @@ impl App {
                     .align_y(Alignment::Center)
                     .push(step_btn("−", -10))
                     .push(
+                        // The `+` step button sits immediately right of this,
+                        // so an offset gaining a digit moves the control the
+                        // operator is repeatedly clicking (FR-UI-STABLE-01).
                         Text::new(format!("{off:+} Hz"))
                             .size(12)
+                            .width(Length::Fixed(ui::stable_label_width(
+                                &["+9990 Hz"],
+                                12.0,
+                                4.0,
+                            )))
+                            .align_x(Alignment::Center)
                             .color(role_color(ui::ColorRole::RxValue)),
                     )
                     .push(step_btn("+", 10))
@@ -3377,7 +3473,7 @@ impl App {
     /// decode in DATA, the repeater/PL panel in FM (FR-UI-24). Adaptive-only
     /// extras appear only when the mode-adaptive UI is on; the FM panel shows in
     /// both modes (it has nowhere else to live).
-    fn rx_mode_strip(&self, class: ui::ModeClass) -> Element<'_, Message> {
+    fn rx_mode_extras(&self, class: ui::ModeClass) -> Element<'_, Message> {
         let decode = || {
             Button::new(
                 Text::new(if self.decode_on {
@@ -3416,8 +3512,18 @@ impl App {
             )
         };
         let apf_bw = || {
-            small_btn_string(
+            // `APF 150` is three characters wider than `APF 30`, with SPOT and
+            // the decode control to its right (FR-UI-STABLE-01). The label set
+            // lives beside `apf_width_label`, so a new width cannot be added
+            // without the reservation following it.
+            let labels: Vec<String> = ui::APF_WIDTH_LABELS
+                .iter()
+                .map(|w| format!("APF {w}"))
+                .collect();
+            let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
+            small_btn_stable(
                 format!("APF {}", ui::apf_width_label(self.rx_apf_width())),
+                &refs,
                 Message::CycleApfWidth,
             )
         };
@@ -3459,10 +3565,7 @@ impl App {
         if class == ui::ModeClass::Fm {
             row = row.push(self.fm_panel());
         }
-        Container::new(row)
-            .height(Length::Fixed(RX_STRIP_H))
-            .width(Length::Fill)
-            .into()
+        row.into()
     }
 
     fn fm_panel(&self) -> Element<'_, Message> {
@@ -3497,7 +3600,10 @@ impl App {
                     .size(10)
                     .color(rxv),
             )
-            .push(horizontal_space())
+            // The PL group used to be pushed to the far right of its own row.
+            // Now that this panel shares the mode row it must stay compact, or
+            // the spacer would shove PL off the end of the frame.
+            .push(Space::with_width(Length::Fixed(12.0)))
             .push(
                 Button::new(
                     Text::new(if r.pl_on == Some(true) {
@@ -3606,7 +3712,16 @@ impl App {
                     .step(1u8)
                     .width(Length::Fixed(120.0)),
             ))
-            .push(Text::new(format!("{mon}")).size(10).color(rxv));
+            // Reserved for "100": the DVR buttons now sit immediately after
+            // this, so an extra digit here would move them (FR-UI-STABLE-01).
+            // While this readout was the last thing in the row it could vary
+            // freely, which is why it was left alone in the earlier sweep.
+            .push(
+                Text::new(format!("{mon}"))
+                    .size(10)
+                    .width(Length::Fixed(ui::stable_label_width(&["100"], 10.0, 4.0)))
+                    .color(rxv),
+            );
         // Compact ± stepper for the TX mode strip.
         let step_ctl = |label: &'static str,
                         val: String,
@@ -3691,10 +3806,13 @@ impl App {
                 .push(dvr_full())
                 .into()
         };
-        let (mon_row, action_row): (Element<'_, Message>, Element<'_, Message>) = if adaptive {
+        // `levels` is the *mode-specific* part only — MON is universal and is
+        // emitted separately, so the action group can sit directly after it.
+        let extras = || Row::new().spacing(14).align_y(Alignment::Center);
+        let (levels, action_row): (Element<'_, Message>, Element<'_, Message>) = if adaptive {
             match tx_class {
                 ui::ModeClass::Cw => (
-                    mon_base
+                    extras()
                         .push(tipped(
                             self.tips_on(),
                             self.hover,
@@ -3726,7 +3844,7 @@ impl App {
                     ),
                 ),
                 ui::ModeClass::Voice | ui::ModeClass::Am => (
-                    mon_base
+                    extras()
                         .push(vox_slider(
                             "VOX G",
                             self.vox_gain,
@@ -3744,7 +3862,7 @@ impl App {
                     voice_dvr(),
                 ),
                 ui::ModeClass::Data => (
-                    mon_base
+                    extras()
                         .push(vox_slider(
                             "VOX G",
                             self.vox_gain,
@@ -3754,11 +3872,11 @@ impl App {
                         .into(),
                     Row::new().height(Length::Fixed(26.0)).into(),
                 ),
-                ui::ModeClass::Fm => (mon_base.into(), voice_dvr()),
+                ui::ModeClass::Fm => (extras().into(), voice_dvr()),
             }
         } else {
             (
-                mon_base
+                extras()
                     .push(vox_slider(
                         "VOX G",
                         self.vox_gain,
@@ -3779,8 +3897,27 @@ impl App {
             .spacing(6)
             .push(Text::new("Switches (tap · hold)").size(10).color(dim))
             .push(switch_row)
-            .push(mon_row)
-            .push(action_row)
+            // The action controls (DVR, or the CW keyer timing) ride on the end
+            // of the level row rather than taking a row of their own. Neither
+            // row filled its width — the levels ended around half way and the
+            // DVR strip is short — so the second row was buying vertical space
+            // with nothing in it.
+            .push(
+                Row::new()
+                    .spacing(16)
+                    .align_y(Alignment::Center)
+                    // MON, then the action group, then the mode-specific
+                    // levels. The action group used to come last, so the DVR
+                    // buttons sat at a different x in every mode — four level
+                    // controls ahead of them in voice, one in DATA, none in FM
+                    // — and moved again as MON's own readout gained a digit.
+                    // MON is the one control present in every mode, so placing
+                    // them right after it is the only position that holds
+                    // still (FR-UI-STABLE-01).
+                    .push(mon_base)
+                    .push(action_row)
+                    .push(levels),
+            )
             .into()
     }
 
@@ -4038,12 +4175,42 @@ impl App {
             self.ui.radio.apf_on
         }
     }
+    /// Active RX's APF bandwidth, preferring a just-clicked local value over
+    /// the radio's read-back.
+    ///
+    /// Without the override this returned the radio's value only, so the
+    /// button could not change until the radio answered — measured at about
+    /// two seconds on a real link, which reads as a broken button rather than
+    /// a slow one.
+    /// Send a CAT command that a *drag* produces, at most every 50 ms.
+    ///
+    /// An iced slider emits `on_change` for every step it passes through, and
+    /// each of those was going straight to the radio: dragging AF across its
+    /// range fired dozens of `AG` commands as fast as the UI could produce
+    /// them. That floods the link, delays the read-backs the UI is waiting on,
+    /// and writes a log line per command — a strong candidate for the console
+    /// flooding reported with no filter active.
+    ///
+    /// Dropping intermediate values is safe *only* because every throttled
+    /// slider also sends its final value on release; without that the radio
+    /// would keep whatever the last throttled step happened to be. The local
+    /// value is updated on every step regardless, so the slider itself stays
+    /// smooth under the finger.
+    fn send_dragged(&mut self, cmd: String) {
+        const MIN_GAP: Duration = Duration::from_millis(50);
+        if self.last_drag_send.elapsed() >= MIN_GAP {
+            self.last_drag_send = Instant::now();
+            self.send(WorkerCmd::Cat(cmd));
+        }
+    }
+
     fn rx_apf_width(&self) -> Option<u8> {
-        if self.active_sub() {
+        let reported = if self.active_sub() {
             self.ui.radio.sub_apf_width
         } else {
             self.ui.radio.apf_width
-        }
+        };
+        self.opt_apf_width.or(reported)
     }
 
     /// Active RX's DATA sub-mode (0=DATA A, 1=AFSK A, 2=FSK D, 3=PSK D).
@@ -4172,23 +4339,33 @@ impl App {
             self.bw_hz = v;
         }
         if let Some(v) = if sub { r.sub_af_gain } else { r.af_gain } {
-            self.af_gain = v;
+            if !self.opt_af.is_pending() {
+                self.af_gain = v;
+            }
         }
         if let Some(v) = if sub { r.sub_rf_gain_db } else { r.rf_gain_db } {
-            self.rf_gain = v;
+            if !self.opt_rf.is_pending() {
+                self.rf_gain = v;
+            }
         }
         if let Some(v) = if sub { r.sub_squelch } else { r.squelch } {
-            self.squelch = v;
+            if !self.opt_sql.is_pending() {
+                self.squelch = v;
+            }
         }
         if let Some(v) = if sub { r.sub_shift_hz } else { r.shift_hz } {
-            self.shift_hz = v;
+            if !self.opt_shift.is_pending() {
+                self.shift_hz = v;
+            }
         }
         if let Some(v) = if sub {
             r.sub_notch_pitch
         } else {
             r.notch_pitch
         } {
-            self.notch_pitch = v;
+            if !self.opt_notch.is_pending() {
+                self.notch_pitch = v;
+            }
         }
         // TX sliders are not per-RX-VFO — always follow the radio. The power
         // *range* (H/L/X) is a user selection, so it is NOT re-synced here — a
@@ -5255,13 +5432,34 @@ impl App {
         let conn_btn = Button::new(Text::new(conn_label).size(12))
             .style(btn_style(connect_kind(conn_action)))
             .padding([5, 10])
+            // Settings, theme and About all sit to the right of this, and it
+            // changes on every connect and disconnect (FR-UI-STABLE-01).
+            .width(Length::Fixed(ui::stable_label_width(
+                &ui::CONNECT_LABELS,
+                12.0,
+                20.0,
+            )))
             .on_press(connect_msg(conn_action));
         // Theme selector (FR-UI-17) and About (FR-UI-18), top-right; About is
         // rightmost with the theme toggle to its left.
+        let theme_names: Vec<String> = ui::ThemeMode::LABELS
+            .iter()
+            .map(|l| format!("Theme: {l}"))
+            .collect();
+        let theme_labels: Vec<&str> = theme_names.iter().map(String::as_str).collect();
         let theme_btn =
             Button::new(Text::new(format!("Theme: {}", self.theme_mode.label())).size(12))
                 .style(btn_style(BtnKind::Plain))
                 .padding([5, 10])
+                // "Theme: Contrast" against "Theme: Dark", with About to the
+                // right (FR-UI-STABLE-01). Reserved from the rendered strings
+                // rather than the bare names, so the "Theme: " prefix is
+                // counted once, here, instead of being estimated separately.
+                .width(Length::Fixed(ui::stable_label_width(
+                    &theme_labels,
+                    12.0,
+                    20.0,
+                )))
                 .on_press(Message::CycleTheme);
         let about_btn = tipped(
             self.tips_on(),
@@ -5309,8 +5507,16 @@ impl App {
             .align_y(Alignment::Center)
             .push(status_dot)
             .push(
+                // "connecting..." is four characters longer than "CONNECTED",
+                // so without a reservation the status message beside it slides
+                // every time the phase changes (FR-UI-STABLE-01).
                 Text::new(status_text)
                     .size(12)
+                    .width(Length::Fixed(ui::stable_label_width(
+                        &ui::CONN_STATUS_LABELS,
+                        12.0,
+                        4.0,
+                    )))
                     .color(role_color(status_role)),
             );
         // Status strip: radio UTC clock + remote client count (FR-UI-STATUS-01).
@@ -5323,6 +5529,19 @@ impl App {
                 status_bits.push(format!("{n} clients"));
             }
         }
+        // Deliberately NOT width-reserved, unlike the rest of this sweep.
+        //
+        // It sits *after* the `Length::Fill` status text, so it does shift the
+        // controls to its right when the clock appears or a second client
+        // joins — a genuine instance of what FR-UI-STABLE-01 forbids. But its
+        // widest form is 27 characters, and reserving that takes ~257 px from
+        // the status message, which then wraps to three lines and grows the
+        // whole header, pushing every panel below it down. Measured, not
+        // assumed: the reservation was written, screenshotted, and reverted.
+        //
+        // Trading an occasional horizontal shift for a permanent vertical one
+        // is a bad trade, so this stays as it is until the status message has
+        // somewhere else to go.
         let status_strip = Text::new(status_bits.join("  ·  ")).size(12).color(dim);
         let header = Row::new()
             .spacing(12)
@@ -5609,7 +5828,15 @@ impl App {
                 "NORMALIZE".into(),
                 Message::FilterNormalize,
                 rx_dim(ui::RxCtl::FilterPresets),
-            ));
+            ))
+            // Mode-specific extras ride on the end of this row rather than
+            // occupying a row of their own (FR-UI-24). The strip used to be a
+            // reserved fixed-height row that stayed empty in SSB and AM —
+            // vertical space paid for in every mode to avoid the frame
+            // resizing in three. Sharing this row costs nothing when empty and
+            // still cannot resize the frame, because the row is one line high
+            // either way.
+            .push(self.rx_mode_extras(rx_class));
         // AF/RF gain + squelch sliders for the main receiver (FR-RX-01,
         // FR-RX-SQL-01) — the K4's RF/SQL knob, plus radio-side AF.
         let rxv = role_color(ui::ColorRole::RxValue);
@@ -5627,8 +5854,31 @@ impl App {
                 .spacing(6)
                 .align_y(Alignment::Center)
                 .push(Text::new(label).size(11).color(dim))
-                .push(slider(0..=max, val, msg).width(Length::Fixed(110.0)))
-                .push(Text::new(format!("{val}{unit}")).size(11).color(vcol(d)))
+                // 96 px, not 110: reserving a fixed width for the readouts
+                // (FR-UI-STABLE-01) costs ~156 px across this row, and at 110
+                // the row overflowed — the trailing SHIFT readout was squeezed
+                // to one character per line. The sliders give up what the
+                // readouts need.
+                .push(
+                    slider(0..=max, val, msg)
+                        .width(Length::Fixed(96.0))
+                        .on_release(Message::CommitDrag),
+                )
+                .push(
+                    // Reserve the widest reading this slider can produce. Taken
+                    // from the same `max` the slider is built from, so the two
+                    // cannot drift apart (FR-UI-STABLE-01) — every one of these
+                    // sits mid-row with more controls to its right, so a digit
+                    // appearing shifts the rest of the strip.
+                    Text::new(format!("{val}{unit}"))
+                        .size(11)
+                        .width(Length::Fixed(ui::stable_label_width(
+                            &[&format!("{max}{unit}")],
+                            11.0,
+                            4.0,
+                        )))
+                        .color(vcol(d)),
+                )
                 .into()
         };
         // Third row: SHIFT, then AF / RF / SQL, then PITCH — all for the active VFO.
@@ -5641,9 +5891,19 @@ impl App {
                     .push(
                         slider(lo..=hi, val, msg)
                             .step(10u16)
-                            .width(Length::Fixed(110.0)),
+                            .width(Length::Fixed(96.0))
+                            .on_release(Message::CommitDrag),
                     )
-                    .push(Text::new(format!("{val} Hz")).size(11).color(vcol(d)))
+                    .push(
+                        Text::new(format!("{val} Hz"))
+                            .size(11)
+                            .width(Length::Fixed(ui::stable_label_width(
+                                &[&format!("{hi} Hz")],
+                                11.0,
+                                4.0,
+                            )))
+                            .color(vcol(d)),
+                    )
             };
         let level_slider = |label: &'static str, val: u8, max: u8, msg: fn(u8) -> Message| {
             Row::new()
@@ -5653,9 +5913,18 @@ impl App {
                 .push(
                     slider(0..=max, val, msg)
                         .step(1u8)
-                        .width(Length::Fixed(96.0)),
+                        .width(Length::Fixed(84.0)),
                 )
-                .push(Text::new(format!("{val}")).size(11).color(rxv))
+                .push(
+                    Text::new(format!("{val}"))
+                        .size(11)
+                        .width(Length::Fixed(ui::stable_label_width(
+                            &[&format!("{max}")],
+                            11.0,
+                            4.0,
+                        )))
+                        .color(rxv),
+                )
         };
         // Filter view toggles the SHIFT slider for LO/HI-cut edges (FR-FIL-02);
         // it sits in the gain row, right of NR LVL.
@@ -5679,6 +5948,13 @@ impl App {
             )
             .style(btn_style(shift_kind))
             .padding([5, 8])
+            // First item of the filter group: the label, slider and readout to
+            // its right all move when this toggles (FR-UI-STABLE-01).
+            .width(Length::Fixed(ui::stable_label_width(
+                &["HI/LO", "SHFT"],
+                11.0,
+                16.0,
+            )))
             .on_press(Message::ToggleFilterEdgeView),
         );
         filter_ctl = if self.filter_edge_view {
@@ -5780,10 +6056,7 @@ impl App {
                         .push(chips),
                 )
                 .push(tune_row)
-                .push(gain_row)
-                // Always-present fixed-height mode strip (fixes the old FM
-                // layout jump; hosts mode-specific extras when adaptive).
-                .push(self.rx_mode_strip(rx_class)),
+                .push(gain_row),
         )
         .style(panel_style)
         .padding(12)
@@ -6004,9 +6277,17 @@ impl App {
             Some(active) => self.menu_screen(active),
             None => band_inner,
         };
+        // The AF recorder sits with the mini-pan: both are full-width strips
+        // that belong to the radio as a whole rather than to one receiver, and
+        // both are always present so the layout never shifts (FR-UI-STABLE-01).
+        let af_frame = Container::new(self.af_recorder_strip())
+            .style(pane_style(false))
+            .padding([4, 8])
+            .width(Length::Fill);
         let panadapter_slot: Element<Message> = Column::new()
             .spacing(10)
             .push(mini_frame)
+            .push(af_frame)
             .push(below)
             .into();
 
@@ -6088,6 +6369,14 @@ impl App {
                     BtnKind::Ptt
                 }))
                 .padding([6, 10])
+                // The one control in this row still moving its neighbours:
+                // EMERGENCY STOP is immediately to the right, and it must not
+                // slide out from under a hand reaching for it (FR-UI-STABLE-01).
+                .width(Length::Fixed(ui::stable_label_width(
+                    &["UNKEY", "PTT"],
+                    13.0,
+                    20.0,
+                )))
                 .on_press(Message::ToggleKey);
         let estop = Button::new(Text::new("EMERGENCY STOP").size(13))
             .style(btn_style(BtnKind::Danger))
@@ -6223,12 +6512,10 @@ impl App {
         };
         // Options and actions on separate rows so the buttons never get
         // squeezed in the third-width panel (glyph-wrapped labels).
-        let mut conn_options = Row::new().spacing(6).push(small_btn(
-            if self.serial_mode {
-                "ETHERNET"
-            } else {
-                "SERIAL"
-            },
+        let mut conn_options = Row::new().spacing(6).push(small_btn_pair(
+            self.serial_mode,
+            "ETHERNET",
+            "SERIAL",
             Message::ToggleSerialMode,
         ));
         if !self.serial_mode {
@@ -6446,10 +6733,7 @@ impl App {
                         .size(13)
                         .width(Length::Fixed(220.0)),
                     )
-                    .push(small_btn(
-                        if set { "UNLOCK" } else { "SET" },
-                        Message::UnlockMaster,
-                    )),
+                    .push(small_btn_pair(set, "UNLOCK", "SET", Message::UnlockMaster)),
             );
         }
         if !self.peer_status.is_empty() {
@@ -6582,12 +6866,10 @@ impl App {
                 Row::new()
                     .spacing(8)
                     .align_y(Alignment::Center)
-                    .push(small_btn(
-                        if self.mute_mon {
-                            "Mute radio MON on connect: ON"
-                        } else {
-                            "Mute radio MON on connect: OFF"
-                        },
+                    .push(small_btn_pair(
+                        self.mute_mon,
+                        "Mute radio MON on connect: ON",
+                        "Mute radio MON on connect: OFF",
                         Message::ToggleMuteMon,
                     ))
                     .push(
@@ -6604,12 +6886,10 @@ impl App {
                         self.tips_on(),
                         self.hover,
                         "app.diag",
-                        small_btn(
-                            if self.diag_window.is_some() {
-                                "Diagnostics window: ON"
-                            } else {
-                                "Diagnostics window: OFF"
-                            },
+                        small_btn_pair(
+                            self.diag_window.is_some(),
+                            "Diagnostics window: ON",
+                            "Diagnostics window: OFF",
                             Message::ToggleDiagWindow,
                         ),
                     ))
@@ -6623,20 +6903,16 @@ impl App {
                 Row::new()
                     .spacing(8)
                     .align_y(Alignment::Center)
-                    .push(small_btn(
-                        if self.capturing_hotkey {
-                            "PTT hotkey: press keys…"
-                        } else {
-                            "Set PTT hotkey"
-                        },
+                    .push(small_btn_pair(
+                        self.capturing_hotkey,
+                        "PTT hotkey: press keys…",
+                        "Set PTT hotkey",
                         Message::StartCaptureHotkey,
                     ))
-                    .push(small_btn(
-                        if self.ptt_toggle {
-                            "Mode: Toggle"
-                        } else {
-                            "Mode: Hold"
-                        },
+                    .push(small_btn_pair(
+                        self.ptt_toggle,
+                        "Mode: Toggle",
+                        "Mode: Hold",
                         Message::TogglePttMode,
                     ))
                     .push(
@@ -6649,12 +6925,10 @@ impl App {
                 Row::new()
                     .spacing(8)
                     .align_y(Alignment::Center)
-                    .push(small_btn(
-                        if self.mode_aware_ui {
-                            "Mode-adaptive UI: ON"
-                        } else {
-                            "Mode-adaptive UI: OFF"
-                        },
+                    .push(small_btn_pair(
+                        self.mode_aware_ui,
+                        "Mode-adaptive UI: ON",
+                        "Mode-adaptive UI: OFF",
                         Message::ToggleModeAwareUi,
                     ))
                     .push(
@@ -6690,12 +6964,10 @@ impl App {
                 Row::new()
                     .spacing(8)
                     .align_y(Alignment::Center)
-                    .push(small_btn(
-                        if self.kpod_enabled {
-                            "K-Pod: ON"
-                        } else {
-                            "K-Pod: OFF"
-                        },
+                    .push(small_btn_pair(
+                        self.kpod_enabled,
+                        "K-Pod: ON",
+                        "K-Pod: OFF",
                         Message::ToggleKpod,
                     ))
                     .push(
@@ -7003,6 +7275,129 @@ impl App {
         .into()
     }
 
+    /// The AF-recorder strip (FR-AUD-REC-01): remote control of the **radio's
+    /// own** 90-second receive-audio buffer.
+    ///
+    /// Not a client-side recorder. The K4 already has this behind its AF
+    /// REC/PLAY switches, with numbered sessions and its own buffer; a second
+    /// recorder in the app would be a different 90 seconds from the one the
+    /// operator's front panel knows about.
+    ///
+    /// The buttons stand down while the DVR has the engine — the two share it,
+    /// and a REC button lit because a *voice message* is going out would be
+    /// saying the opposite of what is true.
+    fn af_recorder_strip(&self) -> Element<'_, Message> {
+        let dim = role_color(ui::ColorRole::Inactive);
+        let st = ui::af_recorder(self.ui.digital_audio);
+        let live = self.ui.connected;
+        let btn = |label: &'static str, kind: BtnKind, msg: Option<Message>| -> Element<Message> {
+            let b = Button::new(Text::new(label).size(11))
+                .style(btn_style(kind))
+                .padding([4, 9]);
+            match msg {
+                Some(m) => b.on_press(m).into(),
+                None => b.into(),
+            }
+        };
+        // Each transport control is its own toggle: pressing the lit one stops.
+        let rec = btn(
+            "AF REC",
+            if st.recording {
+                BtnKind::Danger
+            } else {
+                BtnKind::Plain
+            },
+            (live && !st.busy_elsewhere).then_some(if st.recording {
+                Message::AfStop
+            } else {
+                Message::AfRecord
+            }),
+        );
+        let play = btn(
+            "PLAY",
+            if st.playing {
+                BtnKind::Active
+            } else {
+                BtnKind::Plain
+            },
+            (live && !st.busy_elsewhere).then_some(if st.playing {
+                Message::AfStop
+            } else {
+                Message::AfPlay
+            }),
+        );
+        // Seeking only means anything with something playing.
+        let seekable = live && st.playing;
+        let jump = |label: &'static str, target: k4_protocol::cat::AfJump| {
+            btn(
+                label,
+                BtnKind::Plain,
+                seekable.then_some(Message::AfJump(target)),
+            )
+        };
+        use k4_protocol::cat::AfJump;
+        // Position reads as `0:12 / 1:30`, reserving the width of its longest
+        // form so the controls beside it hold still while it counts
+        // (FR-UI-STABLE-01).
+        let pos = match st.progress {
+            Some((pos, max)) => format!("{} / {}", ui::format_pos(pos), ui::format_pos(max)),
+            None => "—".to_string(),
+        };
+        let session = match st.session {
+            Some(n) => format!("REC {n}"),
+            None => String::new(),
+        };
+        let status: Element<Message> = if st.busy_elsewhere {
+            Text::new("voice message in progress")
+                .size(11)
+                .color(role_color(ui::ColorRole::Caution))
+                .into()
+        } else if !live {
+            Text::new("connect to use the radio's recorder")
+                .size(11)
+                .color(dim)
+                .into()
+        } else {
+            Text::new(session)
+                .size(11)
+                .width(Length::Fixed(ui::stable_label_width(&["REC 9"], 11.0, 4.0)))
+                .color(dim)
+                .into()
+        };
+        tipped(
+            self.tips_on(),
+            self.hover,
+            "af.recorder",
+            Row::new()
+                .spacing(6)
+                .align_y(Alignment::Center)
+                .push(Text::new("AF RECORDER").size(11).color(dim))
+                .push(rec)
+                .push(play)
+                .push(jump("«5s", AfJump::Millis(-5_000)))
+                .push(jump("5s»", AfJump::Millis(5_000)))
+                .push(jump("PREV", AfJump::PrevSession))
+                .push(jump("NEXT", AfJump::NextSession))
+                .push(
+                    Text::new(pos)
+                        .size(11)
+                        .width(Length::Fixed(ui::stable_label_width(
+                            &["0:00 / 1:30"],
+                            11.0,
+                            4.0,
+                        )))
+                        .color(role_color(ui::ColorRole::RxValue)),
+                )
+                .push(status)
+                .push(horizontal_space())
+                .push(btn(
+                    "CLEAR",
+                    BtnKind::Plain,
+                    (live && !st.busy_elsewhere && !st.recording).then_some(Message::AfClear),
+                )),
+        )
+    }
+
     /// The About overlay (FR-UI-18): author, license, and project URL, each on
     /// its own line, over a dimming scrim; a Close button dismisses it.
     fn about_overlay(&self) -> Element<'_, Message> {
@@ -7194,9 +7589,6 @@ const SCREEN_H: f32 = 300.0;
 
 /// Height of the always-present mini-pan overview frame (FR-UI-14).
 const MINI_PAN_H: f32 = 56.0;
-
-/// Height of the always-present MAIN RX mode strip (fixes the FM layout jump).
-const RX_STRIP_H: f32 = 34.0;
 
 /// Visual kind of a styled button (FR-UI-10/15): rest-state control, engaged
 /// (blue fill, like the reference client), transmit-critical (red edge),
@@ -7428,7 +7820,7 @@ fn two_line_btn_visual(
     } else {
         role_color(ui::ColorRole::Inactive)
     };
-    let value = Text::new(state.value).size(13);
+    let value = Text::new(state.value).size(ui::CHIP_VALUE_SIZE);
     let value = if dim {
         value.color(role_color(ui::ColorRole::Inactive))
     } else {
@@ -7447,8 +7839,8 @@ fn two_line_btn_visual(
             };
             inner(t, status)
         })
-        .width(Length::Fixed(66.0))
-        .padding([4, 6])
+        .width(Length::Fixed(ui::CHIP_W))
+        .padding([4, ui::CHIP_PAD_H])
         .into()
 }
 
@@ -7517,7 +7909,7 @@ fn two_line_btn_dim(
     } else {
         role_color(ui::ColorRole::Inactive)
     };
-    let value = Text::new(state.value).size(13);
+    let value = Text::new(state.value).size(ui::CHIP_VALUE_SIZE);
     let value = if dim {
         value.color(role_color(ui::ColorRole::Inactive))
     } else {
@@ -7529,8 +7921,8 @@ fn two_line_btn_dim(
         .push(value);
     let mut b = Button::new(content)
         .style(btn_style(kind))
-        .width(Length::Fixed(66.0))
-        .padding([4, 6]);
+        .width(Length::Fixed(ui::CHIP_W))
+        .padding([4, ui::CHIP_PAD_H]);
     if let Some(m) = msg {
         b = b.on_press(m);
     }
@@ -7561,6 +7953,46 @@ fn small_btn(label: &'static str, msg: Message) -> Element<'static, Message> {
     Button::new(Text::new(label).size(12))
         .style(btn_style(BtnKind::Plain))
         .padding([5, 10])
+        .on_press(msg)
+        .into()
+}
+
+/// Small plain action button that shows one of **two** known labels, sized to
+/// the wider so the row does not reflow when it flips (`FR-UI-STABLE-01`).
+///
+/// The two-label case is common enough — every ON/OFF setting toggle — that
+/// spelling out a reservation at each site invites someone to skip it.
+fn small_btn_pair(
+    on: bool,
+    on_label: &'static str,
+    off_label: &'static str,
+    msg: Message,
+) -> Element<'static, Message> {
+    Button::new(Text::new(if on { on_label } else { off_label }).size(12))
+        .style(btn_style(BtnKind::Plain))
+        .padding([5, 10])
+        .width(Length::Fixed(ui::stable_label_width(
+            &[on_label, off_label],
+            12.0,
+            20.0,
+        )))
+        .on_press(msg)
+        .into()
+}
+
+/// Small plain action button whose label varies over a **known set**, sized to
+/// the widest member so the row does not reflow when it changes
+/// (`FR-UI-STABLE-01`).
+///
+/// `labels` must list every string this button can show; passing only the
+/// current one silently reintroduces the resizing. Where the set comes from a
+/// function, keep the list beside that function (see `ui::CONNECT_LABELS`)
+/// rather than writing it out here.
+fn small_btn_stable(label: String, labels: &[&str], msg: Message) -> Element<'static, Message> {
+    Button::new(Text::new(label).size(12))
+        .style(btn_style(BtnKind::Plain))
+        .padding([5, 10])
+        .width(Length::Fixed(ui::stable_label_width(labels, 12.0, 20.0)))
         .on_press(msg)
         .into()
 }
@@ -7654,6 +8086,14 @@ fn secret<'a>(
 }
 
 /// S-meter label from a dBm value alone (per-VFO, FR-UI-12).
+/// The widest reading [`fmt_dbm`] can produce, for width reservation.
+///
+/// `S9+60dB` is the top of the S-unit ladder and `-121 dBm` the bottom of the
+/// range, so no single real reading is this wide — which is the point: the
+/// reservation has to cover the widest *unit* and the widest *number*
+/// independently, because which pairs actually occur is the radio's business.
+const S_METER_WIDEST: &str = "S9+60dB (-121 dBm)";
+
 fn fmt_dbm(dbm: Option<i32>) -> String {
     match dbm {
         Some(dbm) => format!("{} ({dbm} dBm)", k4_protocol::s_unit_label(dbm)),
@@ -8022,5 +8462,44 @@ mod pan_target_tests {
         // Span is still targeted, so the two panes stay independently settable.
         assert_eq!(on_wire("#SPN50000;", false), "#SPN50000;");
         assert_eq!(on_wire("#SPN50000;", true), "#SPN$50000;");
+    }
+}
+
+#[cfg(test)]
+mod stable_width_tests {
+    use super::{fmt_dbm, S_METER_WIDEST};
+
+    /// No reading the S-meter can produce may exceed the width reserved for
+    /// it. The reservation sits beside a `Length::Fill` bar, so an unexpectedly
+    /// long reading does not merely shift a neighbour — it steals width from
+    /// the meter, and the bar reads short for a strong signal.
+    ///
+    /// Swept across the whole plausible dBm range rather than spot-checked:
+    /// the S-unit label changes shape partway up (`S0`..`S9`, then `S9+nndB`),
+    /// so the widest string is not at either end of the range.
+    /// trace: FR-UI-STABLE-01
+    #[test]
+    fn fr_ui_stable_01_s_meter_reservation_covers_every_reading() {
+        let reserved = S_METER_WIDEST.chars().count();
+        let mut widest = String::new();
+        for dbm in -140..=10 {
+            let s = fmt_dbm(Some(dbm));
+            if s.chars().count() > widest.chars().count() {
+                widest = s.clone();
+            }
+            assert!(
+                s.chars().count() <= reserved,
+                "{dbm} dBm renders {s:?} ({} chars), over the {reserved} reserved",
+                s.chars().count()
+            );
+        }
+        // The placeholder must fit too — it is what a disconnected app shows.
+        assert!(fmt_dbm(None).chars().count() <= reserved);
+        // Not an exact-fit assertion: the constant deliberately combines the
+        // widest unit with the widest number, which need not co-occur.
+        assert!(
+            widest.chars().count() <= reserved,
+            "widest real reading was {widest:?}"
+        );
     }
 }

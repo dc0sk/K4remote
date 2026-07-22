@@ -371,6 +371,31 @@ fn fr_tx_tune_01_emergency_stop_ends_a_tune() {
     assert_eq!(link.last_sent().as_deref(), Some("RX;"));
 }
 
+/// An auto-repeating voice message must not survive the emergency stop.
+///
+/// `DAMP<m><interval>` plays a stored message and re-keys on its own until
+/// something ends it, so a stop that sent only `RX;` would be followed by the
+/// radio transmitting again a moment later — the operator would hit the
+/// button, see transmit drop, and then watch it come back.
+/// trace: FR-TX-SAFE-04
+#[test]
+fn fr_tx_safe_04_emergency_stop_ends_an_auto_repeating_message() {
+    let (link, _clock, mut s) = build();
+    s.arm_tx();
+    s.send("DAMP10500;").unwrap();
+    assert!(s.is_raw_tx(), "an auto-repeating message counts as on air");
+
+    s.emergency_stop().unwrap();
+    let sent = link.sent();
+    assert!(
+        sent.contains(&"DA0;".to_string()),
+        "digital audio stopped: {sent:?}"
+    );
+    assert!(!s.is_raw_tx());
+    assert!(!s.is_tx_armed());
+    assert_eq!(link.last_sent().as_deref(), Some("RX;"), "RX; goes last");
+}
+
 /// A `<cmd>?;` rejection reaches the session's state so the app can announce
 /// it. `RadioState` recorded this all along, but nothing read it — the
 /// operator saw a rejection only as one more Debug `rx` line among the

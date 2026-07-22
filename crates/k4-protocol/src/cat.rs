@@ -619,6 +619,80 @@ pub fn query_tx_test() -> &'static str {
     "TS;"
 }
 
+/// Where an AF-recording playback should jump to (`DAPJ`, D12).
+///
+/// The command overloads one field, and the overload is sharp: a single digit
+/// selects a *recording session*, while two or more characters are a relative
+/// jump in *milliseconds*. So a 5 ms nudge and "session 5" have the same
+/// spelling — which is why the millisecond arm below is always written with at
+/// least two digits, and why this is an enum rather than a bare number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AfJump {
+    /// `0` — the most recent recording session.
+    LastSession,
+    /// `1`–`9` — a specific session.
+    Session(u8),
+    /// `>` — the next recording.
+    NextSession,
+    /// `<` — the previous recording.
+    PrevSession,
+    /// Relative jump in milliseconds; negative rewinds.
+    Millis(i32),
+}
+
+/// Seek within an AF recording (`DAPJ`).
+///
+/// trace: FR-AUD-REC-01
+pub fn af_jump(target: AfJump) -> String {
+    match target {
+        AfJump::LastSession => "DAPJ0;".to_string(),
+        AfJump::Session(n) => format!("DAPJ{};", n.clamp(1, 9)),
+        AfJump::NextSession => "DAPJ>;".to_string(),
+        AfJump::PrevSession => "DAPJ<;".to_string(),
+        // Two digits minimum, so a small jump is never read as a session id.
+        AfJump::Millis(ms) => {
+            let sign = if ms < 0 { "-" } else { "" };
+            format!("DAPJ{sign}{:02};", ms.unsigned_abs())
+        }
+    }
+}
+
+/// Start recording received audio into the radio's 90 s buffer (`DARS`).
+///
+/// trace: FR-AUD-REC-01
+pub fn af_record() -> &'static str {
+    "DARS;"
+}
+
+/// Play the AF recording back through the receivers (`DAPS`), from `offset_ms`.
+///
+/// trace: FR-AUD-REC-01
+pub fn af_play(offset_ms: u32) -> String {
+    format!("DAPS{:05};", offset_ms.min(90_000))
+}
+
+/// Clear the recording buffers (`DARC`). Saved voice messages are untouched —
+/// erasing those is `DAME`, which this app does not send.
+///
+/// trace: FR-AUD-REC-01
+pub fn clear_recordings() -> &'static str {
+    "DARC;"
+}
+
+/// Stop any digital-audio action (`DA0`) — recording, playback, transmit.
+///
+/// trace: FR-AUD-REC-01
+pub fn digital_audio_stop() -> &'static str {
+    "DA0;"
+}
+
+/// Query the digital-audio engine (`DA`).
+///
+/// trace: FR-AUD-REC-01
+pub fn query_digital_audio() -> &'static str {
+    "DA;"
+}
+
 /// Set RIT on/off (`RT`).
 ///
 /// trace: FR-VFO-05
@@ -1017,6 +1091,12 @@ pub fn set_power(n: u8) -> String {
 pub fn keys_transmitter(command: &str) -> bool {
     let cmd = command.trim();
     let cmd = cmd.strip_suffix(';').unwrap_or(cmd);
+    // D12: "Commands may use upper or lower case alphabetic characters." The
+    // radio honours `tx;` exactly as it honours `TX;`, so a gate that matched
+    // only uppercase was no gate at all for anyone typing into the raw-CAT
+    // console. Classify on an upper-cased *copy*; the caller sends the command
+    // unchanged, which matters because `KY` payload case is significant in PSK.
+    let cmd = &cmd.to_ascii_uppercase();
     // A query asks, it does not act.
     if cmd.ends_with('$') || cmd.is_empty() {
         return false;
@@ -1032,6 +1112,13 @@ pub fn keys_transmitter(command: &str) -> bool {
         "KZ" | "KY" => !arg.is_empty(),
         // DVR playback transmits the recorded message; `PB0` stops.
         "PB" => !arg.is_empty() && arg != "0",
+        // Digital audio (D12 `DA`). Two of its actions reach the transmitter:
+        // `DAPM` plays the last recorded voice message through the transmitter,
+        // and `DAMP` plays a stored one — with an optional repeat interval, so
+        // it re-keys on its own until something stops it. Everything else in
+        // the family (AF record/play to the speakers, seeking, saving and
+        // erasing messages) stays on the receive side.
+        "DA" => arg.starts_with("PM") || arg.starts_with("MP"),
         // Front-panel switch emulation: the transmit-capable codes.
         "SW" => matches!(
             arg.trim_start_matches('0'),
@@ -1052,5 +1139,12 @@ pub fn keys_transmitter(command: &str) -> bool {
 pub fn stops_transmitter(command: &str) -> bool {
     let cmd = command.trim();
     let cmd = cmd.strip_suffix(';').unwrap_or(cmd);
-    matches!(cmd, "RX" | "TU0" | "PB0")
+    // Case-insensitive for the same reason as `keys_transmitter`: a stop the
+    // classifier does not recognise leaves the session believing it is still
+    // on air.
+    let cmd = cmd.to_ascii_uppercase();
+    let cmd = cmd.as_str();
+    // `DA0` stops every digital-audio action, which per D12 includes any it
+    // started on the transmitter.
+    matches!(cmd, "RX" | "TU0" | "PB0" | "DA0")
 }

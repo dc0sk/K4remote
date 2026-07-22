@@ -36,6 +36,142 @@ impl Mode {
     }
 }
 
+/// Which receivers an AF recording plays back through (`DA` `m` field).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AfPlayback {
+    /// `0` — both receivers.
+    Both,
+    /// `A` — main only.
+    Main,
+    /// `B` — sub only.
+    Sub,
+}
+
+impl AfPlayback {
+    /// Parse the `m` field of a `DA` playback response.
+    pub fn from_da_field(c: u8) -> Option<AfPlayback> {
+        match c {
+            b'0' => Some(AfPlayback::Both),
+            b'A' => Some(AfPlayback::Main),
+            b'B' => Some(AfPlayback::Sub),
+            _ => None,
+        }
+    }
+}
+
+/// What the radio's digital-audio engine is doing (`DA`, D12).
+///
+/// One engine serves two features that look separate on the front panel: the
+/// **AF recorder** (record what you are hearing, play it back) and the **DVR**
+/// voice messages (record from the microphone, transmit). They share a buffer
+/// and a status command, so they share a type here — a state that belongs to
+/// the other feature must still parse, or the display would go blank exactly
+/// when something is happening.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DigitalAudio {
+    /// `DA0` — nothing in progress.
+    Idle,
+    /// `DAPW` — a message is between auto-repeats, `remaining_ms` to the next.
+    WaitingRepeat { remaining_ms: u32 },
+    /// `DARM` — recording a voice message from the microphone.
+    RecordingMessage { pos_ms: u32, max_ms: u32 },
+    /// `DARS` — recording received audio.
+    RecordingAf { pos_ms: u32, max_ms: u32 },
+    /// `DAPM` — playing a voice message **through the transmitter**.
+    PlayingMessage {
+        pos_ms: u32,
+        max_ms: u32,
+        playback: Option<AfPlayback>,
+        session: Option<u8>,
+        last: bool,
+    },
+    /// `DAPS` — playing an AF recording back to the speakers.
+    PlayingAf {
+        pos_ms: u32,
+        max_ms: u32,
+        playback: Option<AfPlayback>,
+        session: Option<u8>,
+        last: bool,
+    },
+}
+
+impl DigitalAudio {
+    /// Position and buffer length, for any state that has them.
+    pub fn progress(self) -> Option<(u32, u32)> {
+        match self {
+            DigitalAudio::Idle | DigitalAudio::WaitingRepeat { .. } => None,
+            DigitalAudio::RecordingMessage { pos_ms, max_ms }
+            | DigitalAudio::RecordingAf { pos_ms, max_ms }
+            | DigitalAudio::PlayingMessage { pos_ms, max_ms, .. }
+            | DigitalAudio::PlayingAf { pos_ms, max_ms, .. } => Some((pos_ms, max_ms)),
+        }
+    }
+
+    /// Whether this state has the radio on air. `PlayingMessage` transmits;
+    /// nothing else in the family does.
+    pub fn is_transmitting(self) -> bool {
+        matches!(self, DigitalAudio::PlayingMessage { .. })
+    }
+}
+
+/// Parse the argument of a `DA` response (everything after `DA`).
+///
+/// Returns `None` for anything unrecognised rather than guessing, so a form
+/// added by a later firmware is ignored instead of being mis-displayed.
+pub fn parse_digital_audio(arg: &str) -> Option<DigitalAudio> {
+    if arg == "0" {
+        return Some(DigitalAudio::Idle);
+    }
+    let (tag, rest) = arg.split_at_checked(2)?;
+    // The two counters are fixed-width 5-digit ms fields in every form that
+    // carries them; the playback forms then add mode, session and last-flag.
+    let pair = |r: &str| -> Option<(u32, u32)> {
+        let (a, b) = r.split_at_checked(5)?;
+        Some((a.parse().ok()?, b.get(..5)?.parse().ok()?))
+    };
+    match tag {
+        "PW" => Some(DigitalAudio::WaitingRepeat {
+            remaining_ms: rest.parse().ok()?,
+        }),
+        "RM" => {
+            let (pos_ms, max_ms) = pair(rest)?;
+            Some(DigitalAudio::RecordingMessage { pos_ms, max_ms })
+        }
+        "RS" => {
+            let (pos_ms, max_ms) = pair(rest)?;
+            Some(DigitalAudio::RecordingAf { pos_ms, max_ms })
+        }
+        "PM" | "PS" => {
+            let (pos_ms, max_ms) = pair(rest)?;
+            let tail = rest.as_bytes().get(10..).unwrap_or(&[]);
+            let playback = tail.first().copied().and_then(AfPlayback::from_da_field);
+            let session = tail
+                .get(1)
+                .and_then(|c| (*c as char).to_digit(10))
+                .map(|d| d as u8);
+            let last = tail.get(2) == Some(&b'1');
+            if tag == "PM" {
+                Some(DigitalAudio::PlayingMessage {
+                    pos_ms,
+                    max_ms,
+                    playback,
+                    session,
+                    last,
+                })
+            } else {
+                Some(DigitalAudio::PlayingAf {
+                    pos_ms,
+                    max_ms,
+                    playback,
+                    session,
+                    last,
+                })
+            }
+        }
+        _ => None,
+    }
+}
+
 /// Authoritative radio state (subset; grows per requirement). `None` = unknown
 /// (not yet reported by the radio).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -88,6 +224,9 @@ pub struct RadioState {
     pub last_error: Option<String>,
     /// Speech compression, 0–30 (`CP`).
     pub compression: Option<u8>,
+    /// What the digital-audio engine is doing (`DA`): AF record/playback and
+    /// DVR voice messages both report here.
+    pub digital_audio: Option<DigitalAudio>,
     /// TX test mode (`TS`). D12: while it is in effect the radio's "TX" icon
     /// flashes and the transmitter puts out no power, though it still keys
     /// downstream gear — so this is a state the operator must be able to see.
@@ -292,6 +431,13 @@ impl RadioState {
         } else if let Some(arg) = cmd.strip_prefix("FB") {
             if let Ok(hz) = arg.parse::<u64>() {
                 self.vfo_b_hz = Some(hz);
+            }
+        } else if let Some(arg) = cmd.strip_prefix("DA") {
+            // Unrecognised forms leave the previous state rather than clearing
+            // it: a status display that blanks on an unknown variant is worse
+            // than one that lags by a poll.
+            if let Some(da) = parse_digital_audio(arg) {
+                self.digital_audio = Some(da);
             }
         } else if let Some(arg) = cmd.strip_prefix("TS") {
             self.tx_test = match arg.as_bytes().first() {
@@ -827,6 +973,7 @@ pub fn connect_state_seed() -> &'static [&'static str] {
         "VT;", "VT$;", // VFO tuning step (for optimistic ◄► stepping)
         "DT;", "DT$;", // DATA sub-mode (DATA A / AFSK A / FSK D / PSK D)
         "RP;", "PL;", // FM repeater offset + PL/CTCSS tone
+        "DA;", // digital-audio engine (AF recorder / DVR) status
         "TS;", // TX test mode — the radio transmits no power while it is on
         "UT;", "CC;",   // radio UTC time + remote client count (status strip)
         "#MP$;", // mini-pan on/off
