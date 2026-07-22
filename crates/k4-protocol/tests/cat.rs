@@ -682,3 +682,22 @@ fn fr_tx_safe_03_the_gate_is_case_insensitive() {
         assert!(!keys_transmitter(cmd), "{cmd} must not be gated");
     }
 }
+
+/// TX test mode encodes explicitly rather than as a toggle.
+///
+/// The app reads `TS` back, so it can name the state it wants. A blind
+/// `TS/;` would leave both ends guessing after any toggle sent from the front
+/// panel or another client — which is the bug this replaced.
+/// trace: FR-TX-TUNE-01
+#[test]
+fn fr_tx_tune_01_tx_test_encodes_explicitly() {
+    use k4_protocol::cat::{keys_transmitter, query_tx_test, set_tx_test};
+    assert_eq!(set_tx_test(true), "TS1;");
+    assert_eq!(set_tx_test(false), "TS0;");
+    assert_eq!(query_tx_test(), "TS;");
+    // Entering test mode keys nothing — and it makes the radio put out *less*
+    // power, so gating it behind the TX arm would block the safer direction.
+    assert!(!keys_transmitter("TS1;"));
+    assert!(!keys_transmitter("TS0;"));
+    assert!(!keys_transmitter("ts1;"), "case-insensitively, too");
+}

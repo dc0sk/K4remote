@@ -2358,6 +2358,16 @@ impl App {
                         self.tune_lp_on = !self.tune_lp_on; // TUNE LP
                         self.send(WorkerCmd::Cat(cat::switch(131)));
                     }
+                    // TX TEST: the documented `TS` command rather than the
+                    // switch emulation. `SW132` toggles it blind — the app
+                    // could not tell whether it had turned test mode on or off,
+                    // which is why the button showed nothing. Reading the state
+                    // back lets us set the one we want and then confirm it.
+                    132 => {
+                        let on = self.ui.tx_test == Some(true);
+                        self.send(WorkerCmd::Cat(cat::set_tx_test(!on)));
+                        self.send(WorkerCmd::Cat(cat::query_tx_test().to_string()));
+                    }
                     // RX ANT / SUB ANT: step through only the enabled antennas
                     // (ACM/ACS mask) via AR/AR$; fall back to the switch tap if
                     // the mask isn't known.
@@ -3431,6 +3441,13 @@ impl App {
                 self.ui.transmitting && !self.tune_on && !self.tune_lp_on,
                 label.into(),
             ),
+            // TX TEST (`TS`). Reached here as the hold-function of the XMIT
+            // switch, but the state comes from the radio's `TS` read-back, not
+            // from having sent the switch code — so the button lights whether
+            // test mode was turned on from this app, another client, or the
+            // front panel. Without this it fell through to the momentary flash
+            // below and gave no indication at all (FR-TX-TUNE-01).
+            132 => (self.ui.tx_test == Some(true), label.into()),
             158 => {
                 // ATU: 2 = auto (in line), 1 = bypass (out).
                 let in_line = self.ui.radio.atu_mode == Some(2);
