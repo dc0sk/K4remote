@@ -553,19 +553,22 @@ fn fr_pan_ctl_01_fixed_tune_encode() {
 fn fr_tx_safe_03_transmit_capable_commands_are_classified() {
     use k4_protocol::cat::keys_transmitter;
     for cmd in [
-        "TX;",       // begin transmit
-        "TU1;",      // tune
-        "TU2;",      // tune low power
-        "TU3;",      // ATU tune
-        "TU4;",      // ATU extended search
-        "SW16;",     // front-panel TUNE
-        "SW131;",    // front-panel TUNE LP
-        "SW40;",     // front-panel ATU TUNE
-        "SW30;",     // front-panel XMIT
-        "SW016;",    // zero-padded spelling of the same switch
-        "PB1;",      // DVR playback transmits the recorded message
-        "KY HELLO;", // text send
-        "KZ0102;",   // CW keying stream
+        "TX;",        // begin transmit
+        "TU1;",       // tune
+        "TU2;",       // tune low power
+        "TU3;",       // ATU tune
+        "TU4;",       // ATU extended search
+        "SW16;",      // front-panel TUNE
+        "SW131;",     // front-panel TUNE LP
+        "SW40;",      // front-panel ATU TUNE
+        "SW30;",      // front-panel XMIT
+        "SW016;",     // zero-padded spelling of the same switch
+        "PB1;",       // DVR playback transmits the recorded message
+        "KY HELLO;",  // text send
+        "KZ0102;",    // CW keying stream
+        "DAPM00000;", // plays the last voice message *through the transmitter*
+        "DAMP1;",     // plays stored voice message 1 through the transmitter
+        "DAMP10500;", // ...and this one auto-repeats, so it re-keys on its own
     ] {
         assert!(keys_transmitter(cmd), "{cmd} must be gated by the TX arm");
     }

@@ -1009,6 +1009,13 @@ pub fn keys_transmitter(command: &str) -> bool {
         "KZ" | "KY" => !arg.is_empty(),
         // DVR playback transmits the recorded message; `PB0` stops.
         "PB" => !arg.is_empty() && arg != "0",
+        // Digital audio (D12 `DA`). Two of its actions reach the transmitter:
+        // `DAPM` plays the last recorded voice message through the transmitter,
+        // and `DAMP` plays a stored one — with an optional repeat interval, so
+        // it re-keys on its own until something stops it. Everything else in
+        // the family (AF record/play to the speakers, seeking, saving and
+        // erasing messages) stays on the receive side.
+        "DA" => arg.starts_with("PM") || arg.starts_with("MP"),
         // Front-panel switch emulation: the transmit-capable codes.
         "SW" => matches!(
             arg.trim_start_matches('0'),
@@ -1029,5 +1036,7 @@ pub fn keys_transmitter(command: &str) -> bool {
 pub fn stops_transmitter(command: &str) -> bool {
     let cmd = command.trim();
     let cmd = cmd.strip_suffix(';').unwrap_or(cmd);
-    matches!(cmd, "RX" | "TU0" | "PB0")
+    // `DA0` stops every digital-audio action, which per D12 includes any it
+    // started on the transmitter.
+    matches!(cmd, "RX" | "TU0" | "PB0" | "DA0")
 }

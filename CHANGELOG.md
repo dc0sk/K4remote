@@ -10,6 +10,21 @@ during the 0.4.0 release, so earlier detail lives in the git history and in the
 change ledgers under [`docs/test/test-strategy.md`](docs/test/test-strategy.md)
 and [`docs/requirements/system-requirements.md`](docs/requirements/system-requirements.md).
 
+## [Unreleased]
+
+### Fixed
+
+- **Transmit safety: the `DA` (digital audio) commands are now behind the TX
+  arm.** `DAPM` plays the last recorded voice message *through the
+  transmitter*, and `DAMP` plays a stored one with an optional auto-repeat
+  interval — so it re-keys by itself. Neither was recognised as
+  transmit-capable, and both could be sent from the diagnostics console's
+  raw-CAT field with TX disarmed.
+
+  **Emergency stop now also sends `DA0;`.** Without it, stopping an
+  auto-repeating voice message dropped transmit and then let the radio go back
+  on air a moment later.
+
 ## [0.6.0] — 2026-07-21
 
 ### Added
