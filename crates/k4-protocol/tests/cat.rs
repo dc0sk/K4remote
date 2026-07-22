@@ -604,3 +604,42 @@ fn fr_tx_safe_03_stop_and_receive_commands_are_not_gated() {
         );
     }
 }
+
+/// The AF-recorder encoders match D12's `DA` field layouts.
+///
+/// The `DAPJ` overload is the trap: a *single* digit selects a recording
+/// session, while two or more characters are a relative jump in milliseconds.
+/// A 5 ms nudge written as `DAPJ5;` would therefore jump to session 5 instead
+/// — so the millisecond arm always writes at least two digits.
+/// trace: FR-AUD-REC-01
+#[test]
+fn fr_aud_rec_01_af_recorder_commands_encode() {
+    use k4_protocol::cat::{af_jump, af_play, af_record, clear_recordings, AfJump};
+    use k4_protocol::cat::{digital_audio_stop, query_digital_audio};
+
+    assert_eq!(af_record(), "DARS;");
+    assert_eq!(clear_recordings(), "DARC;");
+    assert_eq!(digital_audio_stop(), "DA0;");
+    assert_eq!(query_digital_audio(), "DA;");
+
+    assert_eq!(af_play(0), "DAPS00000;", "offset is 5 digits, zero-padded");
+    assert_eq!(af_play(12_345), "DAPS12345;");
+    assert_eq!(af_play(999_999), "DAPS90000;", "clamped to the 90 s buffer");
+
+    assert_eq!(af_jump(AfJump::LastSession), "DAPJ0;");
+    assert_eq!(af_jump(AfJump::Session(3)), "DAPJ3;");
+    assert_eq!(af_jump(AfJump::NextSession), "DAPJ>;");
+    assert_eq!(af_jump(AfJump::PrevSession), "DAPJ<;");
+    assert_eq!(af_jump(AfJump::Millis(5_000)), "DAPJ5000;");
+    assert_eq!(af_jump(AfJump::Millis(-5_000)), "DAPJ-5000;");
+    // The whole reason the millisecond arm is separate from Session.
+    assert_eq!(
+        af_jump(AfJump::Millis(5)),
+        "DAPJ05;",
+        "a small jump must not be spelled like a session id"
+    );
+    assert_eq!(af_jump(AfJump::Millis(-5)), "DAPJ-05;");
+    // Session ids are 1-9; 0 has its own meaning, so it is not reachable here.
+    assert_eq!(af_jump(AfJump::Session(0)), "DAPJ1;");
+    assert_eq!(af_jump(AfJump::Session(99)), "DAPJ9;");
+}

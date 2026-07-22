@@ -596,6 +596,80 @@ pub fn set_dvr(n: u8) -> String {
     format!("PB{};", n.min(8))
 }
 
+/// Where an AF-recording playback should jump to (`DAPJ`, D12).
+///
+/// The command overloads one field, and the overload is sharp: a single digit
+/// selects a *recording session*, while two or more characters are a relative
+/// jump in *milliseconds*. So a 5 ms nudge and "session 5" have the same
+/// spelling — which is why the millisecond arm below is always written with at
+/// least two digits, and why this is an enum rather than a bare number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AfJump {
+    /// `0` — the most recent recording session.
+    LastSession,
+    /// `1`–`9` — a specific session.
+    Session(u8),
+    /// `>` — the next recording.
+    NextSession,
+    /// `<` — the previous recording.
+    PrevSession,
+    /// Relative jump in milliseconds; negative rewinds.
+    Millis(i32),
+}
+
+/// Seek within an AF recording (`DAPJ`).
+///
+/// trace: FR-AUD-REC-01
+pub fn af_jump(target: AfJump) -> String {
+    match target {
+        AfJump::LastSession => "DAPJ0;".to_string(),
+        AfJump::Session(n) => format!("DAPJ{};", n.clamp(1, 9)),
+        AfJump::NextSession => "DAPJ>;".to_string(),
+        AfJump::PrevSession => "DAPJ<;".to_string(),
+        // Two digits minimum, so a small jump is never read as a session id.
+        AfJump::Millis(ms) => {
+            let sign = if ms < 0 { "-" } else { "" };
+            format!("DAPJ{sign}{:02};", ms.unsigned_abs())
+        }
+    }
+}
+
+/// Start recording received audio into the radio's 90 s buffer (`DARS`).
+///
+/// trace: FR-AUD-REC-01
+pub fn af_record() -> &'static str {
+    "DARS;"
+}
+
+/// Play the AF recording back through the receivers (`DAPS`), from `offset_ms`.
+///
+/// trace: FR-AUD-REC-01
+pub fn af_play(offset_ms: u32) -> String {
+    format!("DAPS{:05};", offset_ms.min(90_000))
+}
+
+/// Clear the recording buffers (`DARC`). Saved voice messages are untouched —
+/// erasing those is `DAME`, which this app does not send.
+///
+/// trace: FR-AUD-REC-01
+pub fn clear_recordings() -> &'static str {
+    "DARC;"
+}
+
+/// Stop any digital-audio action (`DA0`) — recording, playback, transmit.
+///
+/// trace: FR-AUD-REC-01
+pub fn digital_audio_stop() -> &'static str {
+    "DA0;"
+}
+
+/// Query the digital-audio engine (`DA`).
+///
+/// trace: FR-AUD-REC-01
+pub fn query_digital_audio() -> &'static str {
+    "DA;"
+}
+
 /// Set RIT on/off (`RT`).
 ///
 /// trace: FR-VFO-05

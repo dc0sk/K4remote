@@ -12,6 +12,17 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
 
 ## [Unreleased]
 
+### Added
+
+- **AF recorder.** A strip below the mini-pan drives the radio's own
+  90-second receive-audio recorder — the same buffer behind the K4's AF
+  REC/PLAY switches: record, play back, jump five seconds either way, step
+  between recording sessions, and clear.
+
+  The recordings live **in the radio**, not in this app, so they are the same
+  ones the front panel sees. While a DVR voice message is recording or
+  transmitting the AF controls go inactive, since the two share one engine.
+
 ### Fixed
 
 - **Transmit safety: the `DA` (digital audio) commands are now behind the TX

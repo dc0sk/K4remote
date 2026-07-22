@@ -6,6 +6,8 @@
 //! Design rationale and the adopt/diverge stance: `docs/concept/ui-design.md`,
 //! `ADR-15`, sourced from the K4 native LCD (`R-EXT-02`).
 
+use k4_protocol::state::DigitalAudio;
+
 /// Which VFO(s) the main window shows, mirroring the K4 `PAN=A / PAN=B /
 /// PAN=A+B` selection (FR-UI-08, R-EXT-02). The operator cycles through these;
 /// the layout reflows to the active mode.
@@ -1504,6 +1506,71 @@ pub fn tx_ctl_vis(c: TxCtl, m: ModeClass) -> Vis {
     }
 }
 
+/// Format a millisecond position as `m:ss`, for the AF-recorder readout.
+///
+/// Always two seconds digits so the label keeps one width as the position
+/// runs (`FR-UI-STABLE-01`); the 90 s buffer never reaches two minutes, but a
+/// minutes field costs nothing and reads more naturally than `0:90`.
+pub fn format_pos(ms: u32) -> String {
+    let secs = ms / 1000;
+    format!("{}:{:02}", secs / 60, secs % 60)
+}
+
+/// What the AF-recorder strip should show, derived from the radio's `DA`
+/// status. Kept pure so the button states can be tested without a window.
+///
+/// The `DA` engine is shared with the DVR, so states belonging to a voice
+/// message appear here too. Those must **not** light the AF buttons — the
+/// recorder would claim to be running when what is actually happening is a
+/// message going out over the air.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct AfRecorder {
+    /// The AF recorder is capturing (`DARS`).
+    pub recording: bool,
+    /// An AF recording is playing back to the speakers (`DAPS`).
+    pub playing: bool,
+    /// Position and buffer length in ms, when the radio reports them.
+    pub progress: Option<(u32, u32)>,
+    /// The recording session being played, when known.
+    pub session: Option<u8>,
+    /// Something else has the engine — a DVR message recording or transmitting.
+    /// The AF controls stand down rather than fight it.
+    pub busy_elsewhere: bool,
+}
+
+/// Project a `DA` status onto the AF-recorder strip.
+pub fn af_recorder(da: Option<DigitalAudio>) -> AfRecorder {
+    match da {
+        None | Some(DigitalAudio::Idle) => AfRecorder::default(),
+        Some(DigitalAudio::RecordingAf { pos_ms, max_ms }) => AfRecorder {
+            recording: true,
+            progress: Some((pos_ms, max_ms)),
+            ..Default::default()
+        },
+        Some(DigitalAudio::PlayingAf {
+            pos_ms,
+            max_ms,
+            session,
+            ..
+        }) => AfRecorder {
+            playing: true,
+            progress: Some((pos_ms, max_ms)),
+            session,
+            ..Default::default()
+        },
+        // A voice message: the DVR's business, not the AF recorder's.
+        Some(
+            DigitalAudio::RecordingMessage { .. }
+            | DigitalAudio::PlayingMessage { .. }
+            | DigitalAudio::WaitingRepeat { .. },
+        ) => AfRecorder {
+            busy_elsewhere: true,
+            progress: da.and_then(DigitalAudio::progress),
+            ..Default::default()
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2635,5 +2702,84 @@ mod on_air_tests {
         );
         assert!(on_air(true, false, None), "a local transmit still counts");
         assert!(on_air(false, true, None), "a local tune still counts");
+    }
+}
+
+#[cfg(test)]
+mod af_recorder_tests {
+    use super::{af_recorder, format_pos, AfRecorder};
+
+    /// The AF-recorder strip reads the shared `DA` engine, and must not claim
+    /// the recorder is running when what is actually happening belongs to the
+    /// DVR — a voice message going out over the air is the opposite of a
+    /// receive-side recording, and lighting REC for it would be a lie about
+    /// whether the radio is transmitting.
+    /// trace: FR-AUD-REC-01
+    #[test]
+    fn fr_aud_rec_01_strip_state_follows_the_shared_engine() {
+        use k4_protocol::state::DigitalAudio as D;
+
+        assert_eq!(af_recorder(None), AfRecorder::default(), "unknown = idle");
+        assert_eq!(af_recorder(Some(D::Idle)), AfRecorder::default());
+
+        let rec = af_recorder(Some(D::RecordingAf {
+            pos_ms: 3_000,
+            max_ms: 90_000,
+        }));
+        assert!(rec.recording && !rec.playing && !rec.busy_elsewhere);
+        assert_eq!(rec.progress, Some((3_000, 90_000)));
+
+        let play = af_recorder(Some(D::PlayingAf {
+            pos_ms: 1_000,
+            max_ms: 90_000,
+            playback: None,
+            session: Some(2),
+            last: false,
+        }));
+        assert!(play.playing && !play.recording && !play.busy_elsewhere);
+        assert_eq!(play.session, Some(2));
+
+        // The DVR states: neither AF button lights, and the strip says so.
+        for dvr in [
+            D::RecordingMessage {
+                pos_ms: 0,
+                max_ms: 90_000,
+            },
+            D::PlayingMessage {
+                pos_ms: 0,
+                max_ms: 90_000,
+                playback: None,
+                session: None,
+                last: false,
+            },
+            D::WaitingRepeat { remaining_ms: 500 },
+        ] {
+            let a = af_recorder(Some(dvr));
+            assert!(
+                !a.recording && !a.playing,
+                "{dvr:?} must not light the AF buttons"
+            );
+            assert!(a.busy_elsewhere, "{dvr:?} occupies the engine");
+        }
+    }
+
+    /// The position readout keeps one width as it counts, so the strip beside
+    /// it does not shift every time the seconds tick over.
+    /// trace: FR-AUD-REC-01, FR-UI-STABLE-01
+    #[test]
+    fn fr_aud_rec_01_position_readout_is_fixed_width() {
+        assert_eq!(format_pos(0), "0:00");
+        assert_eq!(format_pos(999), "0:00", "sub-second rounds down");
+        assert_eq!(format_pos(9_000), "0:09");
+        assert_eq!(format_pos(12_000), "0:12");
+        assert_eq!(format_pos(90_000), "1:30", "the full buffer");
+        let widths: Vec<usize> = [0, 9_000, 12_000, 59_000, 90_000]
+            .iter()
+            .map(|ms| format_pos(*ms).len())
+            .collect();
+        assert!(
+            widths.windows(2).all(|w| w[0] == w[1]),
+            "every position renders the same width: {widths:?}"
+        );
     }
 }
