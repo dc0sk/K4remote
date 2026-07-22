@@ -14,6 +14,28 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
 
 ### Fixed
 
+- **Sliders no longer fight you.** Dragging AF, RF, SQL, notch or shift could
+  snap the value backwards mid-drag: the radio's read-back for an earlier step
+  overwrote the value you were setting. Your value is now held until the radio
+  confirms it. **APF width** changed the same way — it kept no local value, so
+  the button took as long as the radio needed to answer (~2 s); it responds
+  immediately now.
+
+- **Dragging a slider no longer floods the link.** Every step of a drag sent a
+  command to the radio. They are now sent at most every 50 ms, with the settled
+  value sent when you let go.
+
+### Changed
+
+- **Two rows of vertical space reclaimed.** The mode-specific extras (APF/SPOT
+  in CW, the sub-mode selector in DATA, repeater + PL in FM) now sit at the end
+  of the mode-button row rather than on a strip of their own — that strip was
+  reserved in every mode and stood empty in SSB and AM. In the TRANSMIT frame
+  the DVR / keyer-timing controls moved onto the end of the levels row. The
+  frames are the same height in every mode, as before.
+
+### Fixed
+
 - **More controls hold still as their labels change.** Continuing the
   no-bouncing-wireframe pass: **PTT/UNKEY** no longer shoves EMERGENCY STOP
   sideways when you key, the AF/RF/SQL/NOTCH/NB/NR slider readings no longer
