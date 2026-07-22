@@ -3380,7 +3380,7 @@ impl App {
     /// decode in DATA, the repeater/PL panel in FM (FR-UI-24). Adaptive-only
     /// extras appear only when the mode-adaptive UI is on; the FM panel shows in
     /// both modes (it has nowhere else to live).
-    fn rx_mode_strip(&self, class: ui::ModeClass) -> Element<'_, Message> {
+    fn rx_mode_extras(&self, class: ui::ModeClass) -> Element<'_, Message> {
         let decode = || {
             Button::new(
                 Text::new(if self.decode_on {
@@ -3472,10 +3472,7 @@ impl App {
         if class == ui::ModeClass::Fm {
             row = row.push(self.fm_panel());
         }
-        Container::new(row)
-            .height(Length::Fixed(RX_STRIP_H))
-            .width(Length::Fill)
-            .into()
+        row.into()
     }
 
     fn fm_panel(&self) -> Element<'_, Message> {
@@ -3510,7 +3507,10 @@ impl App {
                     .size(10)
                     .color(rxv),
             )
-            .push(horizontal_space())
+            // The PL group used to be pushed to the far right of its own row.
+            // Now that this panel shares the mode row it must stay compact, or
+            // the spacer would shove PL off the end of the frame.
+            .push(Space::with_width(Length::Fixed(12.0)))
             .push(
                 Button::new(
                     Text::new(if r.pl_on == Some(true) {
@@ -3792,8 +3792,18 @@ impl App {
             .spacing(6)
             .push(Text::new("Switches (tap · hold)").size(10).color(dim))
             .push(switch_row)
-            .push(mon_row)
-            .push(action_row)
+            // The action controls (DVR, or the CW keyer timing) ride on the end
+            // of the level row rather than taking a row of their own. Neither
+            // row filled its width — the levels ended around half way and the
+            // DVR strip is short — so the second row was buying vertical space
+            // with nothing in it.
+            .push(
+                Row::new()
+                    .spacing(16)
+                    .align_y(Alignment::Center)
+                    .push(mon_row)
+                    .push(action_row),
+            )
             .into()
     }
 
@@ -5664,7 +5674,15 @@ impl App {
                 "NORMALIZE".into(),
                 Message::FilterNormalize,
                 rx_dim(ui::RxCtl::FilterPresets),
-            ));
+            ))
+            // Mode-specific extras ride on the end of this row rather than
+            // occupying a row of their own (FR-UI-24). The strip used to be a
+            // reserved fixed-height row that stayed empty in SSB and AM —
+            // vertical space paid for in every mode to avoid the frame
+            // resizing in three. Sharing this row costs nothing when empty and
+            // still cannot resize the frame, because the row is one line high
+            // either way.
+            .push(self.rx_mode_extras(rx_class));
         // AF/RF gain + squelch sliders for the main receiver (FR-RX-01,
         // FR-RX-SQL-01) — the K4's RF/SQL knob, plus radio-side AF.
         let rxv = role_color(ui::ColorRole::RxValue);
@@ -5879,10 +5897,7 @@ impl App {
                         .push(chips),
                 )
                 .push(tune_row)
-                .push(gain_row)
-                // Always-present fixed-height mode strip (fixes the old FM
-                // layout jump; hosts mode-specific extras when adaptive).
-                .push(self.rx_mode_strip(rx_class)),
+                .push(gain_row),
         )
         .style(panel_style)
         .padding(12)
@@ -7284,9 +7299,6 @@ const SCREEN_H: f32 = 300.0;
 
 /// Height of the always-present mini-pan overview frame (FR-UI-14).
 const MINI_PAN_H: f32 = 56.0;
-
-/// Height of the always-present MAIN RX mode strip (fixes the FM layout jump).
-const RX_STRIP_H: f32 = 34.0;
 
 /// Visual kind of a styled button (FR-UI-10/15): rest-state control, engaged
 /// (blue fill, like the reference client), transmit-critical (red edge),
