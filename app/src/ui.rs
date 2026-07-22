@@ -492,15 +492,38 @@ pub fn is_hold(elapsed: Option<std::time::Duration>) -> bool {
 ///
 /// trace: FR-UI-STABLE-01
 pub fn stable_label_width(labels: &[&str], text_size: f32, padding: f32) -> f32 {
-    let longest = labels.iter().map(|l| l.chars().count()).max().unwrap_or(0);
-    // 0.78 em per character. Control labels here are almost all upper case,
-    // and capitals run near 0.72 em in this font — an earlier 0.62 was under
-    // the true width, so "DISARM" wrapped to two lines inside its own
-    // reservation. Erring high costs a few pixels of padding; erring low
-    // breaks the layout in a way that is worse than the resizing this exists
-    // to prevent. Wide glyphs (an em dash) still argue for equal-length
-    // labels over a bigger estimate.
-    longest as f32 * text_size * 0.78 + padding
+    labels
+        .iter()
+        .map(|l| l.chars().map(char_em).sum::<f32>())
+        .fold(0.0f32, f32::max)
+        * text_size
+        + padding
+}
+
+/// Approximate width of one character, in em.
+///
+/// A single factor for every character was wrong, and wrong in a way that took
+/// a while to show: it was calibrated at 0.78 for **capitals**, because
+/// `DISARM` wrapped inside its own reservation at 0.62. Applied to digits and
+/// lower case — which is what the slider readouts are — that over-reserved by
+/// about a quarter. Six readouts in the gain row overshot by ~108 px between
+/// them, the row overflowed, and the `SHIFT` readout at the end was squeezed
+/// to one character per line.
+///
+/// Every weight errs on the wide side of what the font actually renders:
+/// under-reserving breaks the layout worse than the resizing this prevents.
+fn char_em(c: char) -> f32 {
+    match c {
+        'A'..='Z' => 0.78,
+        '0'..='9' => 0.62,
+        'a'..='z' => 0.58,
+        ' ' => 0.30,
+        '.' | ',' | ':' | ';' | '\'' | '·' | '|' => 0.35,
+        '%' | '+' | '-' | '/' | '(' | ')' => 0.55,
+        // An em dash is an em wide by definition, and the placeholder uses one.
+        '—' => 1.0,
+        _ => 0.78,
+    }
 }
 
 /// The `VT` tuning-step index for a frequency digit's **place value**.
@@ -2700,5 +2723,47 @@ mod stable_label_set_tests {
         }
         assert_eq!(CONNECT_LABELS.len(), phases.len(), "no unused reservations");
         assert_eq!(CONN_STATUS_LABELS.len(), phases.len());
+    }
+}
+
+#[cfg(test)]
+mod char_width_tests {
+    use super::stable_label_width;
+
+    /// Capitals must keep the width they had, and digits must reserve less.
+    ///
+    /// The regression this guards: a single 0.78 em factor was calibrated for
+    /// capitals (`DISARM` wrapped at 0.62), then applied to numeric readouts,
+    /// which are far narrower. The gain row's six readouts over-reserved by
+    /// ~108 px between them, overflowed the row, and squeezed the trailing
+    /// `SHIFT` readout to one character per line.
+    /// trace: FR-UI-STABLE-01
+    #[test]
+    fn fr_ui_stable_01_digits_reserve_less_than_capitals() {
+        // Same character count, very different real width.
+        let caps = stable_label_width(&["ABCDEFG"], 11.0, 0.0);
+        let digits = stable_label_width(&["1234567"], 11.0, 0.0);
+        assert!(
+            digits < caps,
+            "digits ({digits:.1}) must reserve less than capitals ({caps:.1})"
+        );
+
+        // The all-capitals case that set the 0.78 factor is unchanged, so this
+        // cannot reintroduce the wrapped DISARM.
+        assert_eq!(
+            stable_label_width(&["TX ARMED — DISARM"], 13.0, 20.0),
+            "TX ARMED — DISARM".chars().map(super::char_em).sum::<f32>() * 13.0 + 20.0
+        );
+
+        // A readout must still fit: reserve for "5000 Hz" and check the whole
+        // range renders no wider.
+        let widest = stable_label_width(&["5000 Hz"], 11.0, 4.0);
+        for hz in [0u32, 150, 1000, 4999, 5000] {
+            let s = format!("{hz} Hz");
+            assert!(
+                stable_label_width(&[s.as_str()], 11.0, 4.0) <= widest,
+                "{s} must fit the reservation for 5000 Hz"
+            );
+        }
     }
 }

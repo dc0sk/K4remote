@@ -5682,7 +5682,12 @@ impl App {
                 .spacing(6)
                 .align_y(Alignment::Center)
                 .push(Text::new(label).size(11).color(dim))
-                .push(slider(0..=max, val, msg).width(Length::Fixed(110.0)))
+                // 96 px, not 110: reserving a fixed width for the readouts
+                // (FR-UI-STABLE-01) costs ~156 px across this row, and at 110
+                // the row overflowed — the trailing SHIFT readout was squeezed
+                // to one character per line. The sliders give up what the
+                // readouts need.
+                .push(slider(0..=max, val, msg).width(Length::Fixed(96.0)))
                 .push(
                     // Reserve the widest reading this slider can produce. Taken
                     // from the same `max` the slider is built from, so the two
@@ -5710,7 +5715,7 @@ impl App {
                     .push(
                         slider(lo..=hi, val, msg)
                             .step(10u16)
-                            .width(Length::Fixed(110.0)),
+                            .width(Length::Fixed(96.0)),
                     )
                     .push(
                         Text::new(format!("{val} Hz"))
@@ -5731,7 +5736,7 @@ impl App {
                 .push(
                     slider(0..=max, val, msg)
                         .step(1u8)
-                        .width(Length::Fixed(96.0)),
+                        .width(Length::Fixed(84.0)),
                 )
                 .push(
                     Text::new(format!("{val}"))
