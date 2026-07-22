@@ -19,7 +19,7 @@ use ui::ViewMode;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use k4_config::{Config, KpodButton, Profile, SecretStore};
 
@@ -249,7 +249,25 @@ struct App {
     // when the level was set reports the *previous* one, and the resync would
     // copy it over the operator's choice — the intermittent "jumps back to the
     // old value". Held until the radio confirms, expired if it never does.
+    /// When a drag-driven CAT command was last sent — see `send_dragged`.
+    last_drag_send: Instant,
     opt_atten: ui::OptLevel,
+    // Optimistic overrides for the controls the operator drags or clicks.
+    //
+    // Without these the resync below overwrites the local value with whatever
+    // the radio last reported — which, mid-drag, is an *earlier* step of the
+    // same drag. The slider snaps backwards under the finger and the operator
+    // ends up fighting the read-back. Reported from the radio: "the sliders
+    // are laggy and the values jump back and forth".
+    //
+    // APF is the same bug undressed: it had no local state at all, so the
+    // button could not change until the radio answered — about two seconds.
+    opt_af: ui::OptLevel,
+    opt_rf: ui::OptLevel,
+    opt_sql: ui::OptLevel,
+    opt_apf_width: ui::OptLevel,
+    opt_notch: ui::Opt<u16>,
+    opt_shift: ui::Opt<u16>,
     vox_gain: u8,
     anti_vox: u8,
     // CW sidetone pitch Hz (FR-KEY-02); full-QSK + VOX/QSK delay 10-ms (FR-TX-DLY-01).
@@ -525,6 +543,10 @@ enum Message {
     PaneQsy(bool, u64),
     PaneWheel(bool, i32),
     SetAfGain(u8),
+    /// A drag ended: re-send the settled value unthrottled. Without this the
+    /// last step of a drag can be swallowed by the throttle and the radio
+    /// keeps a value the operator did not stop on.
+    CommitDrag,
     SetRfGain(u8),
     SetSquelch(u8),
     SetDataSubmode(u8),
@@ -914,7 +936,14 @@ impl App {
             nb_level: 5,
             nr_level: 5,
             atten_db: 0,
+            last_drag_send: Instant::now(),
             opt_atten: ui::OptLevel::default(),
+            opt_af: ui::OptLevel::default(),
+            opt_rf: ui::OptLevel::default(),
+            opt_sql: ui::OptLevel::default(),
+            opt_apf_width: ui::OptLevel::default(),
+            opt_notch: ui::Opt::default(),
+            opt_shift: ui::Opt::default(),
             vox_gain: 20,
             anti_vox: 0,
             compression: 0,
@@ -1603,26 +1632,42 @@ impl App {
                 }
             }
             Message::PaneWheel(is_b, dir) => self.pan_wheel(is_b, dir > 0),
+            Message::CommitDrag => {
+                // Push every dragged control's current value once. Cheap (a
+                // handful of commands) and it happens only on mouse-up, so it
+                // costs nothing during the drag itself.
+                let sub = self.active_sub();
+                self.last_drag_send = Instant::now() - Duration::from_secs(1);
+                let af = target_rx(k4_protocol::cat::set_af_gain(self.af_gain), sub);
+                self.send(WorkerCmd::Cat(af));
+                let rf = target_rx(k4_protocol::cat::set_rf_gain(self.rf_gain), sub);
+                self.send(WorkerCmd::Cat(rf));
+                let sql = target_rx(k4_protocol::cat::set_squelch(self.squelch), sub);
+                self.send(WorkerCmd::Cat(sql));
+                let on = self.rx_notch_on() == Some(true);
+                let nm = target_rx(
+                    k4_protocol::cat::set_manual_notch(on, self.notch_pitch),
+                    sub,
+                );
+                self.send(WorkerCmd::Cat(nm));
+            }
             Message::SetAfGain(v) => {
                 self.af_gain = v;
-                self.send(WorkerCmd::Cat(target_rx(
-                    k4_protocol::cat::set_af_gain(v),
-                    self.active_sub(),
-                )));
+                self.opt_af.set(v);
+                let sub = self.active_sub();
+                self.send_dragged(target_rx(k4_protocol::cat::set_af_gain(v), sub));
             }
             Message::SetRfGain(v) => {
                 self.rf_gain = v;
-                self.send(WorkerCmd::Cat(target_rx(
-                    k4_protocol::cat::set_rf_gain(v),
-                    self.active_sub(),
-                )));
+                self.opt_rf.set(v);
+                let sub = self.active_sub();
+                self.send_dragged(target_rx(k4_protocol::cat::set_rf_gain(v), sub));
             }
             Message::SetSquelch(v) => {
                 self.squelch = v;
-                self.send(WorkerCmd::Cat(target_rx(
-                    k4_protocol::cat::set_squelch(v),
-                    self.active_sub(),
-                )));
+                self.opt_sql.set(v);
+                let sub = self.active_sub();
+                self.send_dragged(target_rx(k4_protocol::cat::set_squelch(v), sub));
             }
             // DATA sub-mode selector (DT/DT$). trace: FR-DATA-01
             Message::SetDataSubmode(n) => {
@@ -1761,12 +1806,10 @@ impl App {
             }
             Message::SetNotchPitch(p) => {
                 self.notch_pitch = p;
+                self.opt_notch.set(p);
                 let on = self.rx_notch_on() == Some(true);
                 let sub = self.active_sub();
-                self.send(WorkerCmd::Cat(target_rx(
-                    k4_protocol::cat::set_manual_notch(on, p),
-                    sub,
-                )));
+                self.send_dragged(target_rx(k4_protocol::cat::set_manual_notch(on, p), sub));
             }
             Message::ToggleAutoNotch => {
                 let on = self.rx_auto_notch() != Some(true);
@@ -1789,6 +1832,7 @@ impl App {
             }
             Message::CycleApfWidth => {
                 let w = (self.rx_apf_width().unwrap_or(0) + 1) % 3;
+                self.opt_apf_width.set(w);
                 let on = self.rx_apf_on() == Some(true);
                 self.send(WorkerCmd::Cat(target_rx(
                     k4_protocol::cat::set_apf(on, w),
@@ -2473,6 +2517,27 @@ impl App {
                     self.ui.atten_db
                 };
                 self.opt_atten.reconcile(atten_snap);
+                // Same reconciliation for every other optimistic control: drop
+                // the override as soon as the radio agrees, and expire it if
+                // the radio never does, so a dropped command cannot leave the
+                // UI permanently showing a value the radio does not hold.
+                let sub = self.active_sub();
+                let r = &self.ui.radio;
+                self.opt_af
+                    .reconcile(if sub { r.sub_af_gain } else { r.af_gain });
+                self.opt_rf
+                    .reconcile(if sub { r.sub_rf_gain_db } else { r.rf_gain_db });
+                self.opt_sql
+                    .reconcile(if sub { r.sub_squelch } else { r.squelch });
+                self.opt_shift
+                    .reconcile(if sub { r.sub_shift_hz } else { r.shift_hz });
+                self.opt_notch.reconcile(if sub {
+                    r.sub_notch_pitch
+                } else {
+                    r.notch_pitch
+                });
+                self.opt_apf_width
+                    .reconcile(if sub { r.sub_apf_width } else { r.apf_width });
                 // Expire the momentary switch-tap highlight.
                 if self.switch_flash_ticks > 0 {
                     self.switch_flash_ticks -= 1;
@@ -4082,12 +4147,42 @@ impl App {
             self.ui.radio.apf_on
         }
     }
+    /// Active RX's APF bandwidth, preferring a just-clicked local value over
+    /// the radio's read-back.
+    ///
+    /// Without the override this returned the radio's value only, so the
+    /// button could not change until the radio answered — measured at about
+    /// two seconds on a real link, which reads as a broken button rather than
+    /// a slow one.
+    /// Send a CAT command that a *drag* produces, at most every 50 ms.
+    ///
+    /// An iced slider emits `on_change` for every step it passes through, and
+    /// each of those was going straight to the radio: dragging AF across its
+    /// range fired dozens of `AG` commands as fast as the UI could produce
+    /// them. That floods the link, delays the read-backs the UI is waiting on,
+    /// and writes a log line per command — a strong candidate for the console
+    /// flooding reported with no filter active.
+    ///
+    /// Dropping intermediate values is safe *only* because every throttled
+    /// slider also sends its final value on release; without that the radio
+    /// would keep whatever the last throttled step happened to be. The local
+    /// value is updated on every step regardless, so the slider itself stays
+    /// smooth under the finger.
+    fn send_dragged(&mut self, cmd: String) {
+        const MIN_GAP: Duration = Duration::from_millis(50);
+        if self.last_drag_send.elapsed() >= MIN_GAP {
+            self.last_drag_send = Instant::now();
+            self.send(WorkerCmd::Cat(cmd));
+        }
+    }
+
     fn rx_apf_width(&self) -> Option<u8> {
-        if self.active_sub() {
+        let reported = if self.active_sub() {
             self.ui.radio.sub_apf_width
         } else {
             self.ui.radio.apf_width
-        }
+        };
+        self.opt_apf_width.or(reported)
     }
 
     /// Active RX's DATA sub-mode (0=DATA A, 1=AFSK A, 2=FSK D, 3=PSK D).
@@ -4216,23 +4311,33 @@ impl App {
             self.bw_hz = v;
         }
         if let Some(v) = if sub { r.sub_af_gain } else { r.af_gain } {
-            self.af_gain = v;
+            if !self.opt_af.is_pending() {
+                self.af_gain = v;
+            }
         }
         if let Some(v) = if sub { r.sub_rf_gain_db } else { r.rf_gain_db } {
-            self.rf_gain = v;
+            if !self.opt_rf.is_pending() {
+                self.rf_gain = v;
+            }
         }
         if let Some(v) = if sub { r.sub_squelch } else { r.squelch } {
-            self.squelch = v;
+            if !self.opt_sql.is_pending() {
+                self.squelch = v;
+            }
         }
         if let Some(v) = if sub { r.sub_shift_hz } else { r.shift_hz } {
-            self.shift_hz = v;
+            if !self.opt_shift.is_pending() {
+                self.shift_hz = v;
+            }
         }
         if let Some(v) = if sub {
             r.sub_notch_pitch
         } else {
             r.notch_pitch
         } {
-            self.notch_pitch = v;
+            if !self.opt_notch.is_pending() {
+                self.notch_pitch = v;
+            }
         }
         // TX sliders are not per-RX-VFO — always follow the radio. The power
         // *range* (H/L/X) is a user selection, so it is NOT re-synced here — a
@@ -5726,7 +5831,11 @@ impl App {
                 // the row overflowed — the trailing SHIFT readout was squeezed
                 // to one character per line. The sliders give up what the
                 // readouts need.
-                .push(slider(0..=max, val, msg).width(Length::Fixed(96.0)))
+                .push(
+                    slider(0..=max, val, msg)
+                        .width(Length::Fixed(96.0))
+                        .on_release(Message::CommitDrag),
+                )
                 .push(
                     // Reserve the widest reading this slider can produce. Taken
                     // from the same `max` the slider is built from, so the two
@@ -5754,7 +5863,8 @@ impl App {
                     .push(
                         slider(lo..=hi, val, msg)
                             .step(10u16)
-                            .width(Length::Fixed(96.0)),
+                            .width(Length::Fixed(96.0))
+                            .on_release(Message::CommitDrag),
                     )
                     .push(
                         Text::new(format!("{val} Hz"))

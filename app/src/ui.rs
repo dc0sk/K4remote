@@ -1397,20 +1397,32 @@ impl OptVfo {
 /// on whether a poll happened to be in the air. Holding until the radio
 /// **confirms** fixes that; expiring on staleness means a level the radio
 /// rejects still falls back to reality rather than sticking forever.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct OptLevel {
-    pending: Option<u8>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Opt<T> {
+    pending: Option<T>,
     age: u8,
 }
 
-impl OptLevel {
+/// Byte-valued override — the original, and still the common case.
+pub type OptLevel = Opt<u8>;
+
+impl<T> Default for Opt<T> {
+    fn default() -> Self {
+        Self {
+            pending: None,
+            age: 0,
+        }
+    }
+}
+
+impl<T: Copy + PartialEq> Opt<T> {
     /// Ticks to hold an unconfirmed value. Longer than [`OptVfo::STALE_TICKS`]:
     /// the attenuator is reconciled by the ~3 s resync rather than by a
     /// per-tick read-back, so it needs to outlive one resync interval.
     pub const STALE_TICKS: u8 = 40;
 
     /// Record a locally-set level, restarting the staleness clock.
-    pub fn set(&mut self, v: u8) {
+    pub fn set(&mut self, v: T) {
         self.pending = Some(v);
         self.age = 0;
     }
@@ -1421,9 +1433,16 @@ impl OptLevel {
         self.pending.is_some()
     }
 
+    /// The value to display: the pending local one if there is one, else what
+    /// the radio reported. For controls read straight from the snapshot rather
+    /// than kept in a local mirror.
+    pub fn or(&self, reported: Option<T>) -> Option<T> {
+        self.pending.or(reported)
+    }
+
     /// Reconcile one tick against the radio's reported level: drop the
     /// override once the radio agrees, and expire it if it never does.
-    pub fn reconcile(&mut self, snapshot: Option<u8>) {
+    pub fn reconcile(&mut self, snapshot: Option<T>) {
         if self.pending.is_some() && self.pending == snapshot {
             self.pending = None;
             self.age = 0;
@@ -2765,5 +2784,63 @@ mod char_width_tests {
                 "{s} must fit the reservation for 5000 Hz"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod opt_override_tests {
+    use super::{Opt, OptLevel};
+
+    /// A read-back from *earlier in the same drag* must not overwrite the value
+    /// the operator is currently setting.
+    ///
+    /// The reported symptom: "the sliders are laggy and the values jump back
+    /// and forth". The resync overwrote each local value unconditionally, so
+    /// mid-drag it wrote back an earlier step of that same drag and the slider
+    /// snapped backwards under the finger.
+    /// trace: FR-UI-STABLE-01, FR-RX-01
+    #[test]
+    fn fr_rx_01_a_stale_read_back_does_not_overwrite_a_live_drag() {
+        let mut o = OptLevel::default();
+        o.set(40); // operator has dragged to 40
+        assert!(o.is_pending(), "the resync must stand off while pending");
+
+        // The radio is still reporting 10 from earlier in the drag.
+        o.reconcile(Some(10));
+        assert!(o.is_pending(), "a stale value must not clear the override");
+        assert_eq!(o.or(Some(10)), Some(40), "the operator's value is shown");
+
+        // Once the radio catches up the override retires and the radio leads.
+        o.reconcile(Some(40));
+        assert!(!o.is_pending());
+        assert_eq!(o.or(Some(40)), Some(40));
+    }
+
+    /// An override that is never confirmed expires, so a dropped command
+    /// cannot leave the UI permanently asserting a value the radio never took.
+    /// trace: FR-RX-01
+    #[test]
+    fn fr_rx_01_an_unconfirmed_override_expires() {
+        let mut o = OptLevel::default();
+        o.set(30);
+        for _ in 0..=OptLevel::STALE_TICKS {
+            o.reconcile(Some(5)); // radio never agrees
+        }
+        assert!(!o.is_pending(), "the override must not be held forever");
+        assert_eq!(o.or(Some(5)), Some(5), "the radio wins once it expires");
+    }
+
+    /// The override is generic now, because notch pitch and passband shift are
+    /// 16-bit and were fighting the read-back in exactly the same way.
+    /// trace: FR-RX-01
+    #[test]
+    fn fr_rx_01_override_works_for_wider_values() {
+        let mut o: Opt<u16> = Opt::default();
+        o.set(2_400);
+        o.reconcile(Some(1_000));
+        assert_eq!(o.or(Some(1_000)), Some(2_400));
+        o.reconcile(Some(2_400));
+        assert_eq!(o.or(Some(2_400)), Some(2_400));
+        assert!(!o.is_pending());
     }
 }

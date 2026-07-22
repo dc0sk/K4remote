@@ -12,6 +12,19 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
 
 ## [Unreleased]
 
+### Fixed
+
+- **Sliders no longer fight you.** Dragging AF, RF, SQL, notch or shift could
+  snap the value backwards mid-drag: the radio's read-back for an earlier step
+  overwrote the value you were setting. Your value is now held until the radio
+  confirms it. **APF width** changed the same way — it kept no local value, so
+  the button took as long as the radio needed to answer (~2 s); it responds
+  immediately now.
+
+- **Dragging a slider no longer floods the link.** Every step of a drag sent a
+  command to the radio. They are now sent at most every 50 ms, with the settled
+  value sent when you let go.
+
 ### Changed
 
 - **Two rows of vertical space reclaimed.** The mode-specific extras (APF/SPOT
