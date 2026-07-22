@@ -218,6 +218,8 @@ pub struct UiSnapshot {
     /// A tune carrier is on air. Separate from `transmitting`, which tracks the
     /// mic path (FR-TX-TUNE-01).
     pub tuning: bool,
+    /// TX test mode (`TS`): the radio keys but puts out no power.
+    pub tx_test: Option<bool>,
     pub vfo_a_hz: Option<u64>,
     pub vfo_b_hz: Option<u64>,
     pub mode_a: Option<&'static str>,
@@ -596,6 +598,7 @@ fn publish(snapshot: &Arc<Mutex<UiSnapshot>>, ws: &mut WorkerState) {
         s.transmitting = session.is_transmitting();
         s.tx_armed = session.is_tx_armed();
         s.tuning = session.is_tuning() || session.is_raw_tx();
+        s.tx_test = st.tx_test;
         s.vfo_a_hz = st.vfo_a_hz;
         s.vfo_b_hz = st.vfo_b_hz;
         s.mode_a = st.mode_a.map(mode_label);

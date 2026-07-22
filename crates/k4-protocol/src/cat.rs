@@ -596,6 +596,29 @@ pub fn set_dvr(n: u8) -> String {
     format!("PB{};", n.min(8))
 }
 
+/// Set TX test mode (`TS`).
+///
+/// D12: while it is on the radio's "TX" icon flashes and the transmitter puts
+/// out no power, though it still keys downstream gear. Setting it does not key
+/// anything itself, so it is not gated by the transmit arm — and turning it
+/// *on* makes the radio safer, not less.
+///
+/// An explicit `TS0`/`TS1` rather than the documented `TS/;` toggle: the app
+/// reads the current state back, so it can say which one it wants instead of
+/// asking for "the other one" and hoping both ends agree on what that was.
+///
+/// trace: FR-TX-TUNE-01
+pub fn set_tx_test(on: bool) -> String {
+    format!("TS{};", on as u8)
+}
+
+/// Query TX test mode (`TS`).
+///
+/// trace: FR-TX-TUNE-01
+pub fn query_tx_test() -> &'static str {
+    "TS;"
+}
+
 /// Set RIT on/off (`RT`).
 ///
 /// trace: FR-VFO-05

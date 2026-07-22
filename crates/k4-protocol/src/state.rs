@@ -88,6 +88,10 @@ pub struct RadioState {
     pub last_error: Option<String>,
     /// Speech compression, 0–30 (`CP`).
     pub compression: Option<u8>,
+    /// TX test mode (`TS`). D12: while it is in effect the radio's "TX" icon
+    /// flashes and the transmitter puts out no power, though it still keys
+    /// downstream gear — so this is a state the operator must be able to see.
+    pub tx_test: Option<bool>,
     /// CW sidetone pitch, Hz (`CW`).
     pub cw_pitch: Option<u16>,
     /// Passband shift / AF center pitch, Hz (`IS`).
@@ -289,6 +293,12 @@ impl RadioState {
             if let Ok(hz) = arg.parse::<u64>() {
                 self.vfo_b_hz = Some(hz);
             }
+        } else if let Some(arg) = cmd.strip_prefix("TS") {
+            self.tx_test = match arg.as_bytes().first() {
+                Some(b'0') => Some(false),
+                Some(b'1') => Some(true),
+                _ => self.tx_test, // `TS/` (toggle) echoes nothing decidable
+            };
         } else if let Some(arg) = cmd.strip_prefix("MD$") {
             if let Some(d) = arg.bytes().next() {
                 self.mode_b = Mode::from_md_digit(d);
@@ -817,6 +827,7 @@ pub fn connect_state_seed() -> &'static [&'static str] {
         "VT;", "VT$;", // VFO tuning step (for optimistic ◄► stepping)
         "DT;", "DT$;", // DATA sub-mode (DATA A / AFSK A / FSK D / PSK D)
         "RP;", "PL;", // FM repeater offset + PL/CTCSS tone
+        "TS;", // TX test mode — the radio transmits no power while it is on
         "UT;", "CC;",   // radio UTC time + remote client count (status strip)
         "#MP$;", // mini-pan on/off
         // Configuration-screen read-back (FR-UI-19 screens):

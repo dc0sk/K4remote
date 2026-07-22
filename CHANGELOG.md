@@ -10,6 +10,16 @@ during the 0.4.0 release, so earlier detail lives in the git history and in the
 change ledgers under [`docs/test/test-strategy.md`](docs/test/test-strategy.md)
 and [`docs/requirements/system-requirements.md`](docs/requirements/system-requirements.md).
 
+## [Unreleased]
+
+### Fixed
+
+- **TX TEST now shows that it is on.** The TEST button gave no indication
+  either way, so there was nothing to tell you the radio was in test mode —
+  where it keys but puts out no power. The button is now lit whenever test
+  mode is active, including when it was switched on at the radio or by
+  another client.
+
 ## [0.6.0] — 2026-07-21
 
 ### Added
