@@ -602,6 +602,21 @@ pub fn set_pl_tone(index: u8, on: bool) -> String {
     format!("PL{:02}{};", index.clamp(1, 50), on as u8)
 }
 
+/// The valid DTMF digits (`DM`), in keypad order (`FR-FM-02`).
+pub const DTMF_DIGITS: [char; 16] = [
+    '1', '2', '3', 'A', '4', '5', '6', 'B', '7', '8', '9', 'C', '*', '0', '#', 'D',
+];
+
+/// Send one DTMF digit (`DM`, FM mode only): `0`–`9`, `A`–`D`, `*`, `#`.
+///
+/// Returns `None` for anything not a DTMF digit rather than sending a malformed
+/// command. SET-only on the radio (no read-back).
+///
+/// trace: FR-FM-02
+pub fn send_dtmf(digit: char) -> Option<String> {
+    DTMF_DIGITS.contains(&digit).then(|| format!("DM{digit};"))
+}
+
 /// DVR voice-message playback (`PB`): message 1–8, or 0 to cancel play/record.
 ///
 /// trace: FR-DVR-01

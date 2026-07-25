@@ -21,6 +21,12 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
 
 ### Added
 
+- **DTMF keypad for FM.** A **DTMF** button on the FM panel opens a keypad
+  (0-9, A-D, *, #) that sends tones to the radio - for repeater and link
+  control that is otherwise out of reach over a remote link.
+
+### Added
+
 - **On-screen macro buttons.** A new **Fn -> MACROS** tab runs the same macros
   as the K-Pod F1-F8 switches, so you get one-tap CAT macros with or without a
   K-Pod. Assign them under Settings; a macro that transmits is arm-gated just
