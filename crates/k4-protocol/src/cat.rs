@@ -137,6 +137,19 @@ pub fn set_data_submode(sub: bool, n: u8) -> String {
     }
 }
 
+/// Set the DATA rate bit (`DR`/`DR$`): 0 or 1. The bit's meaning depends on the
+/// sub-mode — 45/75 baud for AFSK-A and FSK-D, 31/63 for PSK-D — so the caller
+/// decides which bit to send; this only encodes it.
+///
+/// trace: FR-DATA-02
+pub fn set_data_rate(sub: bool, r: u8) -> String {
+    if sub {
+        format!("DR${};", r.min(1))
+    } else {
+        format!("DR{};", r.min(1))
+    }
+}
+
 /// Set receive bandwidth in Hz (`BW`; the wire value is ×10 Hz).
 ///
 /// Example: `2700` → `"BW0270;"`.

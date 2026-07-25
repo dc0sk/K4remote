@@ -229,6 +229,10 @@ pub struct RadioState {
     /// DATA sub-mode (`DT`/`DT$`): 0=DATA A, 1=AFSK A, 2=FSK D, 3=PSK D.
     pub data_submode: Option<u8>,
     pub sub_data_submode: Option<u8>,
+    /// DATA rate bit (`DR`/`DR$`): 0 or 1. Its meaning depends on the sub-mode
+    /// — 45/75 baud for AFSK-A and FSK-D, 31/63 for PSK-D (FR-DATA-02).
+    pub data_rate: Option<u8>,
+    pub sub_data_rate: Option<u8>,
     /// Mnemonic of the most recent command the K4 rejected with `<cmd>?;`
     /// (PRG Error Checking, FR-CAT-03). `None` = no error since the last clear.
     pub last_error: Option<String>,
@@ -846,6 +850,14 @@ impl RadioState {
                     *sub_or(&mut self.tune_step_hz, &mut self.sub_tune_step_hz, sub) = Some(step);
                 }
             }
+        } else if let Some(arg) = cmd.strip_prefix("DR") {
+            // `DR[$]r` — DATA rate bit (0/1); its label depends on the sub-mode.
+            let (sub, a) = split_sub(arg);
+            if let Some(nc) = a.bytes().next() {
+                if nc.is_ascii_digit() {
+                    *sub_or(&mut self.data_rate, &mut self.sub_data_rate, sub) = Some(nc - b'0');
+                }
+            }
         } else if let Some(arg) = cmd.strip_prefix("DT") {
             // `DT[$]n` — DATA sub-mode (0=DATA A, 1=AFSK A, 2=FSK D, 3=PSK D).
             let (sub, a) = split_sub(arg);
@@ -998,6 +1010,7 @@ pub fn connect_state_seed() -> &'static [&'static str] {
         "VGV;", "VI;", // VOX gain (voice) + anti-VOX level
         "VT;", "VT$;", // VFO tuning step (for optimistic ◄► stepping)
         "DT;", "DT$;", // DATA sub-mode (DATA A / AFSK A / FSK D / PSK D)
+        "DR;", "DR$;", // DATA rate (FR-DATA-02)
         "RP;", "PL;", // FM repeater offset + PL/CTCSS tone
         "DA;", // digital-audio engine (AF recorder / DVR) status
         "LK;", "LK$;", // VFO A / B tuning lock (FR-VFO-LOCK-01)

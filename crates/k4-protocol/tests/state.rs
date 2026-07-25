@@ -771,3 +771,17 @@ fn fr_vfo_lock_01_lock_state_parses_per_vfo() {
         "LK$ must not fall through to bare LK"
     );
 }
+
+/// DATA rate parses per receiver, and `DR$` is not mistaken for bare `DR`.
+/// trace: FR-DATA-02
+#[test]
+fn fr_data_02_data_rate_parses_per_vfo() {
+    let mut s = RadioState::new();
+    assert!(s.apply_cat("DR1;"));
+    assert_eq!(s.data_rate, Some(1));
+    assert_eq!(s.sub_data_rate, None, "bare DR did not touch the sub");
+
+    assert!(s.apply_cat("DR$0;"));
+    assert_eq!(s.sub_data_rate, Some(0), "DR$ is the sub");
+    assert_eq!(s.data_rate, Some(1), "main unchanged");
+}

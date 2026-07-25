@@ -760,6 +760,24 @@ pub fn tuning_allowed(locked: Option<bool>) -> bool {
     locked != Some(true)
 }
 
+/// The two DATA-rate options for a sub-mode, or `None` if the sub-mode has no
+/// rate control (`FR-DATA-02`).
+///
+/// The `DR` bit (0/1) means different things per sub-mode, so the label cannot
+/// be decided from the bit alone:
+/// * AFSK-A (1) and FSK-D (2): 45 / 75 baud.
+/// * PSK-D (3): BPSK31 / BPSK63.
+/// * DATA-A (0): no rate — returns `None`, and the control is hidden.
+///
+/// Returns the labels for bit 0 and bit 1 in order.
+pub fn data_rate_labels(submode: Option<u8>) -> Option<[&'static str; 2]> {
+    match submode {
+        Some(1) | Some(2) => Some(["45 Bd", "75 Bd"]),
+        Some(3) => Some(["PSK31", "PSK63"]),
+        _ => None,
+    }
+}
+
 /// What the transmit indicator should show (`FR-TX-TUNE-01`).
 ///
 /// Three states, because they mean physically different things and must not
@@ -3103,6 +3121,24 @@ mod on_air_tests {
             tuning_allowed(None),
             "unknown allows (do not block a fresh connect)"
         );
+    }
+
+    /// The DATA-rate labels depend on the sub-mode, not on the bit alone: the
+    /// same DR bit is 45/75 baud in AFSK/FSK and BPSK31/63 in PSK. DATA-A has
+    /// no rate, so the control is hidden there.
+    /// trace: FR-DATA-02
+    #[test]
+    fn fr_data_02_rate_labels_depend_on_submode() {
+        use super::data_rate_labels;
+        assert_eq!(
+            data_rate_labels(Some(1)),
+            Some(["45 Bd", "75 Bd"]),
+            "AFSK-A"
+        );
+        assert_eq!(data_rate_labels(Some(2)), Some(["45 Bd", "75 Bd"]), "FSK-D");
+        assert_eq!(data_rate_labels(Some(3)), Some(["PSK31", "PSK63"]), "PSK-D");
+        assert_eq!(data_rate_labels(Some(0)), None, "DATA-A has no rate");
+        assert_eq!(data_rate_labels(None), None, "unknown sub-mode");
     }
 
     /// TX test mode gets a flashing indicator distinct from a real transmit,
