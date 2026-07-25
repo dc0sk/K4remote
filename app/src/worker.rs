@@ -231,6 +231,8 @@ pub struct UiSnapshot {
     /// Digital-audio engine status (`DA`) — the AF recorder and the DVR share
     /// it, so the UI must decide which of the two a given state belongs to.
     pub digital_audio: Option<k4_protocol::state::DigitalAudio>,
+    /// TX test mode (`TS`): the radio keys but puts out no power.
+    pub tx_test: Option<bool>,
     pub vfo_a_hz: Option<u64>,
     pub vfo_b_hz: Option<u64>,
     pub mode_a: Option<&'static str>,
@@ -663,6 +665,7 @@ fn publish(snapshot: &Arc<Mutex<UiSnapshot>>, ws: &mut WorkerState) {
         s.tuning = session.is_tuning() || session.is_raw_tx();
         s.tx_refusals = ws.tx_refusals;
         s.digital_audio = st.digital_audio;
+        s.tx_test = st.tx_test;
         s.vfo_a_hz = st.vfo_a_hz;
         s.vfo_b_hz = st.vfo_b_hz;
         s.mode_a = st.mode_a.map(mode_label);

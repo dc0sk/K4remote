@@ -227,6 +227,10 @@ pub struct RadioState {
     /// What the digital-audio engine is doing (`DA`): AF record/playback and
     /// DVR voice messages both report here.
     pub digital_audio: Option<DigitalAudio>,
+    /// TX test mode (`TS`). D12: while it is in effect the radio's "TX" icon
+    /// flashes and the transmitter puts out no power, though it still keys
+    /// downstream gear — so this is a state the operator must be able to see.
+    pub tx_test: Option<bool>,
     /// CW sidetone pitch, Hz (`CW`).
     pub cw_pitch: Option<u16>,
     /// Passband shift / AF center pitch, Hz (`IS`).
@@ -435,6 +439,12 @@ impl RadioState {
             if let Some(da) = parse_digital_audio(arg) {
                 self.digital_audio = Some(da);
             }
+        } else if let Some(arg) = cmd.strip_prefix("TS") {
+            self.tx_test = match arg.as_bytes().first() {
+                Some(b'0') => Some(false),
+                Some(b'1') => Some(true),
+                _ => self.tx_test, // `TS/` (toggle) echoes nothing decidable
+            };
         } else if let Some(arg) = cmd.strip_prefix("MD$") {
             if let Some(d) = arg.bytes().next() {
                 self.mode_b = Mode::from_md_digit(d);
@@ -964,6 +974,7 @@ pub fn connect_state_seed() -> &'static [&'static str] {
         "DT;", "DT$;", // DATA sub-mode (DATA A / AFSK A / FSK D / PSK D)
         "RP;", "PL;", // FM repeater offset + PL/CTCSS tone
         "DA;", // digital-audio engine (AF recorder / DVR) status
+        "TS;", // TX test mode — the radio transmits no power while it is on
         "UT;", "CC;",   // radio UTC time + remote client count (status strip)
         "#MP$;", // mini-pan on/off
         // Configuration-screen read-back (FR-UI-19 screens):

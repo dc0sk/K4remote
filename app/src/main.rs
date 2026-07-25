@@ -146,6 +146,12 @@ struct App {
     // Whether the config screens have been seeded from the radio's read-back
     // values this connection (FR-UI-19 read-back). Reset on disconnect.
     seeded: bool,
+    // Client-side frequency memories, and whether their window is open
+    // (FR-MEM-01). The radio's own memory command is undocumented, so the app
+    // keeps its own bank.
+    memories: Vec<k4_config::Memory>,
+    memories_open: bool,
+    memory_name: String,
     // Peer cache + settings dialog (FR-CFG-04, FR-UI-23).
     peers: k4_config::PeerCache,
     settings_open: bool,
@@ -671,6 +677,13 @@ enum Message {
     AfStop,
     AfClear,
     AfJump(k4_protocol::cat::AfJump),
+    /// Frequency-memory bank (FR-MEM-01): open/close, store the current VFO,
+    /// recall an entry, delete one, and edit the name to store under.
+    ToggleMemories,
+    MemoryStore,
+    MemoryRecall(usize),
+    MemoryDelete(usize),
+    MemoryNameChanged(String),
     UseMasterToggled(bool),
     MasterPasswordChanged(String),
     UnlockMaster,
@@ -900,6 +913,9 @@ impl App {
             fn_tab: FnTab::Keys,
             dx_filter: String::new(),
             seeded: false,
+            memories: prefs.memories.clone(),
+            memories_open: false,
+            memory_name: String::new(),
             peers,
             settings_open: false,
             rx_popup: None,
@@ -1256,6 +1272,7 @@ impl App {
                 }),
                 peers: self.peers.clone(),
                 prefs: k4_config::Prefs {
+                    memories: self.memories.clone(),
                     audio_output: self.selected_output.clone(),
                     audio_input: self.selected_input.clone(),
                     volume_level: Some(self.volume),
@@ -1468,6 +1485,15 @@ impl App {
                 is_b,
             ))),
             Message::FreqDigit(is_b, place, up) => {
+                // The MHz digits have no tuning rate, so the K4 gives them the
+                // frequency-memory window instead (D14 p.27, p.44). Checked
+                // *before* anything touches the frequency: rolling the MHz
+                // digit on the way to opening a window would QSY the radio a
+                // megahertz, which is not what tapping it asks for.
+                if place >= 1_000_000 {
+                    self.memories_open = true;
+                    return Task::none();
+                }
                 // Base on the optimistic value so rapid clicks accumulate without
                 // waiting for the radio's echo.
                 let cur = if is_b {
@@ -2009,6 +2035,10 @@ impl App {
                         self.rx_popup = None;
                         return Task::none();
                     }
+                    if self.memories_open {
+                        self.memories_open = false;
+                        return Task::none();
+                    }
                     if self.settings_open {
                         self.settings_open = false;
                         return Task::none();
@@ -2150,6 +2180,54 @@ impl App {
             Message::AfClear => self.send(WorkerCmd::AfClear),
             Message::AfJump(t) => self.send(WorkerCmd::AfJump(t)),
             Message::ToggleSettings => self.settings_open = !self.settings_open,
+            Message::ToggleMemories => self.memories_open = !self.memories_open,
+            Message::MemoryNameChanged(n) => self.memory_name = n,
+            Message::MemoryStore => {
+                // Capture what is on the air now: the active VFO's frequency
+                // and mode, under whatever name has been typed (often none).
+                let is_b = self.active_sub();
+                let hz = if is_b {
+                    self.ui.vfo_b_hz
+                } else {
+                    self.ui.vfo_a_hz
+                };
+                if let Some(hz) = hz {
+                    let entry = k4_config::Memory {
+                        name: self.memory_name.trim().to_string(),
+                        hz,
+                        mode: if is_b { self.ui.mode_b } else { self.ui.mode_a }
+                            .map(str::to_string),
+                    };
+                    if ui::store_memory(&mut self.memories, entry) {
+                        self.memory_name.clear();
+                        self.save_config();
+                    }
+                }
+            }
+            Message::MemoryRecall(i) => {
+                if let Some(m) = self.memories.get(i).cloned() {
+                    // Frequency first, then mode: recalling a memory should
+                    // land on the same signal it was stored from.
+                    let is_b = self.active_sub();
+                    if is_b {
+                        self.send(WorkerCmd::SetFreqB(m.hz));
+                    } else {
+                        self.send(WorkerCmd::SetFreqA(m.hz));
+                    }
+                    if let Some(digit) = m.mode.as_deref().and_then(ui::mode_digit) {
+                        self.send(WorkerCmd::Cat(target_rx(
+                            k4_protocol::cat::set_mode(digit),
+                            is_b,
+                        )));
+                    }
+                    self.memories_open = false;
+                }
+            }
+            Message::MemoryDelete(i) => {
+                if ui::delete_memory(&mut self.memories, i) {
+                    self.save_config();
+                }
+            }
             Message::UseMasterToggled(v) => self.use_master = v,
             Message::MasterPasswordChanged(v) => self.master_password = v,
             Message::UnlockMaster => self.unlock_master(),
@@ -2363,6 +2441,16 @@ impl App {
                     131 => {
                         self.tune_lp_on = !self.tune_lp_on; // TUNE LP
                         self.send(WorkerCmd::Cat(cat::switch(131)));
+                    }
+                    // TX TEST: the documented `TS` command rather than the
+                    // switch emulation. `SW132` toggles it blind — the app
+                    // could not tell whether it had turned test mode on or off,
+                    // which is why the button showed nothing. Reading the state
+                    // back lets us set the one we want and then confirm it.
+                    132 => {
+                        let on = self.ui.tx_test == Some(true);
+                        self.send(WorkerCmd::Cat(cat::set_tx_test(!on)));
+                        self.send(WorkerCmd::Cat(cat::query_tx_test().to_string()));
                     }
                     // RX ANT / SUB ANT: step through only the enabled antennas
                     // (ACM/ACS mask) via AR/AR$; fall back to the switch tap if
@@ -3444,6 +3532,13 @@ impl App {
                 self.ui.transmitting && !self.tune_on && !self.tune_lp_on,
                 label.into(),
             ),
+            // TX TEST (`TS`). Reached here as the hold-function of the XMIT
+            // switch, but the state comes from the radio's `TS` read-back, not
+            // from having sent the switch code — so the button lights whether
+            // test mode was turned on from this app, another client, or the
+            // front panel. Without this it fell through to the momentary flash
+            // below and gave no indication at all (FR-TX-TUNE-01).
+            132 => (self.ui.tx_test == Some(true), label.into()),
             158 => {
                 // ATU: 2 = auto (in line), 1 = bypass (out).
                 let in_line = self.ui.radio.atu_mode == Some(2);
@@ -3866,7 +3961,13 @@ impl App {
                             false,
                         ))
                         .into(),
-                    Row::new().height(Length::Fixed(26.0)).into(),
+                    // DATA has no action controls. This was a 26 px spacer from
+                    // when the level and action rows were separate — it kept the
+                    // empty second row from collapsing so the frame stayed the
+                    // same height. Now the two are one row (whose height MON
+                    // fixes in every mode), so the spacer only made DATA taller
+                    // than the rest. An empty element, contributing nothing.
+                    Row::new().into(),
                 ),
                 ui::ModeClass::Fm => (extras().into(), voice_dvr()),
             }
@@ -5484,6 +5585,23 @@ impl App {
                 .padding([5, 10])
                 .on_press(Message::ToggleSettings),
         );
+        // Frequency memories (FR-MEM-01). Tapping the MHz digits opens the same
+        // window, as the radio does — but that is not discoverable, and it is
+        // unreachable before the radio has reported a frequency, so the bank
+        // also gets a button of its own.
+        let mem_btn = tipped(
+            self.tips_on(),
+            self.hover,
+            "app.memories",
+            Button::new(Text::new("MEM").size(12))
+                .style(btn_style(if self.memories_open {
+                    BtnKind::Active
+                } else {
+                    BtnKind::Plain
+                }))
+                .padding([5, 10])
+                .on_press(Message::ToggleMemories),
+        );
         // Phase-aware connection indicator: a coloured dot + label (green =
         // connected, amber = connecting, grey = disconnected) — FR-UI-22.
         let (status_text, status_role) = ui::conn_status(self.ui.phase);
@@ -5553,6 +5671,7 @@ impl App {
             .push(status_strip)
             .push(seg_row)
             .push(conn_btn)
+            .push(mem_btn)
             .push(settings_btn)
             .push(theme_btn)
             .push(about_btn);
@@ -6633,6 +6752,8 @@ impl App {
         // order ESC dismisses them in.
         if let Some(p) = self.rx_popup {
             stack![content, self.rx_popup_overlay(p)].into()
+        } else if self.memories_open {
+            stack![content, self.memories_overlay()].into()
         } else if self.settings_open {
             stack![content, settings_card].into()
         } else if self.about_open {
@@ -7392,6 +7513,83 @@ impl App {
                     (live && !st.busy_elsewhere && !st.recording).then_some(Message::AfClear),
                 )),
         )
+    }
+
+    /// The frequency-memory window (FR-MEM-01): store the current VFO, recall
+    /// or delete an entry.
+    ///
+    /// Client-side, because the radio's own memory-channel command (`MC`) is
+    /// "[Pending] TBD" in the Programmer's Reference — there is no documented
+    /// way to reach the K4's memories over CAT.
+    fn memories_overlay(&self) -> Element<'_, Message> {
+        let dim = role_color(ui::ColorRole::Inactive);
+        let mut list = Column::new().spacing(4);
+        if self.memories.is_empty() {
+            list = list.push(
+                Text::new("No memories yet — store the current VFO below.")
+                    .size(12)
+                    .color(dim),
+            );
+        }
+        for (i, m) in self.memories.iter().enumerate() {
+            list = list.push(
+                Row::new()
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                    .push(
+                        Button::new(Text::new(ui::memory_label(m)).size(12))
+                            .style(btn_style(BtnKind::Plain))
+                            .padding([4, 8])
+                            .width(Length::Fixed(300.0))
+                            .on_press(Message::MemoryRecall(i)),
+                    )
+                    .push(
+                        Button::new(Text::new("Delete").size(11))
+                            .style(btn_style(BtnKind::Danger))
+                            .padding([4, 8])
+                            .on_press(Message::MemoryDelete(i)),
+                    ),
+            );
+        }
+        let has_freq = if self.active_sub() {
+            self.ui.vfo_b_hz
+        } else {
+            self.ui.vfo_a_hz
+        }
+        .is_some();
+        let blocked = ui::store_blocked(self.memories.len(), has_freq);
+        let store_row = Row::new()
+            .spacing(8)
+            .align_y(Alignment::Center)
+            .push(
+                TextInput::new("name (optional)", &self.memory_name)
+                    .on_input(Message::MemoryNameChanged)
+                    .size(12)
+                    .width(Length::Fixed(200.0)),
+            )
+            .push(match blocked {
+                // Say why rather than presenting a button that does nothing.
+                Some(why) => Element::from(Text::new(why).size(11).color(dim)),
+                None => Element::from(small_btn("Store current VFO", Message::MemoryStore)),
+            });
+        let card = Container::new(
+            Column::new()
+                .spacing(10)
+                .push(
+                    Row::new()
+                        .spacing(12)
+                        .align_y(Alignment::Center)
+                        .push(Text::new("FREQUENCY MEMORIES").size(12).color(dim))
+                        .push(horizontal_space())
+                        .push(small_btn("Close", Message::ToggleMemories)),
+                )
+                .push(scrollable(list).height(Length::Fixed(260.0)))
+                .push(store_row),
+        )
+        .style(panel_style)
+        .padding(18)
+        .width(Length::Fixed(460.0));
+        modal_scrim(card.into())
     }
 
     /// The About overlay (FR-UI-18): author, license, and project URL, each on
