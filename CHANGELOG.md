@@ -79,6 +79,11 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
   **Emergency stop now also sends `DA0;`.** Without it, stopping an
   auto-repeating voice message dropped transmit and then let the radio go back
   on air a moment later.
+- **TX TEST now shows that it is on.** The TEST button gave no indication
+  either way, so there was nothing to tell you the radio was in test mode —
+  where it keys but puts out no power. The button is now lit whenever test
+  mode is active, including when it was switched on at the radio or by
+  another client.
 
 ## [0.6.0] — 2026-07-21
 

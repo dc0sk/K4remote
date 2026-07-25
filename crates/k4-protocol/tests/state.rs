@@ -705,3 +705,27 @@ fn fr_aud_rec_01_unknown_digital_audio_form_is_ignored() {
         "a truncated form is not half-applied"
     );
 }
+
+/// TX test mode (`TS`) reaches the state, so the app can show it.
+///
+/// The K4 puts out no power while it is on, and the only sign on the radio is
+/// a flashing TX icon — which a remote operator cannot see. Reported by DC0SK:
+/// enabling TEST from the app left the button looking exactly as it had.
+/// trace: FR-TX-TUNE-01
+#[test]
+fn fr_tx_tune_01_tx_test_mode_reaches_the_state() {
+    let mut s = RadioState::new();
+    assert_eq!(s.tx_test, None, "unknown until the radio says");
+
+    assert!(s.apply_cat("TS1;"));
+    assert_eq!(s.tx_test, Some(true));
+    assert!(s.apply_cat("TS0;"));
+    assert_eq!(s.tx_test, Some(false));
+
+    // `TS/;` is the documented *toggle*; it carries no state, so it must not
+    // be read as one. Leaving the last known value is right — inventing a
+    // flip here would desync the moment a toggle was sent by another client.
+    s.apply_cat("TS1;");
+    s.apply_cat("TS/;");
+    assert_eq!(s.tx_test, Some(true), "a toggle echo is not a state report");
+}
