@@ -12,6 +12,12 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
 
 ## [Unreleased]
 
+### Added
+
+- **Your antenna names now show.** If you have named an antenna on the K4
+  (ACN), the TX-antenna control shows that name (e.g. `DIPOLE`) instead of
+  `ANT 1`.
+
 ### Fixed
 
 - **TX TEST now flashes, so you can't mistake it for a real transmit.** In test

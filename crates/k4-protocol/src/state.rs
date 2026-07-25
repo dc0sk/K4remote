@@ -380,6 +380,10 @@ pub struct RadioState {
     /// `AR$v` antenna is in the switch rotation.
     pub rx_ant_avail: Option<u8>,
     pub sub_ant_avail: Option<u8>,
+    /// User antenna labels (`ACN`), slots 1–5 stored at indices 0–4. `None` =
+    /// no custom name (the antenna keeps its default `ANT1`… label). The TX
+    /// antenna (`AN` 1–3) maps to slots 1–3 (FR-ANT-02).
+    pub antenna_names: [Option<String>; 5],
     /// FM repeater offset mode (`RP`): `S`/`+`/`-`, and shift kHz.
     pub repeater_mode: Option<char>,
     pub repeater_offset_khz: Option<u32>,
@@ -785,6 +789,20 @@ impl RadioState {
             self.rx_ant_avail = Some(parse_ant_mask(arg));
         } else if let Some(arg) = cmd.strip_prefix("ACS") {
             self.sub_ant_avail = Some(parse_ant_mask(arg));
+        } else if let Some(arg) = cmd.strip_prefix("ACN") {
+            // `ACNnssssss` — user antenna label; `ACNn~` clears it. Slot n is
+            // 1–5, stored at n-1. `~` means "no custom name" (the antenna reverts
+            // to its default label), which we record as `None`.
+            if let Some(slot) = arg.bytes().next().and_then(|c| (c as char).to_digit(10)) {
+                if (1..=5).contains(&slot) {
+                    let label = &arg[1..];
+                    self.antenna_names[slot as usize - 1] = if label.is_empty() || label == "~" {
+                        None
+                    } else {
+                        Some(label.to_string())
+                    };
+                }
+            }
         } else if let Some(arg) = cmd.strip_prefix("AN") {
             if let Ok(v) = arg.parse::<u8>() {
                 self.tx_antenna = Some(v);
@@ -992,8 +1010,9 @@ pub fn connect_state_seed() -> &'static [&'static str] {
         "RA$;", "GT$;", "NB$;", "NR$;", "PA$;",
         "TM1;", // enable auto TX metering (RF/ALC/SWR/CMP during transmit)
         "AT;", "ACM;", "ACS;", // ATU mode + RX/sub antenna access masks
-        "SN;",  // K4 serial number (for config-export filenames)
-        "RO;",  // RIT/XIT offset (Hz) — bare `RO` is the main VFO's
+        "ACN1;", "ACN2;", "ACN3;", "ACN4;", "ACN5;", // antenna names (FR-ANT-02)
+        "SN;",   // K4 serial number (for config-export filenames)
+        "RO;",   // RIT/XIT offset (Hz) — bare `RO` is the main VFO's
         "ML0;", "ML1;", "ML2;", // monitor levels (CW / AF-data / voice)
         "VGV;", "VI;", // VOX gain (voice) + anti-VOX level
         "VT;", "VT$;", // VFO tuning step (for optimistic ◄► stepping)
