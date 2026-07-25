@@ -5567,19 +5567,28 @@ impl App {
                     .on_press(Message::SelectXvtr(n)),
             );
         }
-        let inner = Column::new()
+        // Two columns so nothing scrolls: HF/6 m band selection on the left,
+        // the transverter bands and their setup form on the right. The setup
+        // form was the tall part — a single stacked column overflowed the
+        // fixed-height config slot and grew a scrollbar, which is what the
+        // operator asked to avoid.
+        let left = Column::new()
             .spacing(10)
+            .width(Length::FillPortion(1))
             .push(
                 Text::new("Select a band (direct BN select)")
                     .size(12)
                     .color(dim),
             )
             .push(grid)
-            .push(ops)
+            .push(ops);
+        let right = Column::new()
+            .spacing(10)
+            .width(Length::FillPortion(1))
             .push(Text::new("Transverter bands (XV)").size(12).color(dim))
             .push(xvtr)
             .push(self.xvtr_setup());
-        scrollable(inner).height(Length::Fill).into()
+        Row::new().spacing(20).push(left).push(right).into()
     }
 
     /// Transverter band setup form (FR-XVTR-01): pick an XV band to configure,
@@ -5633,14 +5642,14 @@ impl App {
                     Text::new(label)
                         .size(11)
                         .color(dim)
-                        .width(Length::Fixed(70.0)),
+                        .width(Length::Fixed(46.0)),
                 )
                 .push(
                     TextInput::new("", value)
                         .on_input(move |t| Message::XvtrFieldChanged(f, t))
                         .on_submit(Message::XvtrFieldSubmit(f))
                         .size(12)
-                        .width(Length::Fixed(90.0)),
+                        .width(Length::Fixed(78.0)),
                 )
                 .push(Text::new(unit).size(10).color(dim))
         };
@@ -5656,17 +5665,25 @@ impl App {
             )
             .push(picker)
             .push(mode_btn)
-            .push(field(
-                "Lower edge",
-                "MHz",
-                &self.xvtr_lower,
-                XvtrField::Lower,
-            ))
-            .push(field("IF band", "MHz", &self.xvtr_if, XvtrField::If))
-            .push(field("Offset", "Hz", &self.xvtr_offset, XvtrField::Offset))
-            .push(field("Power", "mW", &self.xvtr_power, XvtrField::Power))
+            // Two fields per row: the right column is half-width now, so there
+            // is horizontal room, and this keeps the form short enough to fit
+            // the config slot without a scrollbar.
             .push(
-                Text::new("Enter to send each field. Values load from the radio on band select.")
+                Row::new()
+                    .spacing(16)
+                    .align_y(Alignment::Center)
+                    .push(field("Lower", "MHz", &self.xvtr_lower, XvtrField::Lower))
+                    .push(field("IF", "MHz", &self.xvtr_if, XvtrField::If)),
+            )
+            .push(
+                Row::new()
+                    .spacing(16)
+                    .align_y(Alignment::Center)
+                    .push(field("Offset", "Hz", &self.xvtr_offset, XvtrField::Offset))
+                    .push(field("Power", "mW", &self.xvtr_power, XvtrField::Power)),
+            )
+            .push(
+                Text::new("Enter to send each field. Fields load from the radio on band select.")
                     .size(10)
                     .color(dim),
             )
