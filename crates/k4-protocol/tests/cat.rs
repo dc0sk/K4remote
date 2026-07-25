@@ -719,6 +719,36 @@ fn fr_data_02_data_rate_encodes() {
     );
 }
 
+/// The transverter setup encoders match D12's field widths.
+/// trace: FR-XVTR-01
+#[test]
+fn fr_xvtr_01_setup_commands_encode() {
+    use k4_protocol::cat::*;
+    assert_eq!(set_xvtr_band(3), "XVN3;");
+    assert_eq!(set_xvtr_band(0), "XVN1;", "clamped to 1-12");
+    assert_eq!(set_xvtr_band(99), "XVN12;");
+    assert_eq!(set_xvtr_mode(true), "XVM1;");
+    assert_eq!(set_xvtr_mode(false), "XVM0;");
+    assert_eq!(set_xvtr_lower_mhz(144), "XVR00144;", "5-digit MHz");
+    assert_eq!(set_xvtr_lower_mhz(1296), "XVR01296;");
+    assert_eq!(set_xvtr_if_mhz(28), "XVI28;", "2-digit IF");
+    assert_eq!(set_xvtr_if_mhz(99), "XVI53;", "clamped to 53");
+    assert_eq!(set_xvtr_offset_hz(1200), "XVO+01200;");
+    assert_eq!(set_xvtr_offset_hz(-500), "XVO-00500;", "sign carried");
+    assert_eq!(set_xvtr_offset_hz(0), "XVO+00000;");
+    assert_eq!(
+        set_xvtr_power_tenths_mw(10),
+        "XVP010;",
+        "1.0 mW example from D12"
+    );
+    assert_eq!(
+        set_xvtr_power_tenths_mw(0),
+        "XVP001;",
+        "clamped to >=0.1 mW"
+    );
+    assert_eq!(set_xvtr_power_tenths_mw(99), "XVP050;", "clamped to 5.0 mW");
+}
+
 /// DTMF digits encode as `DM<digit>;`, and non-digits are refused.
 /// trace: FR-FM-02
 #[test]

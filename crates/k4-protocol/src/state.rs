@@ -388,6 +388,15 @@ pub struct RadioState {
     /// no custom name (the antenna keeps its default `ANT1`… label). The TX
     /// antenna (`AN` 1–3) maps to slots 1–3 (FR-ANT-02).
     pub antenna_names: [Option<String>; 5],
+    /// Transverter setup read-back (`XV*`, FR-XVTR-01), for the band `XVN` last
+    /// targeted. Transient by nature — these describe whichever XV band the
+    /// setup form is editing, not a fixed one.
+    pub xvtr_setup_band: Option<u8>,
+    pub xvtr_mode: Option<bool>,
+    pub xvtr_lower_mhz: Option<u32>,
+    pub xvtr_if_mhz: Option<u8>,
+    pub xvtr_offset_hz: Option<i32>,
+    pub xvtr_power_tenths_mw: Option<u16>,
     /// FM repeater offset mode (`RP`): `S`/`+`/`-`, and shift kHz.
     pub repeater_mode: Option<char>,
     pub repeater_offset_khz: Option<u32>,
@@ -465,6 +474,25 @@ impl RadioState {
         } else if let Some(arg) = cmd.strip_prefix("LK") {
             if let Some(v) = lock_flag(arg) {
                 self.vfo_a_locked = Some(v);
+            }
+        } else if let Some(arg) = cmd.strip_prefix("XV") {
+            // `XV<letter>...` is a transverter *setup* field; `XV<digits>` is the
+            // band *select* echo, which we do not track here (FR-XVTR-01).
+            match arg.as_bytes().first() {
+                Some(b'N') => self.xvtr_setup_band = arg[1..].parse().ok(),
+                Some(b'M') => self.xvtr_mode = arg[1..].parse::<u8>().ok().map(|n| n == 1),
+                Some(b'R') => self.xvtr_lower_mhz = arg[1..].parse().ok(),
+                Some(b'I') => self.xvtr_if_mhz = arg[1..].parse().ok(),
+                Some(b'O') => {
+                    // `+nnnnn` / `-nnnnn`.
+                    if let Some((sign, digits)) = arg[1..].split_at_checked(1) {
+                        if let Ok(mag) = digits.parse::<i32>() {
+                            self.xvtr_offset_hz = Some(if sign == "-" { -mag } else { mag });
+                        }
+                    }
+                }
+                Some(b'P') => self.xvtr_power_tenths_mw = arg[1..].parse().ok(),
+                _ => {} // XV<digits> select echo, or unknown
             }
         } else if let Some(arg) = cmd.strip_prefix("DA") {
             // Unrecognised forms leave the previous state rather than clearing

@@ -175,6 +175,7 @@ Legend: ✅ test-traced · 🟡 waived (see r3-waivers.md) · ⚪ not test-requi
 | `FR-VFO-STEP-01` | S | T/D | ✅ |
 | `FR-VOX-01` | C | T | ✅ |
 | `FR-VOX-02` | C | T | ✅ |
+| `FR-XVTR-01` | S | T | ✅ |
 | `NFR-MAINT-01` | M | I | ⚪ |
 | `NFR-MAINT-LOG` | S | I | ⚪ |
 | `NFR-PERF-01` | M | T/A | 🟡 |

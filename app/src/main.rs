@@ -151,6 +151,15 @@ struct App {
     // keeps its own bank.
     memories: Vec<k4_config::Memory>,
     memories_open: bool,
+    // Transverter setup form (FR-XVTR-01): which XV band is being edited, the
+    // four numeric fields as edit strings, and whether the current read-back
+    // has been copied into them yet.
+    xvtr_edit_band: u8,
+    xvtr_lower: String,
+    xvtr_if: String,
+    xvtr_offset: String,
+    xvtr_power: String,
+    xvtr_loaded_band: Option<u8>,
     /// DTMF keypad popup open (FR-FM-02).
     dtmf_open: bool,
     memory_name: String,
@@ -469,6 +478,15 @@ enum TxTab {
     Text,
 }
 
+/// The four editable transverter numeric fields (FR-XVTR-01).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum XvtrField {
+    Lower,
+    If,
+    Offset,
+    Power,
+}
+
 /// Which sub-panel the Fn screen shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FnTab {
@@ -764,6 +782,12 @@ enum Message {
     MenuNudge(i64),
     // BAND transverter select (FR-VFO-04), TX text (FR-TX-MSG-01), Fn tabs / DX.
     SelectXvtr(u8),
+    /// Transverter setup (FR-XVTR-01): pick the band to edit, toggle its mode,
+    /// edit a field, and commit a field.
+    XvtrEditBand(u8),
+    XvtrModeToggle,
+    XvtrFieldChanged(XvtrField, String),
+    XvtrFieldSubmit(XvtrField),
     TxText(String),
     SendTxText,
     ToggleDecode,
@@ -934,6 +958,12 @@ impl App {
             seeded: false,
             memories: prefs.memories.clone(),
             memories_open: false,
+            xvtr_edit_band: 1,
+            xvtr_lower: String::new(),
+            xvtr_if: String::new(),
+            xvtr_offset: String::new(),
+            xvtr_power: String::new(),
+            xvtr_loaded_band: None,
             dtmf_open: false,
             memory_name: String::new(),
             peers,
@@ -2540,6 +2570,68 @@ impl App {
             Message::SelectXvtr(n) => {
                 self.send(WorkerCmd::Cat(k4_protocol::cat::set_transverter_band(n)))
             }
+            Message::XvtrEditBand(n) => {
+                use k4_protocol::cat;
+                self.xvtr_edit_band = n.clamp(1, 12);
+                self.xvtr_loaded_band = None; // reload the fields from the radio
+                                              // Target the band, then read its config back so the form fills.
+                self.send(WorkerCmd::Cat(cat::set_xvtr_band(self.xvtr_edit_band)));
+                for get in ["XVM;", "XVR;", "XVI;", "XVO;", "XVP;"] {
+                    self.send(WorkerCmd::Cat(get.to_string()));
+                }
+            }
+            Message::XvtrModeToggle => {
+                use k4_protocol::cat;
+                let external = self.ui.radio.xvtr_mode != Some(true);
+                self.send(WorkerCmd::Cat(cat::set_xvtr_band(self.xvtr_edit_band)));
+                self.send(WorkerCmd::Cat(cat::set_xvtr_mode(external)));
+            }
+            Message::XvtrFieldChanged(field, text) => {
+                // Keep only digits (and a leading sign for the offset).
+                let cleaned: String = text
+                    .chars()
+                    .enumerate()
+                    .filter(|(i, c)| {
+                        c.is_ascii_digit() || (*i == 0 && field == XvtrField::Offset && *c == '-')
+                    })
+                    .map(|(_, c)| c)
+                    .collect();
+                match field {
+                    XvtrField::Lower => self.xvtr_lower = cleaned,
+                    XvtrField::If => self.xvtr_if = cleaned,
+                    XvtrField::Offset => self.xvtr_offset = cleaned,
+                    XvtrField::Power => self.xvtr_power = cleaned,
+                }
+            }
+            Message::XvtrFieldSubmit(field) => {
+                use k4_protocol::cat;
+                self.send(WorkerCmd::Cat(cat::set_xvtr_band(self.xvtr_edit_band)));
+                // Explicit calls, not `.map(fn)`: the traceability gate (R5)
+                // needs a real call site for each encoder, and clippy rejects a
+                // wrapping closure — so parse, then call.
+                let cmd = match field {
+                    XvtrField::Lower => match self.xvtr_lower.parse::<u32>() {
+                        Ok(v) => Some(cat::set_xvtr_lower_mhz(v)),
+                        Err(_) => None,
+                    },
+                    XvtrField::If => match self.xvtr_if.parse::<u8>() {
+                        Ok(v) => Some(cat::set_xvtr_if_mhz(v)),
+                        Err(_) => None,
+                    },
+                    XvtrField::Offset => match self.xvtr_offset.parse::<i32>() {
+                        Ok(v) => Some(cat::set_xvtr_offset_hz(v)),
+                        Err(_) => None,
+                    },
+                    // The power field is entered in mW; the command is tenths.
+                    XvtrField::Power => match self.xvtr_power.parse::<f32>() {
+                        Ok(mw) => Some(cat::set_xvtr_power_tenths_mw((mw * 10.0).round() as u16)),
+                        Err(_) => None,
+                    },
+                };
+                if let Some(cmd) = cmd {
+                    self.send(WorkerCmd::Cat(cmd));
+                }
+            }
             Message::TxText(s) => self.tx_text = s,
             Message::SendTxText => {
                 let t = self.tx_text.trim();
@@ -2729,6 +2821,23 @@ impl App {
                 }
                 // Blink the ARM button (PTT hotkey pressed while disarmed).
                 self.arm_flash = self.arm_flash.saturating_sub(1);
+                // Fill the transverter form once the read-back for the band it
+                // is editing has arrived (FR-XVTR-01). Keyed on the setup band
+                // the radio confirms via XVN, so a stale value never lands in
+                // the fields.
+                if self.ui.radio.xvtr_setup_band == Some(self.xvtr_edit_band)
+                    && self.xvtr_loaded_band != Some(self.xvtr_edit_band)
+                {
+                    let r = &self.ui.radio;
+                    self.xvtr_lower = r.xvtr_lower_mhz.map(|v| v.to_string()).unwrap_or_default();
+                    self.xvtr_if = r.xvtr_if_mhz.map(|v| v.to_string()).unwrap_or_default();
+                    self.xvtr_offset = r.xvtr_offset_hz.map(|v| v.to_string()).unwrap_or_default();
+                    self.xvtr_power = r
+                        .xvtr_power_tenths_mw
+                        .map(|t| format!("{:.1}", t as f32 / 10.0))
+                        .unwrap_or_default();
+                    self.xvtr_loaded_band = Some(self.xvtr_edit_band);
+                }
                 self.lock_flash = self.lock_flash.saturating_sub(1);
                 // TUNE ends when transmit stops.
                 if !self.ui.transmitting {
@@ -5507,19 +5616,123 @@ impl App {
                     .on_press(Message::SelectXvtr(n)),
             );
         }
-        Column::new()
+        // Two columns so nothing scrolls: HF/6 m band selection on the left,
+        // the transverter bands and their setup form on the right. The setup
+        // form was the tall part — a single stacked column overflowed the
+        // fixed-height config slot and grew a scrollbar, which is what the
+        // operator asked to avoid.
+        let left = Column::new()
             .spacing(10)
+            .width(Length::FillPortion(1))
             .push(
                 Text::new("Select a band (direct BN select)")
                     .size(12)
                     .color(dim),
             )
             .push(grid)
-            .push(ops)
+            .push(ops);
+        let right = Column::new()
+            .spacing(10)
+            .width(Length::FillPortion(1))
             .push(Text::new("Transverter bands (XV)").size(12).color(dim))
             .push(xvtr)
+            .push(self.xvtr_setup());
+        Row::new().spacing(20).push(left).push(right).into()
+    }
+
+    /// Transverter band setup form (FR-XVTR-01): pick an XV band to configure,
+    /// then set its mode, IF band, lower edge, offset and mW power. Each field
+    /// targets the band with `XVN` before its own command, so edits always land
+    /// on the band shown. Fields fill from the radio when a band is selected.
+    fn xvtr_setup(&self) -> Element<'_, Message> {
+        let dim = role_color(ui::ColorRole::Inactive);
+        let rxv = role_color(ui::ColorRole::RxValue);
+        // Band picker: 1–12, the selected one lit.
+        let mut picker = Row::new().spacing(3).align_y(Alignment::Center);
+        for n in 1u8..=12 {
+            picker = picker.push(
+                Button::new(Text::new(n.to_string()).size(11))
+                    .style(btn_style(if self.xvtr_edit_band == n {
+                        BtnKind::Active
+                    } else {
+                        BtnKind::Plain
+                    }))
+                    .padding([3, 7])
+                    .on_press(Message::XvtrEditBand(n)),
+            );
+        }
+        let external = self.ui.radio.xvtr_mode == Some(true);
+        let mode_btn = Button::new(
+            Text::new(if external {
+                "MODE: EXTERNAL"
+            } else {
+                "MODE: OFF"
+            })
+            .size(11),
+        )
+        .style(btn_style(if external {
+            BtnKind::Active
+        } else {
+            BtnKind::Plain
+        }))
+        .padding([4, 8])
+        .width(Length::Fixed(ui::stable_label_width(
+            &["MODE: EXTERNAL", "MODE: OFF"],
+            11.0,
+            16.0,
+        )))
+        .on_press(Message::XvtrModeToggle);
+        // One labelled numeric field, committing on Enter.
+        let field = |label: &'static str, unit: &'static str, value: &str, f: XvtrField| {
+            Row::new()
+                .spacing(6)
+                .align_y(Alignment::Center)
+                .push(
+                    Text::new(label)
+                        .size(11)
+                        .color(dim)
+                        .width(Length::Fixed(46.0)),
+                )
+                .push(
+                    TextInput::new("", value)
+                        .on_input(move |t| Message::XvtrFieldChanged(f, t))
+                        .on_submit(Message::XvtrFieldSubmit(f))
+                        .size(12)
+                        .width(Length::Fixed(78.0)),
+                )
+                .push(Text::new(unit).size(10).color(dim))
+        };
+        Column::new()
+            .spacing(8)
             .push(
-                Text::new("GEN / memories on the Fn screen; XVTR band setup via MENU.")
+                Text::new(format!(
+                    "Transverter setup — band XV{}",
+                    self.xvtr_edit_band
+                ))
+                .size(12)
+                .color(rxv),
+            )
+            .push(picker)
+            .push(mode_btn)
+            // Two fields per row: the right column is half-width now, so there
+            // is horizontal room, and this keeps the form short enough to fit
+            // the config slot without a scrollbar.
+            .push(
+                Row::new()
+                    .spacing(16)
+                    .align_y(Alignment::Center)
+                    .push(field("Lower", "MHz", &self.xvtr_lower, XvtrField::Lower))
+                    .push(field("IF", "MHz", &self.xvtr_if, XvtrField::If)),
+            )
+            .push(
+                Row::new()
+                    .spacing(16)
+                    .align_y(Alignment::Center)
+                    .push(field("Offset", "Hz", &self.xvtr_offset, XvtrField::Offset))
+                    .push(field("Power", "mW", &self.xvtr_power, XvtrField::Power)),
+            )
+            .push(
+                Text::new("Enter to send each field. Fields load from the radio on band select.")
                     .size(10)
                     .color(dim),
             )
