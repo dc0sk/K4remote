@@ -2559,8 +2559,7 @@ impl App {
                 // told on the control they pressed rather than only in the
                 // diagnostics window — which is a different window, usually
                 // closed (FR-TX-SAFE-06).
-                if self.ui.tx_refusals != self.last_tx_refusals {
-                    self.last_tx_refusals = self.ui.tx_refusals;
+                if ui::refusal_since(self.ui.tx_refusals, &mut self.last_tx_refusals) {
                     self.arm_flash = ui::ARM_FLASH_TICKS;
                 }
                 // Expire the momentary switch-tap highlight.

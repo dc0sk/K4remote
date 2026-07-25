@@ -1654,6 +1654,27 @@ pub fn af_recorder(da: Option<DigitalAudio>) -> AfRecorder {
     }
 }
 
+/// Whether an arm-gate refusal has occurred since the last check, updating the
+/// running total to the current one.
+///
+/// The refusal *count* comes from the worker (a running total), not a flag, so
+/// two refusals in quick succession are distinct. The UI holds the last count
+/// it acted on; when the published total moves past it, that is a new refusal
+/// and the ARM TX flash should start.
+///
+/// Extracted from an inline comparison in the tick so the "new refusal" edge
+/// can be tested without a running UI — the same reason [`arm_flash_lit`] is a
+/// function. The worker→snapshot plumbing is straight-line assignment; this is
+/// the decision that turns a changed total into a flash.
+pub fn refusal_since(current: u64, last: &mut u64) -> bool {
+    if current != *last {
+        *last = current;
+        true
+    } else {
+        false
+    }
+}
+
 /// How many UI ticks the ARM TX control flashes after refusing an action
 /// (`FR-TX-SAFE-06`), and whether it is lit on a given tick.
 ///
@@ -3084,7 +3105,7 @@ mod opt_override_tests {
 
 #[cfg(test)]
 mod arm_flash_tests {
-    use super::{arm_flash_lit, ARM_FLASH_TICKS};
+    use super::{arm_flash_lit, refusal_since, ARM_FLASH_TICKS};
 
     /// The refusal flash alternates and always ends dark, so the control
     /// returns to its resting appearance rather than sticking lit.
@@ -3093,6 +3114,34 @@ mod arm_flash_tests {
     /// meaning "armed", so a steady highlight on refusal would assert the
     /// opposite of what just happened.
     /// trace: FR-TX-SAFE-06
+    /// A new refusal from the worker starts the flash exactly once; an
+    /// unchanged total does not re-trigger it.
+    ///
+    /// This is the edge the tick acts on. The bug it guards against would be a
+    /// flash that either never fires (comparison inverted) or fires every tick
+    /// (total not stored), the latter freezing the control permanently lit.
+    /// trace: FR-TX-SAFE-06
+    #[test]
+    fn fr_tx_safe_06_a_new_refusal_triggers_the_flash_once() {
+        let mut last = 0u64;
+        // Nothing has happened yet.
+        assert!(!refusal_since(0, &mut last), "no refusal, no flash");
+        // The worker reports the first refusal.
+        assert!(refusal_since(1, &mut last), "first refusal flashes");
+        // The same total on the next tick must NOT re-trigger — else the flash
+        // would restart every tick and never end.
+        assert!(
+            !refusal_since(1, &mut last),
+            "steady total does not re-flash"
+        );
+        assert!(!refusal_since(1, &mut last));
+        // A second, distinct refusal flashes again.
+        assert!(refusal_since(2, &mut last), "second refusal flashes");
+        // A jump of several (missed ticks) still counts as one edge.
+        assert!(refusal_since(9, &mut last));
+        assert!(!refusal_since(9, &mut last));
+    }
+
     #[test]
     fn fr_tx_safe_06_refusal_flash_alternates_and_ends_dark() {
         assert!(!arm_flash_lit(0), "not flashing when the counter is spent");
