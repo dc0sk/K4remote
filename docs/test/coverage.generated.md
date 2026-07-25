@@ -57,6 +57,7 @@ Legend: ✅ test-traced · 🟡 waived (see r3-waivers.md) · ⚪ not test-requi
 | `FR-FIL-02` | C | T | ✅ |
 | `FR-FIL-03` | C | D | ⚪ |
 | `FR-FM-01` | C | T | ✅ |
+| `FR-FM-02` | S | T | ✅ |
 | `FR-KEY-01` | S | T | ✅ |
 | `FR-KEY-02` | C | T | ✅ |
 | `FR-KPOD-01` | S | T | ✅ |

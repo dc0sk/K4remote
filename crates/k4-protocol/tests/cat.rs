@@ -748,3 +748,22 @@ fn fr_xvtr_01_setup_commands_encode() {
     );
     assert_eq!(set_xvtr_power_tenths_mw(99), "XVP050;", "clamped to 5.0 mW");
 }
+
+/// DTMF digits encode as `DM<digit>;`, and non-digits are refused.
+/// trace: FR-FM-02
+#[test]
+fn fr_fm_02_dtmf_encodes_valid_digits_only() {
+    use k4_protocol::cat::{send_dtmf, DTMF_DIGITS};
+    assert_eq!(send_dtmf('5'), Some("DM5;".to_string()));
+    assert_eq!(send_dtmf('A'), Some("DMA;".to_string()));
+    assert_eq!(send_dtmf('*'), Some("DM*;".to_string()));
+    assert_eq!(send_dtmf('#'), Some("DM#;".to_string()));
+    // Every keypad digit encodes.
+    for d in DTMF_DIGITS {
+        assert!(send_dtmf(d).is_some(), "{d} must be a valid DTMF digit");
+    }
+    // Non-DTMF characters are refused, not sent malformed.
+    assert_eq!(send_dtmf('E'), None);
+    assert_eq!(send_dtmf(';'), None);
+    assert_eq!(send_dtmf(' '), None);
+}

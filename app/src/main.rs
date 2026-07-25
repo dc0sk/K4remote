@@ -160,6 +160,8 @@ struct App {
     xvtr_offset: String,
     xvtr_power: String,
     xvtr_loaded_band: Option<u8>,
+    /// DTMF keypad popup open (FR-FM-02).
+    dtmf_open: bool,
     memory_name: String,
     // Peer cache + settings dialog (FR-CFG-04, FR-UI-23).
     peers: k4_config::PeerCache,
@@ -284,6 +286,10 @@ struct App {
     opt_rf: ui::OptLevel,
     opt_sql: ui::OptLevel,
     opt_apf_width: ui::OptLevel,
+    // DATA sub-mode (DT) and rate (DR) also read straight from the radio, so
+    // tapping one lagged until the read-back — the same fight the sliders had.
+    opt_data_submode: ui::OptLevel,
+    opt_data_rate: ui::OptLevel,
     opt_notch: ui::Opt<u16>,
     opt_shift: ui::Opt<u16>,
     vox_gain: u8,
@@ -630,6 +636,9 @@ enum Message {
     /// Run an assigned macro from the on-screen MACROS tab (FR-MACRO-01): send
     /// its CAT string, gated by the TX arm exactly as the K-Pod press is.
     RunMacro(usize),
+    /// DTMF keypad (FR-FM-02): open/close, and send one digit.
+    ToggleDtmf,
+    DtmfDigit(char),
     /// Edit a K-Pod slot's free-form CAT macro string (slot index, text).
     KpodButtonCatChanged(usize, String),
     /// Apply a preset (by label) to a K-Pod slot, filling its label + CAT.
@@ -955,6 +964,7 @@ impl App {
             xvtr_offset: String::new(),
             xvtr_power: String::new(),
             xvtr_loaded_band: None,
+            dtmf_open: false,
             memory_name: String::new(),
             peers,
             settings_open: false,
@@ -1008,6 +1018,8 @@ impl App {
             opt_rf: ui::OptLevel::default(),
             opt_sql: ui::OptLevel::default(),
             opt_apf_width: ui::OptLevel::default(),
+            opt_data_submode: ui::OptLevel::default(),
+            opt_data_rate: ui::OptLevel::default(),
             opt_notch: ui::Opt::default(),
             opt_shift: ui::Opt::default(),
             vox_gain: 20,
@@ -1758,12 +1770,14 @@ impl App {
             }
             // DATA sub-mode selector (DT/DT$). trace: FR-DATA-01
             Message::SetDataSubmode(n) => {
+                self.opt_data_submode.set(n);
                 self.send(WorkerCmd::Cat(k4_protocol::cat::set_data_submode(
                     self.active_sub(),
                     n,
                 )));
             }
             Message::SetDataRate(r) => {
+                self.opt_data_rate.set(r);
                 self.send(WorkerCmd::Cat(k4_protocol::cat::set_data_rate(
                     self.active_sub(),
                     r,
@@ -2043,6 +2057,14 @@ impl App {
                 self.kpod_buttons = k4_config::default_kpod_buttons();
                 self.push_kpod_buttons();
             }
+            Message::ToggleDtmf => self.dtmf_open = !self.dtmf_open,
+            Message::DtmfDigit(d) => {
+                // FM-only, SET-only. The encoder refuses a non-DTMF char, so a
+                // stray key sends nothing.
+                if let Some(cmd) = k4_protocol::cat::send_dtmf(d) {
+                    self.send(WorkerCmd::Cat(cmd));
+                }
+            }
             Message::RunMacro(idx) => {
                 // Same path a K-Pod press takes: the raw CAT string through the
                 // arm-gated seam, so a macro that keys is refused (and flashes
@@ -2104,6 +2126,10 @@ impl App {
                     }
                     if self.memories_open {
                         self.memories_open = false;
+                        return Task::none();
+                    }
+                    if self.dtmf_open {
+                        self.dtmf_open = false;
                         return Task::none();
                     }
                     if self.settings_open {
@@ -2772,6 +2798,13 @@ impl App {
                 });
                 self.opt_apf_width
                     .reconcile(if sub { r.sub_apf_width } else { r.apf_width });
+                self.opt_data_submode.reconcile(if sub {
+                    r.sub_data_submode
+                } else {
+                    r.data_submode
+                });
+                self.opt_data_rate
+                    .reconcile(if sub { r.sub_data_rate } else { r.data_rate });
                 // A refusal at the arm gate flashes ARM TX, so the operator is
                 // told on the control they pressed rather than only in the
                 // diagnostics window — which is a different window, usually
@@ -3938,6 +3971,20 @@ impl App {
                     .color(rxv),
             )
             .push(step("+", 1))
+            // DTMF keypad (FR-FM-02): a compact button opening a 4×4 keypad
+            // popup, so the keys do not crowd this row. FM only, which this
+            // panel already is.
+            .push(Space::with_width(Length::Fixed(10.0)))
+            .push(
+                Button::new(Text::new("DTMF").size(11))
+                    .style(btn_style(if self.dtmf_open {
+                        BtnKind::Active
+                    } else {
+                        BtnKind::Plain
+                    }))
+                    .padding([4, 8])
+                    .on_press(Message::ToggleDtmf),
+            )
             .into()
     }
 
@@ -4552,20 +4599,22 @@ impl App {
 
     /// Active RX's DATA sub-mode (0=DATA A, 1=AFSK A, 2=FSK D, 3=PSK D).
     fn rx_data_submode(&self) -> Option<u8> {
-        if self.active_sub() {
+        let reported = if self.active_sub() {
             self.ui.radio.sub_data_submode
         } else {
             self.ui.radio.data_submode
-        }
+        };
+        self.opt_data_submode.or(reported)
     }
 
     /// Active RX's DATA rate bit (`DR`/`DR$`), for the rate selector.
     fn rx_data_rate(&self) -> Option<u8> {
-        if self.active_sub() {
+        let reported = if self.active_sub() {
             self.ui.radio.sub_data_rate
         } else {
             self.ui.radio.data_rate
-        }
+        };
+        self.opt_data_rate.or(reported)
     }
 
     // Chip-control state for the active RX VFO (main mirror on the snapshot, sub
@@ -7168,6 +7217,8 @@ impl App {
             stack![content, self.rx_popup_overlay(p)].into()
         } else if self.memories_open {
             stack![content, self.memories_overlay()].into()
+        } else if self.dtmf_open {
+            stack![content, self.dtmf_overlay()].into()
         } else if self.settings_open {
             stack![content, settings_card].into()
         } else if self.about_open {
@@ -7935,6 +7986,53 @@ impl App {
     /// Client-side, because the radio's own memory-channel command (`MC`) is
     /// "[Pending] TBD" in the Programmer's Reference — there is no documented
     /// way to reach the K4's memories over CAT.
+    /// The DTMF keypad popup (FR-FM-02): a 4×4 grid of the standard telephone
+    /// layout plus A–D and `*`/`#`, each key sending one `DM` digit. FM only.
+    /// Sending, not storing — the 6 stored-sequence memories the gap analysis
+    /// mentions are a later addition, and the 1750 Hz burst has no documented
+    /// CAT command, so neither is here.
+    fn dtmf_overlay(&self) -> Element<'_, Message> {
+        let dim = role_color(ui::ColorRole::Inactive);
+        let key = |d: char| -> Element<Message> {
+            Button::new(Text::new(d.to_string()).size(16).center())
+                .style(btn_style(BtnKind::Plain))
+                .padding([8, 0])
+                .width(Length::Fixed(52.0))
+                .on_press(Message::DtmfDigit(d))
+                .into()
+        };
+        let mut grid = Column::new().spacing(6);
+        for r in 0..4 {
+            let mut row = Row::new().spacing(6);
+            for c in 0..4 {
+                row = row.push(key(k4_protocol::cat::DTMF_DIGITS[r * 4 + c]));
+            }
+            grid = grid.push(row);
+        }
+        let card = Container::new(
+            Column::new()
+                .spacing(10)
+                .push(
+                    Row::new()
+                        .spacing(12)
+                        .align_y(Alignment::Center)
+                        .push(Text::new("DTMF").size(12).color(dim))
+                        .push(horizontal_space())
+                        .push(small_btn("Close", Message::ToggleDtmf)),
+                )
+                .push(
+                    Text::new("Each key sends a DTMF tone (FM only).")
+                        .size(11)
+                        .color(dim),
+                )
+                .push(grid),
+        )
+        .style(panel_style)
+        .padding(18)
+        .width(Length::Fixed(260.0));
+        modal_scrim(card.into())
+    }
+
     fn memories_overlay(&self) -> Element<'_, Message> {
         let dim = role_color(ui::ColorRole::Inactive);
         let mut list = Column::new().spacing(4);

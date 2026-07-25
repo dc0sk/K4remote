@@ -12,6 +12,19 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
 
 ## [Unreleased]
 
+### Fixed
+
+- **Switching DATA sub-mode (and rate) no longer lags.** Tapping DATA A / AFSK A
+  / FSK D / PSK D, or a data rate, waited for the radio to echo before the
+  button lit - the same read-back fight the sliders had. The button now
+  responds at once and reconciles with the radio.
+
+### Added
+
+- **DTMF keypad for FM.** A **DTMF** button on the FM panel opens a keypad
+  (0-9, A-D, *, #) that sends tones to the radio - for repeater and link
+  control that is otherwise out of reach over a remote link.
+
 ### Added
 
 - **Transverter band setup.** The BAND screen now has a setup form for the
