@@ -10,37 +10,32 @@ during the 0.4.0 release, so earlier detail lives in the git history and in the
 change ledgers under [`docs/test/test-strategy.md`](docs/test/test-strategy.md)
 and [`docs/requirements/system-requirements.md`](docs/requirements/system-requirements.md).
 
-## [Unreleased]
+## [0.7.0] — 2026-07-25
 
-### Fixed
+### Added
 
-- **ARM TX now flashes whenever it refuses an action.** Pressing a control that
-  would transmit while the arm is off used to be answered only in the
-  diagnostics window — a different window, usually closed — so the interlock
-  worked but looked broken. Every route is covered now: PTT, TUNE, XMIT and the
-  other switch emulations, DVR playback, text send, and raw console commands.
+- **Frequency memories.** Click **MEM** in the top bar — or tap a VFO's MHz
+  digits, as the radio does — to store the current frequency and mode under an
+  optional name, recall one, or delete one. The bank holds 64 entries and is
+  saved with your app settings. These are **the app's memories, not the
+  radio's**: the K4's own memory channels have no published remote-control
+  command, so storing here does not touch the radio. A duplicate frequency
+  *and* mode is refused; the same frequency in a different mode is kept, so a
+  net can live in the bank on both CW and SSB.
 
-  The **PTT button** in particular did nothing at all when disarmed: not even a
-  log line. Only the PTT keyboard shortcut gave feedback.
+- **AF recorder.** A strip below the mini-pan drives the radio's own 90-second
+  receive-audio recorder — the same buffer behind the K4's AF REC/PLAY
+  switches: record, play back, jump five seconds either way, step between
+  recording sessions, and clear. The recordings live **in the radio**, so they
+  are the same ones the front panel sees. While a DVR voice message is
+  recording or transmitting the AF controls go inactive, since the two share
+  one engine.
 
-### Fixed
-
-- **The NB chip no longer overflows its own box.** It read `On · WIDE`, which
-  did not fit and wrapped to a second line, making that chip taller than the
-  rest of the row. It now shows just the filter — `WIDE`, `NAR`, `NONE` —
-  matching ATT (`6 dB`) and AGC (`Slow`); the chip lights up when the noise
-  blanker is on, so the `On ·` prefix was saying what the colour already said.
-
-- **Sliders no longer fight you.** Dragging AF, RF, SQL, notch or shift could
-  snap the value backwards mid-drag: the radio's read-back for an earlier step
-  overwrote the value you were setting. Your value is now held until the radio
-  confirms it. **APF width** changed the same way — it kept no local value, so
-  the button took as long as the radio needed to answer (~2 s); it responds
-  immediately now.
-
-- **Dragging a slider no longer floods the link.** Every step of a drag sent a
-  command to the radio. They are now sent at most every 50 ms, with the settled
-  value sent when you let go.
+- **TX TEST is now shown.** The TEST button gave no indication either way, so
+  nothing told you the radio was in test mode — where it keys but puts out no
+  power. The button is lit whenever test mode is active, including when it was
+  switched on at the radio or by another client, because it reads the radio's
+  own state rather than remembering what the app sent.
 
 ### Changed
 
@@ -53,60 +48,54 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
 
 ### Fixed
 
-- **More controls hold still as their labels change.** Continuing the
-  no-bouncing-wireframe pass: **PTT/UNKEY** no longer shoves EMERGENCY STOP
-  sideways when you key, the AF/RF/SQL/NOTCH/NB/NR slider readings no longer
-  ripple the filter strip as they count, and the connect button, theme
-  selector, SHFT/HI-LO toggle, APF width, RIT/XIT offset, S-meter reading and
-  the settings toggles all keep one width.
-
-### Added
-
-- **AF recorder.** A strip below the mini-pan drives the radio's own
-  90-second receive-audio recorder — the same buffer behind the K4's AF
-  REC/PLAY switches: record, play back, jump five seconds either way, step
-  between recording sessions, and clear.
-
-  The recordings live **in the radio**, not in this app, so they are the same
-  ones the front panel sees. While a DVR voice message is recording or
-  transmitting the AF controls go inactive, since the two share one engine.
-
-### Fixed
-
 - **Transmit safety: the TX arm could be bypassed by typing a command in lower
-  case.** The K4 accepts `tx;` exactly as it accepts `TX;`, but the arm gate
-  recognised only upper case — so every transmit-capable command (`TX`, `TU`,
-  `KY`, `KZ`, `PB`, `SW`, `DA`) could be sent from the diagnostics console with
-  transmit disarmed. Commands are still sent exactly as typed; only the
-  safety check is now case-insensitive.
+  case.** The K4 accepts `tx;` exactly as `TX;`, but the arm gate recognised
+  only upper case — so every transmit-capable command (`TX`, `TU`, `KY`, `KZ`,
+  `PB`, `SW`, `DA`) could be sent from the diagnostics console with transmit
+  disarmed. Commands are still sent exactly as typed; only the safety check is
+  now case-insensitive.
 
 - **Transmit safety: the `DA` (digital audio) commands are now behind the TX
   arm.** `DAPM` plays the last recorded voice message *through the
   transmitter*, and `DAMP` plays a stored one with an optional auto-repeat
-  interval — so it re-keys by itself. Neither was recognised as
-  transmit-capable, and both could be sent from the diagnostics console's
-  raw-CAT field with TX disarmed.
+  interval, so it re-keys by itself. Neither was recognised as
+  transmit-capable. **Emergency stop now also sends `DA0;`** — without it,
+  stopping an auto-repeating message dropped transmit and then let the radio go
+  back on air a moment later.
 
-  **Emergency stop now also sends `DA0;`.** Without it, stopping an
-  auto-repeating voice message dropped transmit and then let the radio go back
-  on air a moment later.
-- **TX TEST now shows that it is on.** The TEST button gave no indication
-  either way, so there was nothing to tell you the radio was in test mode —
-  where it keys but puts out no power. The button is now lit whenever test
-  mode is active, including when it was switched on at the radio or by
-  another client.
-### Added
+- **ARM TX now flashes whenever it refuses an action.** Pressing a control that
+  would transmit while the arm is off used to be answered only in the
+  diagnostics window — a different window, usually closed — so the interlock
+  worked but looked broken. Every route is covered now: PTT, TUNE, XMIT and the
+  other switch emulations, DVR playback, text send, and raw console commands.
+  The **PTT button** in particular did nothing at all when disarmed — not even
+  a log line; only the keyboard shortcut gave feedback.
 
-- **Frequency memories.** Click **MEM** in the top bar — or tap a VFO's MHz
-  digits, as the radio does — to store the current frequency and mode under an
-  optional name, recall one, or delete one. The bank holds 64 entries and is
-  saved with your app settings.
+- **Sliders no longer fight you.** Dragging AF, RF, SQL, notch or shift could
+  snap the value backwards mid-drag, as the radio's read-back for an earlier
+  step overwrote the value you were setting; your value is now held until the
+  radio confirms it. **APF width** responded the same way — it kept no local
+  value, so the button took as long as the radio needed to answer (~2 s) — and
+  now changes at once. And every step of a drag no longer floods the link: they
+  are sent at most every 50 ms, with the settled value sent on release.
 
-  These are **the app's memories, not the radio's**: the K4's own memory
-  channels have no published remote-control command, so storing here does not
-  touch anything on the radio. Storing the same frequency *and* mode twice is
-  refused; the same frequency in a different mode is kept, so a net can live in
-  the bank on both CW and SSB.
+- **Controls hold still as their labels change.** Continuing the
+  no-bouncing-wireframe pass: PTT/UNKEY no longer shoves EMERGENCY STOP sideways
+  when you key; the AF/RF/SQL/NOTCH/NB/NR slider readings no longer ripple the
+  filter strip; and the connect button, theme selector, SHFT/HI-LO toggle, APF
+  width, RIT/XIT offset, S-meter reading and the settings toggles all keep one
+  width. The **SHIFT** readout, which had been wrapping `1500 Hz` to two lines,
+  now fits on one.
+
+- **The NB chip no longer overflows its own box.** It read `On · WIDE`, which
+  wrapped to a second line and made the chip taller than the rest of the row.
+  It now shows just the filter — `WIDE`, `NAR`, `NONE` — matching ATT (`6 dB`)
+  and AGC (`Slow`).
+
+- **DATA mode no longer makes the TRANSMIT frame taller.** A leftover fixed
+  height on an empty row pushed the frame down ~9 px in DATA; removed.
+
+[0.7.0]: https://github.com/dc0sk/K4remote/releases/tag/v0.7.0
 
 ## [0.6.0] — 2026-07-21
 

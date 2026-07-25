@@ -9,8 +9,8 @@ stakeholder needs down to individual tests, enforced by a build gate.
 
 ![K4 Remote main window](docs/screenshots/main.png)
 
-> **Status:** v0.6.0 — feature-complete; hardware bring-up in progress.
-> 283 hardware-free tests pass · clippy/fmt clean · traceability gate green · CI green on Linux/macOS/Windows.
+> **Status:** v0.7.0 — feature-complete; hardware bring-up in progress.
+> 314 hardware-free tests pass · clippy/fmt clean · traceability gate green · CI green on Linux/macOS/Windows.
 > VFO tuning, RIT/XIT, split, band, panadapter click-to-QSY, and the K-Pod (incl. F1–F8 tap/hold macros)
 > are validated against a real K4; audio / PTT / waterfall rendering / serial bring-up is ongoing.
 > 0.4.0 closed **four transmit-safety faults** found on a live K4 — most seriously, the transmitter
@@ -25,6 +25,13 @@ stakeholder needs down to individual tests, enforced by a build gate.
 > sense, a waterfall that scrolls with the VFO, and labelled frequency/level scales synced to the
 > radio — plus **ATU and TUNE control**, an About-box **update check**, and **switchable control
 > tooltips**.
+>
+> **New in 0.7.0:** **frequency memories**, an **AF recorder** driving the radio's own 90-second
+> receive buffer, and a **TX TEST** indicator. Plus, from operating a live K4: sliders that no
+> longer fight the radio's read-back (and an APF button that responds at once), a **lowercase
+> hole in the TX-arm interlock** closed, the `DA` digital-audio commands brought behind the arm,
+> and **ARM TX now flashes** when it refuses any transmit action — including the PTT button, which
+> was silent before. Two rows of vertical space reclaimed in the RX and TX frames.
 >
 > **New in 0.6.0:** tap the mode you are already in to reach its **alternate** (CW ⇄ CW-R,
 > LSB ⇄ USB, DATA ⇄ DATA-R); controls **no longer resize** as their labels change, so the transmit
