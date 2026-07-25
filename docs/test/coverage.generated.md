@@ -65,6 +65,7 @@ Legend: ✅ test-traced · 🟡 waived (see r3-waivers.md) · ⚪ not test-requi
 | `FR-KPOD-04` | S | D | ⚪ |
 | `FR-KPOD-05` | S | T | ✅ |
 | `FR-KPOD-06` | S | T/D | ✅ |
+| `FR-MACRO-01` | S | T | ✅ |
 | `FR-MEM-01` | S | T | ✅ |
 | `FR-MENU-01` | C | T | ✅ |
 | `FR-MODE-01` | M | T | ✅ |

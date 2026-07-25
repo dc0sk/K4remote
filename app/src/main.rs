@@ -469,6 +469,7 @@ enum FnTab {
     Keys,
     Switches,
     Dx,
+    Macros,
 }
 
 /// A single TX-config adjustment (FR-KEY-01/FR-AUD-CFG-01/FR-ANT-01).
@@ -608,6 +609,9 @@ enum Message {
     TogglePttMode,
     ToggleModeAwareUi,
     ToggleKpod,
+    /// Run an assigned macro from the on-screen MACROS tab (FR-MACRO-01): send
+    /// its CAT string, gated by the TX arm exactly as the K-Pod press is.
+    RunMacro(usize),
     /// Edit a K-Pod slot's free-form CAT macro string (slot index, text).
     KpodButtonCatChanged(usize, String),
     /// Apply a preset (by label) to a K-Pod slot, filling its label + CAT.
@@ -2008,6 +2012,16 @@ impl App {
             Message::KpodButtonsReset => {
                 self.kpod_buttons = k4_config::default_kpod_buttons();
                 self.push_kpod_buttons();
+            }
+            Message::RunMacro(idx) => {
+                // Same path a K-Pod press takes: the raw CAT string through the
+                // arm-gated seam, so a macro that keys is refused (and flashes
+                // ARM TX) when disarmed, exactly as the physical switch is.
+                if let Some(slot) = self.kpod_buttons.get(idx) {
+                    if !slot.cat.is_empty() {
+                        self.send(WorkerCmd::SendRawCat(slot.cat.clone()));
+                    }
+                }
             }
             Message::KeyPressed(key, mods, window) => {
                 // Emergency stop (FR-TX-SAFE-05) is checked before *everything*
@@ -4742,13 +4756,74 @@ impl App {
             .spacing(6)
             .push(tab_btn(FnTab::Keys, "KEYS"))
             .push(tab_btn(FnTab::Switches, "SWITCHES"))
+            .push(tab_btn(FnTab::Macros, "MACROS"))
             .push(tab_btn(FnTab::Dx, "DX LIST"));
         let content: Element<Message> = match self.fn_tab {
             FnTab::Keys => self.fn_keys(),
             FnTab::Switches => self.fn_switches(),
+            FnTab::Macros => self.fn_macros(),
             FnTab::Dx => self.fn_dx(),
         };
         Column::new().spacing(12).push(tabs).push(content).into()
+    }
+
+    /// Fn -> MACROS: on-screen quick-access to the K-Pod macro table
+    /// (FR-MACRO-01). The same assignments the physical F1–F8 switches run,
+    /// so a station without a K-Pod still gets one-tap CAT macros; each is
+    /// sent through the arm-gated seam, so a macro that keys is refused (and
+    /// flashes ARM TX) while disarmed.
+    ///
+    /// Slots are F1–F8, each with a tap and a hold action
+    /// (index `(button-1)*2 + hold`). Only assigned slots (non-empty CAT) get a
+    /// button; the label is the operator's own, or `Fn t`/`Fn h` as a fallback.
+    fn fn_macros(&self) -> Element<'_, Message> {
+        let dim = role_color(ui::ColorRole::Inactive);
+        let rxv = role_color(ui::ColorRole::RxValue);
+        let assigned: Vec<(usize, String)> = self
+            .kpod_buttons
+            .iter()
+            .enumerate()
+            .filter_map(|(i, b)| ui::macro_label(i, &b.label, &b.cat).map(|l| (i, l)))
+            .collect();
+        if assigned.is_empty() {
+            return Column::new()
+                .spacing(8)
+                .push(Text::new("Macros").size(12).color(rxv))
+                .push(
+                    Text::new(
+                        "No macros assigned. Set the K-Pod function switches in                          Settings to use them here too.",
+                    )
+                    .size(11)
+                    .color(dim),
+                )
+                .into();
+        }
+        // Wrap into rows of up to eight so the grid never runs off the frame.
+        let mut grid = Column::new().spacing(6);
+        let mut row = Row::new().spacing(6);
+        for (n, (idx, label)) in assigned.iter().enumerate() {
+            if n > 0 && n % 8 == 0 {
+                grid = grid.push(row);
+                row = Row::new().spacing(6);
+            }
+            row = row.push(
+                Button::new(Text::new(label.clone()).size(12).center())
+                    .style(btn_style(BtnKind::Plain))
+                    .padding([5, 10])
+                    .width(Length::Fixed(84.0))
+                    .on_press(Message::RunMacro(*idx)),
+            );
+        }
+        grid = grid.push(row);
+        Column::new()
+            .spacing(8)
+            .push(
+                Text::new("Macros (from the K-Pod function switches)")
+                    .size(12)
+                    .color(rxv),
+            )
+            .push(grid)
+            .into()
     }
 
     /// Fn -> KEYS: VFO copy/swap (`AB`) + quick memories + PF keys (`SW`).
