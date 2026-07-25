@@ -609,6 +609,51 @@ pub fn set_dvr(n: u8) -> String {
     format!("PB{};", n.min(8))
 }
 
+/// Transverter band setup (`XV*`, D12). `XVN` selects which XV band (1–12) the
+/// other setup commands target, so callers send [`set_xvtr_band`] first, then
+/// the field commands below (`FR-XVTR-01`).
+///
+/// trace: FR-XVTR-01
+pub fn set_xvtr_band(n: u8) -> String {
+    format!("XVN{};", n.clamp(1, 12))
+}
+
+/// XV mode (`XVM`): 0 = off, 1 = external transverter.
+///
+/// trace: FR-XVTR-01
+pub fn set_xvtr_mode(external: bool) -> String {
+    format!("XVM{};", external as u8)
+}
+
+/// XV band lower edge in MHz (`XVR`, 0–99999).
+///
+/// trace: FR-XVTR-01
+pub fn set_xvtr_lower_mhz(mhz: u32) -> String {
+    format!("XVR{:05};", mhz.min(99999))
+}
+
+/// IF band in MHz (`XVI`, 0–53) — the HF band the transverter's IF uses.
+///
+/// trace: FR-XVTR-01
+pub fn set_xvtr_if_mhz(mhz: u8) -> String {
+    format!("XVI{:02};", mhz.min(53))
+}
+
+/// Oscillator/multiplier offset in Hz (`XVO`, ±0–99999).
+///
+/// trace: FR-XVTR-01
+pub fn set_xvtr_offset_hz(hz: i32) -> String {
+    let sign = if hz < 0 { '-' } else { '+' };
+    format!("XVO{}{:05};", sign, hz.unsigned_abs().min(99999))
+}
+
+/// Transverter power output in tenths of a milliwatt (`XVP`, 1–50 = 0.1–5.0 mW).
+///
+/// trace: FR-XVTR-01
+pub fn set_xvtr_power_tenths_mw(tenths: u16) -> String {
+    format!("XVP{:03};", tenths.clamp(1, 50))
+}
+
 /// Set TX test mode (`TS`).
 ///
 /// D12: while it is on the radio's "TX" icon flashes and the transmitter puts

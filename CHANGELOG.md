@@ -14,6 +14,14 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
 
 ### Added
 
+- **Transverter band setup.** The BAND screen now has a setup form for the
+  transverter bands (XV1-12): pick a band and set its mode, IF band, lower
+  edge, offset and mW power. Fields load from the radio when you pick a band,
+  and each is sent to that band. (The mW power scale while operating on a
+  transverter band is a separate, later addition.)
+
+### Added
+
 - **On-screen macro buttons.** A new **Fn -> MACROS** tab runs the same macros
   as the K-Pod F1-F8 switches, so you get one-tap CAT macros with or without a
   K-Pod. Assign them under Settings; a macro that transmits is arm-gated just

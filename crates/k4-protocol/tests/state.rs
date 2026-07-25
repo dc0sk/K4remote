@@ -812,3 +812,34 @@ fn fr_data_02_data_rate_parses_per_vfo() {
     assert_eq!(s.sub_data_rate, Some(0), "DR$ is the sub");
     assert_eq!(s.data_rate, Some(1), "main unchanged");
 }
+
+/// Transverter setup read-back parses each field, and the `XV<digit>` band
+/// select is not mistaken for a setup field.
+/// trace: FR-XVTR-01
+#[test]
+fn fr_xvtr_01_setup_readback_parses() {
+    let mut s = RadioState::new();
+    assert!(s.apply_cat("XVN3;"));
+    assert_eq!(s.xvtr_setup_band, Some(3));
+    assert!(s.apply_cat("XVM1;"));
+    assert_eq!(s.xvtr_mode, Some(true));
+    assert!(s.apply_cat("XVR00144;"));
+    assert_eq!(s.xvtr_lower_mhz, Some(144));
+    assert!(s.apply_cat("XVI28;"));
+    assert_eq!(s.xvtr_if_mhz, Some(28));
+    assert!(s.apply_cat("XVO-00500;"));
+    assert_eq!(s.xvtr_offset_hz, Some(-500));
+    assert!(s.apply_cat("XVO+01200;"));
+    assert_eq!(s.xvtr_offset_hz, Some(1200));
+    assert!(s.apply_cat("XVP010;"));
+    assert_eq!(s.xvtr_power_tenths_mw, Some(10));
+
+    // A bare-digit band select echo must not corrupt the setup fields.
+    let before = s.clone();
+    s.apply_cat("XV05;");
+    assert_eq!(
+        s.xvtr_setup_band, before.xvtr_setup_band,
+        "XV<digit> is not XVN"
+    );
+    assert_eq!(s.xvtr_mode, before.xvtr_mode);
+}
