@@ -747,6 +747,51 @@ pub fn on_air(local_tx: bool, tuning: bool, radio_tx: Option<bool>) -> bool {
     local_tx || tuning || radio_tx == Some(true)
 }
 
+/// What the transmit indicator should show (`FR-TX-TUNE-01`).
+///
+/// Three states, because they mean physically different things and must not
+/// look alike:
+///
+/// * `Idle` — nothing is keyed.
+/// * `OnAir` — RF is leaving the antenna **now**. Steady red.
+/// * `Test` — TX test mode is in effect: the radio keys downstream gear but
+///   puts out **no power** (D12 `TS`). The real K4 flashes its TX icon for
+///   exactly this, so this state carries a flash phase and the indicator
+///   alternates. It reads `TEST`, not `TX`, and is amber rather than red —
+///   red would claim RF that is not there.
+///
+/// Test takes precedence over on-air: keying *while in test mode* is still
+/// no-power, and "TEST" is the fact the operator needs, not "on air".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TxIndicator {
+    Idle,
+    OnAir,
+    /// Test mode in effect; `lit` is the current flash phase.
+    Test {
+        lit: bool,
+    },
+}
+
+/// Decide the transmit indicator from the on-air state, whether test mode is
+/// in effect, and the current flash phase.
+///
+/// trace: FR-TX-TUNE-01
+pub fn tx_indicator(on_air: bool, tx_test: bool, flash_lit: bool) -> TxIndicator {
+    if tx_test {
+        TxIndicator::Test { lit: flash_lit }
+    } else if on_air {
+        TxIndicator::OnAir
+    } else {
+        TxIndicator::Idle
+    }
+}
+
+/// The flash phase for a free-running 100 ms tick counter: ~500 ms on, 500 ms
+/// off. Used for the TX-test indicator (`FR-TX-TUNE-01`).
+pub fn flash_phase(tick: u32) -> bool {
+    (tick / 5).is_multiple_of(2)
+}
+
 /// Noise-blanker button: on/off plus the active filter mode, so the mode the
 /// hold cycles is visible without opening anything.
 ///
@@ -3031,7 +3076,49 @@ mod nb_filter_tests {
 
 #[cfg(test)]
 mod on_air_tests {
-    use super::on_air;
+    use super::{flash_phase, on_air, tx_indicator, TxIndicator};
+
+    /// TX test mode gets a flashing indicator distinct from a real transmit,
+    /// and takes precedence over on-air: keying in test mode is still
+    /// no-power, so "TEST" is what must show, not "on air".
+    ///
+    /// The failure this guards against is the one that makes it dangerous —
+    /// an operator forgetting test mode is on and transmitting into silence,
+    /// or, worse, reading a real transmit as test and keying with no idea RF
+    /// is leaving.
+    /// trace: FR-TX-TUNE-01
+    #[test]
+    fn fr_tx_tune_01_test_mode_indicator_is_distinct_and_flashes() {
+        // Idle and real transmit are unaffected.
+        assert_eq!(tx_indicator(false, false, true), TxIndicator::Idle);
+        assert_eq!(tx_indicator(true, false, true), TxIndicator::OnAir);
+
+        // Test mode in effect: flashing, whichever the on-air state.
+        assert_eq!(
+            tx_indicator(false, true, true),
+            TxIndicator::Test { lit: true }
+        );
+        assert_eq!(
+            tx_indicator(false, true, false),
+            TxIndicator::Test { lit: false }
+        );
+        // Keying *in* test mode: still TEST, never OnAir.
+        assert_eq!(
+            tx_indicator(true, true, true),
+            TxIndicator::Test { lit: true },
+            "test precedence: no-power keying must not read as a real transmit"
+        );
+
+        // The flash actually alternates over a run of ticks, and is symmetric.
+        let phases: Vec<bool> = (0..20).map(flash_phase).collect();
+        assert!(
+            phases.iter().any(|&p| p) && phases.iter().any(|&p| !p),
+            "must blink"
+        );
+        assert!(flash_phase(0), "starts lit");
+        assert!(!flash_phase(5), "off after ~500 ms");
+        assert!(flash_phase(10), "on again after ~1 s");
+    }
 
     /// Any route to air counts — including a tune, which deliberately does
     /// not set the transmit flag.
