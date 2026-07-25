@@ -275,6 +275,10 @@ struct App {
     opt_rf: ui::OptLevel,
     opt_sql: ui::OptLevel,
     opt_apf_width: ui::OptLevel,
+    // DATA sub-mode (DT) and rate (DR) also read straight from the radio, so
+    // tapping one lagged until the read-back — the same fight the sliders had.
+    opt_data_submode: ui::OptLevel,
+    opt_data_rate: ui::OptLevel,
     opt_notch: ui::Opt<u16>,
     opt_shift: ui::Opt<u16>,
     vox_gain: u8,
@@ -978,6 +982,8 @@ impl App {
             opt_rf: ui::OptLevel::default(),
             opt_sql: ui::OptLevel::default(),
             opt_apf_width: ui::OptLevel::default(),
+            opt_data_submode: ui::OptLevel::default(),
+            opt_data_rate: ui::OptLevel::default(),
             opt_notch: ui::Opt::default(),
             opt_shift: ui::Opt::default(),
             vox_gain: 20,
@@ -1728,12 +1734,14 @@ impl App {
             }
             // DATA sub-mode selector (DT/DT$). trace: FR-DATA-01
             Message::SetDataSubmode(n) => {
+                self.opt_data_submode.set(n);
                 self.send(WorkerCmd::Cat(k4_protocol::cat::set_data_submode(
                     self.active_sub(),
                     n,
                 )));
             }
             Message::SetDataRate(r) => {
+                self.opt_data_rate.set(r);
                 self.send(WorkerCmd::Cat(k4_protocol::cat::set_data_rate(
                     self.active_sub(),
                     r,
@@ -2680,6 +2688,13 @@ impl App {
                 });
                 self.opt_apf_width
                     .reconcile(if sub { r.sub_apf_width } else { r.apf_width });
+                self.opt_data_submode.reconcile(if sub {
+                    r.sub_data_submode
+                } else {
+                    r.data_submode
+                });
+                self.opt_data_rate
+                    .reconcile(if sub { r.sub_data_rate } else { r.data_rate });
                 // A refusal at the arm gate flashes ARM TX, so the operator is
                 // told on the control they pressed rather than only in the
                 // diagnostics window — which is a different window, usually
@@ -4443,20 +4458,22 @@ impl App {
 
     /// Active RX's DATA sub-mode (0=DATA A, 1=AFSK A, 2=FSK D, 3=PSK D).
     fn rx_data_submode(&self) -> Option<u8> {
-        if self.active_sub() {
+        let reported = if self.active_sub() {
             self.ui.radio.sub_data_submode
         } else {
             self.ui.radio.data_submode
-        }
+        };
+        self.opt_data_submode.or(reported)
     }
 
     /// Active RX's DATA rate bit (`DR`/`DR$`), for the rate selector.
     fn rx_data_rate(&self) -> Option<u8> {
-        if self.active_sub() {
+        let reported = if self.active_sub() {
             self.ui.radio.sub_data_rate
         } else {
             self.ui.radio.data_rate
-        }
+        };
+        self.opt_data_rate.or(reported)
     }
 
     // Chip-control state for the active RX VFO (main mirror on the snapshot, sub
