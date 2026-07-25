@@ -3619,7 +3619,12 @@ impl App {
                     format!("ATU {}", if in_line { "IN" } else { "BYP" }),
                 )
             }
-            60 => (false, format!("ANT {}", ant(self.ui.radio.tx_antenna))),
+            // TX antenna: the operator's own ACN name if the radio has one,
+            // else the default ANT n (FR-ANT-02).
+            60 => (
+                false,
+                ui::tx_antenna_label(self.ui.radio.tx_antenna, &self.ui.radio.antenna_names),
+            ),
             70 => (false, format!("RX A {}", ant(self.ui.radio.rx_antenna))),
             157 => (
                 false,

@@ -772,6 +772,33 @@ fn fr_vfo_lock_01_lock_state_parses_per_vfo() {
     );
 }
 
+/// Antenna names parse into the right slot, and the clear form resets to None.
+/// trace: FR-ANT-02
+#[test]
+fn fr_ant_02_antenna_names_parse_per_slot() {
+    let mut s = RadioState::new();
+    assert!(s.apply_cat("ACN1DIPOLE;"));
+    assert_eq!(s.antenna_names[0].as_deref(), Some("DIPOLE"));
+    assert_eq!(s.antenna_names[1], None, "other slots untouched");
+
+    assert!(s.apply_cat("ACN3BEAM;"));
+    assert_eq!(s.antenna_names[2].as_deref(), Some("BEAM"));
+
+    // The clear form (`ACNn~`) drops the custom name.
+    assert!(s.apply_cat("ACN1~;"));
+    assert_eq!(s.antenna_names[0], None, "~ clears the name");
+
+    // A bare GET echo with no name is also "no custom name".
+    s.antenna_names[1] = Some("X".into());
+    s.apply_cat("ACN2;");
+    assert_eq!(s.antenna_names[1], None);
+
+    // Out-of-range slots are ignored, not a panic.
+    assert!(
+        !s.apply_cat("ACN9FOO;") || s.antenna_names.iter().filter(|n| n.is_some()).count() <= 1
+    );
+}
+
 /// DATA rate parses per receiver, and `DR$` is not mistaken for bare `DR`.
 /// trace: FR-DATA-02
 #[test]

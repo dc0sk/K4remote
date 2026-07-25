@@ -1202,6 +1202,32 @@ pub fn rx_antenna_names() -> &'static [&'static str; 8] {
     &["Off", "RX2", "=TX", "XVTR", "RX1", "ATU1", "ATU2", "ATU3"]
 }
 
+/// The TX-antenna control label, using the operator's own antenna name if the
+/// radio has one (`ACN`, FR-ANT-02).
+///
+/// The TX antenna (`AN`) is 1–3 and maps to `ACN` slots 1–3. With a custom
+/// name the control reads that name alone (e.g. `DIPOLE`); without one, the
+/// default `ANT 1`. `None` antenna (not yet reported) shows `ANT ?`.
+///
+/// The name is shown **without an `ANT:` prefix** on purpose: the switch cell
+/// is a fixed 92 px, and a 6-character name plus prefix wraps to a second line
+/// — making that one cell taller and breaking the switch-row alignment (a
+/// vertical `FR-UI-STABLE-01` violation). A 6-character name alone fits.
+pub fn tx_antenna_label(antenna: Option<u8>, names: &[Option<String>; 5]) -> String {
+    match antenna {
+        None => "ANT ?".to_string(),
+        Some(n) => {
+            let named = names
+                .get(n.wrapping_sub(1) as usize)
+                .and_then(|s| s.as_deref());
+            match named {
+                Some(name) => name.to_string(),
+                None => format!("ANT {n}"),
+            }
+        }
+    }
+}
+
 /// Transmit-audio input source names for the `MI` command (FR-AUD-CFG-01),
 /// index = the `MI` value (0 front … 4 rear+line).
 /// trace: FR-AUD-CFG-01
@@ -3120,6 +3146,30 @@ mod on_air_tests {
         assert!(
             tuning_allowed(None),
             "unknown allows (do not block a fresh connect)"
+        );
+    }
+
+    /// The TX antenna control shows the operator's own name when the radio has
+    /// one, and the default `ANT n` otherwise. The name is shown alone (no
+    /// `ANT:` prefix) because a 6-char name plus prefix wraps the fixed-width
+    /// switch cell to a second line.
+    /// trace: FR-ANT-02
+    #[test]
+    fn fr_ant_02_tx_antenna_uses_the_user_name() {
+        use super::tx_antenna_label;
+        let mut names: [Option<String>; 5] = Default::default();
+        assert_eq!(tx_antenna_label(Some(1), &names), "ANT 1", "default label");
+        assert_eq!(tx_antenna_label(None, &names), "ANT ?");
+        names[0] = Some("DIPOLE".into());
+        assert_eq!(
+            tx_antenna_label(Some(1), &names),
+            "DIPOLE",
+            "the name alone, no prefix"
+        );
+        assert_eq!(
+            tx_antenna_label(Some(2), &names),
+            "ANT 2",
+            "slot 2 still default"
         );
     }
 

@@ -5,6 +5,7 @@ Legend: ✅ test-traced · 🟡 waived (see r3-waivers.md) · ⚪ not test-requi
 | Requirement | Pri | Ver | Status |
 |---|---|---|---|
 | `FR-ANT-01` | C | T | ✅ |
+| `FR-ANT-02` | S | T | ✅ |
 | `FR-ATU-01` | S | T/D | ✅ |
 | `FR-AUD-02` | M | T | ✅ |
 | `FR-AUD-03` | C | T | ⚪ |
