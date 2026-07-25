@@ -12,6 +12,13 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
 
 ## [Unreleased]
 
+### Added
+
+- **DATA rate selector.** In AFSK-A and FSK-D you can now pick 45 or 75 baud,
+  and in PSK-D BPSK31 or BPSK63, from buttons beside the DATA sub-mode strip.
+  The labels follow the sub-mode, and the control is hidden in DATA-A where
+  there is no rate.
+
 ### Fixed
 
 - **TX TEST now flashes, so you can't mistake it for a real transmit.** In test

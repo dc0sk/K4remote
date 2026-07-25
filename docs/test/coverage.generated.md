@@ -44,6 +44,7 @@ Legend: ✅ test-traced · 🟡 waived (see r3-waivers.md) · ⚪ not test-requi
 | `FR-CONN-ABSTRACT` | S | I/T | ✅ |
 | `FR-CW-SPOT-01` | C | T | ✅ |
 | `FR-DATA-01` | C | T | ✅ |
+| `FR-DATA-02` | S | T | ✅ |
 | `FR-DIAG-01` | S | T | ✅ |
 | `FR-DIAG-02` | C | D | ⚪ |
 | `FR-DIAG-03` | M | I | ⚪ |
