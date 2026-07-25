@@ -3853,7 +3853,13 @@ impl App {
                             false,
                         ))
                         .into(),
-                    Row::new().height(Length::Fixed(26.0)).into(),
+                    // DATA has no action controls. This was a 26 px spacer from
+                    // when the level and action rows were separate — it kept the
+                    // empty second row from collapsing so the frame stayed the
+                    // same height. Now the two are one row (whose height MON
+                    // fixes in every mode), so the spacer only made DATA taller
+                    // than the rest. An empty element, contributing nothing.
+                    Row::new().into(),
                 ),
                 ui::ModeClass::Fm => (extras().into(), voice_dvr()),
             }
