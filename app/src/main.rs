@@ -563,6 +563,8 @@ enum Message {
     SetRfGain(u8),
     SetSquelch(u8),
     SetDataSubmode(u8),
+    /// DATA rate bit (`DR`/`DR$`, FR-DATA-02).
+    SetDataRate(u8),
     SetTxPower(u16),
     SetCompression(u8),
     SetCwPitch(u16),
@@ -1725,6 +1727,12 @@ impl App {
                 self.send(WorkerCmd::Cat(k4_protocol::cat::set_data_submode(
                     self.active_sub(),
                     n,
+                )));
+            }
+            Message::SetDataRate(r) => {
+                self.send(WorkerCmd::Cat(k4_protocol::cat::set_data_rate(
+                    self.active_sub(),
+                    r,
                 )));
             }
             Message::SetTxPower(v) => {
@@ -3717,6 +3725,25 @@ impl App {
                                 .on_press(Message::SetDataSubmode(n)),
                         );
                     }
+                    // Rate selector (DR), only for the sub-modes that have one:
+                    // 45/75 baud in AFSK-A/FSK-D, BPSK31/63 in PSK-D. DATA-A has
+                    // no rate, so nothing appears there (FR-DATA-02).
+                    if let Some(labels) = ui::data_rate_labels(cur) {
+                        let rate = self.rx_data_rate();
+                        for (bit, label) in labels.iter().enumerate() {
+                            let bit = bit as u8;
+                            row = row.push(
+                                Button::new(Text::new(*label).size(11))
+                                    .style(btn_style(if rate == Some(bit) {
+                                        BtnKind::Active
+                                    } else {
+                                        BtnKind::Plain
+                                    }))
+                                    .padding([4, 8])
+                                    .on_press(Message::SetDataRate(bit)),
+                            );
+                        }
+                    }
                     row = row.push(decode());
                 }
                 _ => {}
@@ -4406,6 +4433,15 @@ impl App {
             self.ui.radio.sub_data_submode
         } else {
             self.ui.radio.data_submode
+        }
+    }
+
+    /// Active RX's DATA rate bit (`DR`/`DR$`), for the rate selector.
+    fn rx_data_rate(&self) -> Option<u8> {
+        if self.active_sub() {
+            self.ui.radio.sub_data_rate
+        } else {
+            self.ui.radio.data_rate
         }
     }
 

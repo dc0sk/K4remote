@@ -701,3 +701,20 @@ fn fr_tx_tune_01_tx_test_encodes_explicitly() {
     assert!(!keys_transmitter("TS0;"));
     assert!(!keys_transmitter("ts1;"), "case-insensitively, too");
 }
+
+/// The DATA-rate encoder mirrors the sub-mode form and clamps to the one-bit
+/// field.
+/// trace: FR-DATA-02
+#[test]
+fn fr_data_02_data_rate_encodes() {
+    use k4_protocol::cat::set_data_rate;
+    assert_eq!(set_data_rate(false, 0), "DR0;");
+    assert_eq!(set_data_rate(false, 1), "DR1;");
+    assert_eq!(set_data_rate(true, 0), "DR$0;", "sub form carries the $");
+    assert_eq!(set_data_rate(true, 1), "DR$1;");
+    assert_eq!(
+        set_data_rate(false, 9),
+        "DR1;",
+        "clamped to the 1-bit field"
+    );
+}

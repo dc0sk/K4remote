@@ -798,3 +798,17 @@ fn fr_ant_02_antenna_names_parse_per_slot() {
         !s.apply_cat("ACN9FOO;") || s.antenna_names.iter().filter(|n| n.is_some()).count() <= 1
     );
 }
+
+/// DATA rate parses per receiver, and `DR$` is not mistaken for bare `DR`.
+/// trace: FR-DATA-02
+#[test]
+fn fr_data_02_data_rate_parses_per_vfo() {
+    let mut s = RadioState::new();
+    assert!(s.apply_cat("DR1;"));
+    assert_eq!(s.data_rate, Some(1));
+    assert_eq!(s.sub_data_rate, None, "bare DR did not touch the sub");
+
+    assert!(s.apply_cat("DR$0;"));
+    assert_eq!(s.sub_data_rate, Some(0), "DR$ is the sub");
+    assert_eq!(s.data_rate, Some(1), "main unchanged");
+}

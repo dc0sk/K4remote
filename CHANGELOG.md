@@ -14,6 +14,10 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
 
 ### Added
 
+- **DATA rate selector.** In AFSK-A and FSK-D you can now pick 45 or 75 baud,
+  and in PSK-D BPSK31 or BPSK63, from buttons beside the DATA sub-mode strip.
+  The labels follow the sub-mode, and the control is hidden in DATA-A where
+  there is no rate.
 - **Your antenna names now show.** If you have named an antenna on the K4
   (ACN), the TX-antenna control shows that name (e.g. `DIPOLE`) instead of
   `ANT 1`.
