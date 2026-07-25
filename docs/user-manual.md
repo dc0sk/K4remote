@@ -1,7 +1,7 @@
 ---
 title: "K4 Remote — User Manual"
 status: Draft
-version: "0.6.0"
+version: "0.7.0"
 updated: 2026-07-22
 updated: 2026-07-21
 authors:
