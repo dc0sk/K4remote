@@ -747,6 +747,19 @@ pub fn on_air(local_tx: bool, tuning: bool, radio_tx: Option<bool>) -> bool {
     local_tx || tuning || radio_tx == Some(true)
 }
 
+/// Whether a tuning gesture on a VFO should be allowed, given its lock state
+/// (`FR-VFO-LOCK-01`).
+///
+/// A locked VFO refuses tuning on the radio, so the app must refuse its own
+/// click-to-QSY, wheel and digit gestures too — otherwise it sends a frequency
+/// the radio ignores and the display briefly shows a value the radio never
+/// took (optimistic stepping makes that worse). Unknown lock state (`None`,
+/// not yet reported) is treated as unlocked: refusing tuning on a state we
+/// have not heard would block tuning at every fresh connection.
+pub fn tuning_allowed(locked: Option<bool>) -> bool {
+    locked != Some(true)
+}
+
 /// Noise-blanker button: on/off plus the active filter mode, so the mode the
 /// hold cycles is visible without opening anything.
 ///
@@ -3031,7 +3044,21 @@ mod nb_filter_tests {
 
 #[cfg(test)]
 mod on_air_tests {
-    use super::on_air;
+    use super::{on_air, tuning_allowed};
+
+    /// A locked VFO refuses tuning; an unlocked or not-yet-known one allows it.
+    /// Unknown is permissive on purpose — refusing on a state we have not heard
+    /// would block tuning at every fresh connection.
+    /// trace: FR-VFO-LOCK-01
+    #[test]
+    fn fr_vfo_lock_01_locked_vfo_refuses_tuning() {
+        assert!(!tuning_allowed(Some(true)), "locked refuses");
+        assert!(tuning_allowed(Some(false)), "unlocked allows");
+        assert!(
+            tuning_allowed(None),
+            "unknown allows (do not block a fresh connect)"
+        );
+    }
 
     /// Any route to air counts — including a tune, which deliberately does
     /// not set the transmit flag.

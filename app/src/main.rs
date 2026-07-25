@@ -329,6 +329,10 @@ struct App {
     // Periodic-resync divider: pulls radio→slider values and re-queries settings
     // so changes made at the K4 sync back to the app (FR-CAT-07).
     resync_tick: u32,
+    /// Ticks remaining on the lock-refusal flash: a tuning gesture on a locked
+    /// VFO briefly flashes that VFO's lock badge, so the refusal is not silent
+    /// (FR-VFO-LOCK-01).
+    lock_flash: u8,
     // Which RX (VFO A/B) the frame controls target. Set by the header A/B and by
     // clicking a spectrum pane (needed in the A+B view where both are shown).
     active_rx_b: bool,
@@ -998,6 +1002,7 @@ impl App {
             decode_on: false,
             decode_tick: 0,
             resync_tick: 0,
+            lock_flash: 0,
             active_rx_b: false,
             switch_flash: None,
             switch_flash_ticks: 0,
@@ -1494,6 +1499,9 @@ impl App {
                     self.memories_open = true;
                     return Task::none();
                 }
+                if !self.allow_tuning(is_b) {
+                    return Task::none();
+                }
                 // Base on the optimistic value so rapid clicks accumulate without
                 // waiting for the radio's echo.
                 let cur = if is_b {
@@ -1652,6 +1660,9 @@ impl App {
                 self.send(WorkerCmd::Cat(k4_protocol::cat::set_split(is_b)));
             }
             Message::PaneQsy(is_b, hz) => {
+                if !self.allow_tuning(is_b) {
+                    return Task::none();
+                }
                 // Click-to-QSY: place the passband so the edge this mode
                 // anchors lands on the clicked frequency — USB the low edge,
                 // LSB the high edge, CW/AM/FM the centre (FR-PAN-05). Without
@@ -1667,7 +1678,11 @@ impl App {
                     self.send(WorkerCmd::SetFreqA(hz));
                 }
             }
-            Message::PaneWheel(is_b, dir) => self.pan_wheel(is_b, dir > 0),
+            Message::PaneWheel(is_b, dir) => {
+                if self.allow_tuning(is_b) {
+                    self.pan_wheel(is_b, dir > 0);
+                }
+            }
             Message::CommitDrag => {
                 // Push every dragged control's current value once. Cheap (a
                 // handful of commands) and it happens only on mouse-up, so it
@@ -2659,6 +2674,7 @@ impl App {
                 }
                 // Blink the ARM button (PTT hotkey pressed while disarmed).
                 self.arm_flash = self.arm_flash.saturating_sub(1);
+                self.lock_flash = self.lock_flash.saturating_sub(1);
                 // TUNE ends when transmit stops.
                 if !self.ui.transmitting {
                     self.tune_on = false;
@@ -2967,10 +2983,41 @@ impl App {
                 .padding([2, 8])
                 .on_press(Message::Tune(is_b, up))
         };
+        // A lock badge appears when this VFO is locked (FR-VFO-LOCK-01); it
+        // brightens briefly when a tuning gesture is refused, so the refusal is
+        // visible rather than a gesture that silently does nothing. Reserving
+        // the slot only when locked is fine — the badge does not vary in width.
+        let locked = self.vfo_locked(is_b) == Some(true);
+        let lock_hot = locked && self.lock_flash > 0;
+        let lock_badge: Element<Message> = if locked {
+            Container::new(Text::new("LOCK").size(10).color(if lock_hot {
+                Color::WHITE
+            } else {
+                role_color(ui::ColorRole::Caution)
+            }))
+            .style(move |_t: &Theme| container::Style {
+                background: Some(Background::Color(if lock_hot {
+                    role_color(ui::ColorRole::Caution)
+                } else {
+                    shade(ui::Shade::Track)
+                })),
+                border: Border {
+                    color: role_color(ui::ColorRole::Caution),
+                    width: 1.0,
+                    radius: 3.0.into(),
+                },
+                ..container::Style::default()
+            })
+            .padding([1, 5])
+            .into()
+        } else {
+            horizontal_space().width(Length::Shrink).into()
+        };
         let head = Row::new()
             .spacing(10)
             .align_y(Alignment::Center)
             .push(badge(pane.label(), role))
+            .push(lock_badge)
             .push(tune_btn("◄", false))
             .push(self.freq_digits(is_b, hz, role_color(freq_role)))
             .push(tune_btn("►", true))
@@ -4298,6 +4345,27 @@ impl App {
         if self.last_drag_send.elapsed() >= MIN_GAP {
             self.last_drag_send = Instant::now();
             self.send(WorkerCmd::Cat(cmd));
+        }
+    }
+
+    /// The lock state of a given VFO (`LK`/`LK$`), for refusing tuning.
+    fn vfo_locked(&self, is_b: bool) -> Option<bool> {
+        if is_b {
+            self.ui.vfo_b_locked
+        } else {
+            self.ui.vfo_a_locked
+        }
+    }
+
+    /// Refuse a tuning gesture on a locked VFO, flashing its lock badge so the
+    /// refusal is visible rather than silent. Returns `true` if the gesture is
+    /// allowed to proceed.
+    fn allow_tuning(&mut self, is_b: bool) -> bool {
+        if ui::tuning_allowed(self.vfo_locked(is_b)) {
+            true
+        } else {
+            self.lock_flash = ui::ARM_FLASH_TICKS;
+            false
         }
     }
 

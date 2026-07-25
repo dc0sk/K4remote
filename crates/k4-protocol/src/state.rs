@@ -172,6 +172,16 @@ pub fn parse_digital_audio(arg: &str) -> Option<DigitalAudio> {
     }
 }
 
+/// Parse an `LK`/`LK$` argument into a lock flag. `1` = locked, `0` = unlocked;
+/// anything else (e.g. the `/` toggle echo) is undecidable and yields `None`.
+fn lock_flag(arg: &str) -> Option<bool> {
+    match arg.as_bytes().first() {
+        Some(b'1') => Some(true),
+        Some(b'0') => Some(false),
+        _ => None,
+    }
+}
+
 /// Authoritative radio state (subset; grows per requirement). `None` = unknown
 /// (not yet reported by the radio).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -260,6 +270,12 @@ pub struct RadioState {
     pub sub_auto_notch: Option<bool>,
     pub sub_apf_on: Option<bool>,
     pub sub_apf_width: Option<u8>,
+    /// VFO A locked (`LK`) and VFO B locked (`LK$`). A locked VFO's tuning is
+    /// disabled on the radio, so the app must refuse its own tuning gestures
+    /// too — see `FR-VFO-LOCK-01`. `$` targets the sub/VFO-B per D12; bare `LK`
+    /// is VFO A by the same convention (the doc spells out only `LK$`).
+    pub vfo_a_locked: Option<bool>,
+    pub vfo_b_locked: Option<bool>,
     pub sub_atten_db: Option<u8>,
     pub sub_atten_on: Option<bool>,
     pub sub_agc_mode: Option<u8>,
@@ -431,6 +447,16 @@ impl RadioState {
         } else if let Some(arg) = cmd.strip_prefix("FB") {
             if let Ok(hz) = arg.parse::<u64>() {
                 self.vfo_b_hz = Some(hz);
+            }
+        } else if let Some(arg) = cmd.strip_prefix("LK$") {
+            // Preserve the last known state on an undecidable echo (the `/`
+            // toggle carries no state), rather than blanking it.
+            if let Some(v) = lock_flag(arg) {
+                self.vfo_b_locked = Some(v);
+            }
+        } else if let Some(arg) = cmd.strip_prefix("LK") {
+            if let Some(v) = lock_flag(arg) {
+                self.vfo_a_locked = Some(v);
             }
         } else if let Some(arg) = cmd.strip_prefix("DA") {
             // Unrecognised forms leave the previous state rather than clearing
@@ -974,7 +1000,8 @@ pub fn connect_state_seed() -> &'static [&'static str] {
         "DT;", "DT$;", // DATA sub-mode (DATA A / AFSK A / FSK D / PSK D)
         "RP;", "PL;", // FM repeater offset + PL/CTCSS tone
         "DA;", // digital-audio engine (AF recorder / DVR) status
-        "TS;", // TX test mode — the radio transmits no power while it is on
+        "LK;", "LK$;", // VFO A / B tuning lock (FR-VFO-LOCK-01)
+        "TS;",  // TX test mode — the radio transmits no power while it is on
         "UT;", "CC;",   // radio UTC time + remote client count (status strip)
         "#MP$;", // mini-pan on/off
         // Configuration-screen read-back (FR-UI-19 screens):
