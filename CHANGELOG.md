@@ -12,6 +12,13 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
 
 ## [Unreleased]
 
+### Fixed
+
+- **Switching DATA sub-mode (and rate) no longer lags.** Tapping DATA A / AFSK A
+  / FSK D / PSK D, or a data rate, waited for the radio to echo before the
+  button lit - the same read-back fight the sliders had. The button now
+  responds at once and reconciles with the radio.
+
 ### Added
 
 - **On-screen macro buttons.** A new **Fn -> MACROS** tab runs the same macros
