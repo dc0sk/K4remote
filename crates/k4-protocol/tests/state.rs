@@ -729,3 +729,45 @@ fn fr_tx_tune_01_tx_test_mode_reaches_the_state() {
     s.apply_cat("TS/;");
     assert_eq!(s.tx_test, Some(true), "a toggle echo is not a state report");
 }
+
+/// VFO lock state is read from both `LK` (VFO A) and `LK$` (VFO B), and a
+/// toggle echo does not blank a known state.
+///
+/// `LK$` targets the sub/VFO-B ($ convention); bare `LK` is VFO A. D12 spells
+/// out only `LK$`, so the bare-LK-is-A reading follows the general $ rule and
+/// wants a hardware check — but parsing both is correct regardless of which
+/// the radio actually sends.
+/// trace: FR-VFO-LOCK-01
+#[test]
+fn fr_vfo_lock_01_lock_state_parses_per_vfo() {
+    let mut s = RadioState::new();
+    assert_eq!(s.vfo_a_locked, None);
+    assert_eq!(s.vfo_b_locked, None);
+
+    assert!(s.apply_cat("LK1;"));
+    assert_eq!(s.vfo_a_locked, Some(true), "bare LK is VFO A");
+    assert_eq!(s.vfo_b_locked, None, "and did not touch B");
+
+    assert!(s.apply_cat("LK$1;"));
+    assert_eq!(s.vfo_b_locked, Some(true), "LK$ is VFO B");
+    assert_eq!(s.vfo_a_locked, Some(true), "A unchanged");
+
+    assert!(s.apply_cat("LK0;"));
+    assert_eq!(s.vfo_a_locked, Some(false));
+
+    // The toggle echo (`LK$ /`) carries no state and must not blank B.
+    s.apply_cat("LK$/;");
+    assert_eq!(
+        s.vfo_b_locked,
+        Some(true),
+        "a toggle echo is not a state report"
+    );
+
+    // Longest-prefix-first: `LK$1` must not be read as `LK` with arg `$1`.
+    let mut s2 = RadioState::new();
+    s2.apply_cat("LK$1;");
+    assert_eq!(
+        s2.vfo_a_locked, None,
+        "LK$ must not fall through to bare LK"
+    );
+}
