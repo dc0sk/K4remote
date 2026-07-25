@@ -3117,32 +3117,49 @@ impl App {
             self.ui.tuning,
             self.ui.radio.transmitting,
         );
-        let tx_ind: Element<Message> = Container::new(
-            Text::new(if txing { "● TX" } else { "TX" })
-                .size(13)
-                .color(if txing {
-                    Color::WHITE
+        // TX test mode gets a distinct *flashing* indicator (FR-TX-TUNE-01):
+        // the radio keys but emits no power, and the real K4 flashes its TX
+        // icon to say so. Test takes precedence over on-air here — keying in
+        // test mode is still no-power.
+        let indicator = ui::tx_indicator(
+            txing,
+            self.ui.tx_test == Some(true),
+            ui::flash_phase(self.resync_tick),
+        );
+        let (ind_text, ind_fg, ind_bg) = match indicator {
+            ui::TxIndicator::Idle => (
+                "TX",
+                role_color(ui::ColorRole::Inactive),
+                shade(ui::Shade::Track),
+            ),
+            // RF leaving the antenna now: steady red.
+            ui::TxIndicator::OnAir => ("● TX", Color::WHITE, role_color(ui::ColorRole::OnAir)),
+            // No power: amber, and flashing between lit and the resting track
+            // so it cannot be mistaken for a real transmit.
+            ui::TxIndicator::Test { lit } => {
+                if lit {
+                    ("TEST", Color::WHITE, role_color(ui::ColorRole::TxActive))
                 } else {
-                    role_color(ui::ColorRole::Inactive)
-                }),
-        )
-        .style(move |_theme: &Theme| container::Style {
-            background: Some(Background::Color(if txing {
-                // Red, not the amber used for "armed": this says RF is
-                // leaving the antenna right now.
-                role_color(ui::ColorRole::OnAir)
-            } else {
-                shade(ui::Shade::Track)
-            })),
-            border: Border {
-                color: shade(ui::Shade::Edge),
-                width: 1.0,
-                radius: 4.0.into(),
-            },
-            ..container::Style::default()
-        })
-        .padding([3, 12])
-        .into();
+                    (
+                        "TEST",
+                        role_color(ui::ColorRole::TxActive),
+                        shade(ui::Shade::Track),
+                    )
+                }
+            }
+        };
+        let tx_ind: Element<Message> = Container::new(Text::new(ind_text).size(13).color(ind_fg))
+            .style(move |_theme: &Theme| container::Style {
+                background: Some(Background::Color(ind_bg)),
+                border: Border {
+                    color: shade(ui::Shade::Edge),
+                    width: 1.0,
+                    radius: 4.0.into(),
+                },
+                ..container::Style::default()
+            })
+            .padding([3, 12])
+            .into();
 
         // 2×2 grid of equally-sized two-line buttons (SPLIT/RIT over XIT/CLR),
         // keeping the box the same height as the VFO panels.

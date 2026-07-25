@@ -10,6 +10,15 @@ during the 0.4.0 release, so earlier detail lives in the git history and in the
 change ledgers under [`docs/test/test-strategy.md`](docs/test/test-strategy.md)
 and [`docs/requirements/system-requirements.md`](docs/requirements/system-requirements.md).
 
+## [Unreleased]
+
+### Fixed
+
+- **TX TEST now flashes, so you can't mistake it for a real transmit.** In test
+  mode the radio keys but puts out no power; the transmit indicator used to show
+  the same steady red `● TX` as a live transmit. It now reads a flashing amber
+  **TEST**, distinct from the red that means RF is actually leaving the antenna.
+
 ## [0.7.0] — 2026-07-25
 
 ### Added
