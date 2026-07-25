@@ -14,6 +14,13 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
 
 ### Added
 
+- **On-screen macro buttons.** A new **Fn -> MACROS** tab runs the same macros
+  as the K-Pod F1-F8 switches, so you get one-tap CAT macros with or without a
+  K-Pod. Assign them under Settings; a macro that transmits is arm-gated just
+  like the physical switch.
+
+### Added
+
 - **DATA rate selector.** In AFSK-A and FSK-D you can now pick 45 or 75 baud,
   and in PSK-D BPSK31 or BPSK63, from buttons beside the DATA sub-mode strip.
   The labels follow the sub-mode, and the control is hidden in DATA-A where

@@ -1213,6 +1213,25 @@ pub fn rx_antenna_names() -> &'static [&'static str; 8] {
 /// is a fixed 92 px, and a 6-character name plus prefix wraps to a second line
 /// — making that one cell taller and breaking the switch-row alignment (a
 /// vertical `FR-UI-STABLE-01` violation). A 6-character name alone fits.
+/// The display label for an on-screen macro button, or `None` if the slot is
+/// unassigned and gets no button (`FR-MACRO-01`).
+///
+/// An assigned slot (non-empty CAT) shows the operator's own label, or — if
+/// they never named it — a fallback from the switch position: slot `i` is
+/// `F(i/2+1)` with `t` for tap (even) and `h` for hold (odd), e.g. slot 5 is
+/// `F3h`.
+pub fn macro_label(index: usize, label: &str, cat: &str) -> Option<String> {
+    if cat.is_empty() {
+        return None;
+    }
+    if !label.is_empty() {
+        return Some(label.to_string());
+    }
+    let button = index / 2 + 1;
+    let kind = if index.is_multiple_of(2) { "t" } else { "h" };
+    Some(format!("F{button}{kind}"))
+}
+
 pub fn tx_antenna_label(antenna: Option<u8>, names: &[Option<String>; 5]) -> String {
     match antenna {
         None => "ANT ?".to_string(),
@@ -3154,6 +3173,37 @@ mod on_air_tests {
     /// `ANT:` prefix) because a 6-char name plus prefix wraps the fixed-width
     /// switch cell to a second line.
     /// trace: FR-ANT-02
+    /// trace: FR-MACRO-01
+    #[test]
+    fn fr_macro_01_button_label_and_assignment() {
+        use super::macro_label;
+        // Unassigned (empty CAT) gets no button.
+        assert_eq!(macro_label(0, "", ""), None);
+        assert_eq!(
+            macro_label(0, "RUN", ""),
+            None,
+            "a label alone is not assigned"
+        );
+        // Assigned with a name shows the name.
+        assert_eq!(macro_label(2, "RUN", "SW11;"), Some("RUN".into()));
+        // Assigned without a name falls back to the switch position.
+        assert_eq!(
+            macro_label(0, "", "FA0;"),
+            Some("F1t".into()),
+            "slot 0 = F1 tap"
+        );
+        assert_eq!(
+            macro_label(1, "", "FA0;"),
+            Some("F1h".into()),
+            "slot 1 = F1 hold"
+        );
+        assert_eq!(
+            macro_label(15, "", "FA0;"),
+            Some("F8h".into()),
+            "slot 15 = F8 hold"
+        );
+    }
+
     #[test]
     fn fr_ant_02_tx_antenna_uses_the_user_name() {
         use super::tx_antenna_label;
