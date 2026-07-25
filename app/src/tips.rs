@@ -121,6 +121,7 @@ pub const TIPS: &[(&str, &str)] = &[
     ("conn.tls", "Use TLS-PSK (port 9204) instead of the plaintext port (9205)."),
     ("conn.remember", "Store the password in the operating system keychain, never in the config file."),
     ("af.recorder", "The radio's own 90-second receive-audio recorder (AF REC/PLAY). Recordings live in the K4, not in this app."),
+    ("app.memories", "Frequency memories: store the current VFO, recall or delete one. Kept in this app."),
     ("app.settings", "Connection, audio devices, levels and application preferences."),
     ("app.about", "Version, licence, project links, and the update check."),
     ("app.diag", "Diagnostics console: every CAT command sent and received, filterable and copyable."),

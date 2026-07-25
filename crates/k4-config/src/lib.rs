@@ -36,12 +36,33 @@ pub struct Profile {
     pub remember: bool,
 }
 
+/// One entry in the client-side frequency-memory bank (`FR-MEM-01`).
+///
+/// Client-side because the radio's own memory-channel command (`MC`) is
+/// **[Pending] TBD** in the K4 Programmer's Reference rev. D12 — there is no
+/// documented way to reach the K4's memories over CAT, so the app keeps its
+/// own.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Memory {
+    /// Operator's label. May be empty; the UI then shows the frequency.
+    #[serde(default)]
+    pub name: String,
+    /// Frequency in Hz.
+    pub hz: u64,
+    /// Mode as the radio names it (`"CW"`, `"USB"`, …), if one was captured.
+    #[serde(default)]
+    pub mode: Option<String>,
+}
+
 /// Operating preferences (FR-CFG-02/05). Audio levels are stored as integer
 /// percents (unity = 100) so the struct stays `Eq` and the TOML stays clean.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Prefs {
     /// Tuning step, Hz.
     pub tune_step_hz: u32,
+    /// Client-side frequency memories (FR-MEM-01).
+    #[serde(default)]
+    pub memories: Vec<Memory>,
     /// Selected RX playback device name (`None` = system default).
     #[serde(default)]
     pub audio_output: Option<String>,
@@ -322,6 +343,7 @@ impl Default for Prefs {
     fn default() -> Self {
         Self {
             tune_step_hz: 100,
+            memories: Vec::new(),
             audio_output: None,
             audio_input: None,
             volume_level: None,

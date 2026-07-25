@@ -84,6 +84,18 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
   where it keys but puts out no power. The button is now lit whenever test
   mode is active, including when it was switched on at the radio or by
   another client.
+### Added
+
+- **Frequency memories.** Click **MEM** in the top bar — or tap a VFO's MHz
+  digits, as the radio does — to store the current frequency and mode under an
+  optional name, recall one, or delete one. The bank holds 64 entries and is
+  saved with your app settings.
+
+  These are **the app's memories, not the radio's**: the K4's own memory
+  channels have no published remote-control command, so storing here does not
+  touch anything on the radio. Storing the same frequency *and* mode twice is
+  refused; the same frequency in a different mode is kept, so a net can live in
+  the bank on both CW and SSB.
 
 ## [0.6.0] — 2026-07-21
 
