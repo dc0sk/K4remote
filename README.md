@@ -9,8 +9,8 @@ stakeholder needs down to individual tests, enforced by a build gate.
 
 ![K4 Remote main window](docs/screenshots/main.png)
 
-> **Status:** v0.7.0 — feature-complete; hardware bring-up in progress.
-> 314 hardware-free tests pass · clippy/fmt clean · traceability gate green · CI green on Linux/macOS/Windows.
+> **Status:** v0.8.0 — feature-complete; hardware bring-up in progress.
+> 326 hardware-free tests pass · clippy/fmt clean · traceability gate green · CI green on Linux/macOS/Windows.
 > VFO tuning, RIT/XIT, split, band, panadapter click-to-QSY, and the K-Pod (incl. F1–F8 tap/hold macros)
 > are validated against a real K4; audio / PTT / waterfall rendering / serial bring-up is ongoing.
 > 0.4.0 closed **four transmit-safety faults** found on a live K4 — most seriously, the transmitter
@@ -25,6 +25,13 @@ stakeholder needs down to individual tests, enforced by a build gate.
 > sense, a waterfall that scrolls with the VFO, and labelled frequency/level scales synced to the
 > radio — plus **ATU and TUNE control**, an About-box **update check**, and **switchable control
 > tooltips**.
+>
+> **New in 0.8.0:** a **locked VFO** now refuses the app's own tuning (with a LOCK badge),
+> a **DATA rate** selector (45/75 baud, PSK31/63), your **antenna names** (`ACN`) on the TX
+> antenna control, an **on-screen MACROS** tab reusing the K-Pod macro table, a **DTMF keypad**
+> for FM repeater/link control, and **transverter band setup** on the BAND screen. Plus, from
+> operating a live K4: **TX TEST** flashes distinctly from a real transmit, and switching DATA
+> sub-mode no longer lags.
 >
 > **New in 0.7.0:** **frequency memories**, an **AF recorder** driving the radio's own 90-second
 > receive buffer, and a **TX TEST** indicator. Plus, from operating a live K4: sliders that no

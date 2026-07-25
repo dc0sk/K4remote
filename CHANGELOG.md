@@ -10,52 +10,50 @@ during the 0.4.0 release, so earlier detail lives in the git history and in the
 change ledgers under [`docs/test/test-strategy.md`](docs/test/test-strategy.md)
 and [`docs/requirements/system-requirements.md`](docs/requirements/system-requirements.md).
 
-## [Unreleased]
-
-### Fixed
-
-- **Switching DATA sub-mode (and rate) no longer lags.** Tapping DATA A / AFSK A
-  / FSK D / PSK D, or a data rate, waited for the radio to echo before the
-  button lit - the same read-back fight the sliders had. The button now
-  responds at once and reconciles with the radio.
+## [0.8.0] — 2026-07-25
 
 ### Added
 
-- **DTMF keypad for FM.** A **DTMF** button on the FM panel opens a keypad
-  (0-9, A-D, *, #) that sends tones to the radio - for repeater and link
-  control that is otherwise out of reach over a remote link.
+- **A locked VFO refuses tuning.** When you lock a VFO at the radio, the app
+  shows a **LOCK** badge on it and stops its own digit taps, panadapter clicks
+  and wheel scrolls from moving it — the badge flashes on a refused gesture, so
+  it is never a silent no-op. The other VFO still tunes.
 
-### Added
+- **DATA rate selector.** In AFSK-A and FSK-D you can pick 45 or 75 baud, and
+  in PSK-D BPSK31 or BPSK63, from buttons beside the DATA sub-mode strip. The
+  labels follow the sub-mode; the control is hidden in DATA-A, which has no
+  rate.
 
-- **Transverter band setup.** The BAND screen now has a setup form for the
-  transverter bands (XV1-12): pick a band and set its mode, IF band, lower
-  edge, offset and mW power. Fields load from the radio when you pick a band,
-  and each is sent to that band. (The mW power scale while operating on a
-  transverter band is a separate, later addition.)
+- **Your antenna names show.** If you have named an antenna on the K4 (`ACN`),
+  the TX-antenna control shows that name (e.g. `DIPOLE`) instead of `ANT 1`.
 
-### Added
-
-- **On-screen macro buttons.** A new **Fn -> MACROS** tab runs the same macros
-  as the K-Pod F1-F8 switches, so you get one-tap CAT macros with or without a
+- **On-screen macro buttons.** A new **Fn → MACROS** tab runs the same macros
+  as the K-Pod F1–F8 switches, so you get one-tap CAT macros with or without a
   K-Pod. Assign them under Settings; a macro that transmits is arm-gated just
   like the physical switch.
 
-### Added
+- **DTMF keypad for FM.** A **DTMF** button on the FM panel opens a keypad
+  (`0`–`9`, `A`–`D`, `*`, `#`) sending tones to the radio — for repeater and
+  link control that is otherwise out of reach over a remote link.
 
-- **DATA rate selector.** In AFSK-A and FSK-D you can now pick 45 or 75 baud,
-  and in PSK-D BPSK31 or BPSK63, from buttons beside the DATA sub-mode strip.
-  The labels follow the sub-mode, and the control is hidden in DATA-A where
-  there is no rate.
-- **Your antenna names now show.** If you have named an antenna on the K4
-  (ACN), the TX-antenna control shows that name (e.g. `DIPOLE`) instead of
-  `ANT 1`.
+- **Transverter band setup.** The BAND screen has a two-column layout with a
+  setup form for the transverter bands (XV1–12): pick a band and set its mode,
+  IF band, lower edge, offset and mW power. Fields load from the radio when you
+  pick a band, and each is sent to that band.
 
 ### Fixed
 
 - **TX TEST now flashes, so you can't mistake it for a real transmit.** In test
-  mode the radio keys but puts out no power; the transmit indicator used to show
-  the same steady red `● TX` as a live transmit. It now reads a flashing amber
-  **TEST**, distinct from the red that means RF is actually leaving the antenna.
+  mode the radio keys but puts out no power; the transmit indicator used to
+  show the same steady red `● TX` as a live transmit. It now reads a flashing
+  amber **TEST**, distinct from the red that means RF is leaving the antenna.
+
+- **Switching DATA sub-mode (and rate) no longer lags.** Tapping DATA A / AFSK A
+  / FSK D / PSK D, or a data rate, waited for the radio to echo before the
+  button lit — the same read-back fight the sliders had in 0.7.0. The button
+  now responds at once and reconciles with the radio.
+
+[0.8.0]: https://github.com/dc0sk/K4remote/releases/tag/v0.8.0
 
 ## [0.7.0] — 2026-07-25
 
