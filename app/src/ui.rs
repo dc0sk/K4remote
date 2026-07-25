@@ -1749,6 +1749,45 @@ pub fn af_recorder(da: Option<DigitalAudio>) -> AfRecorder {
     }
 }
 
+/// Whether an arm-gate refusal has occurred since the last check, updating the
+/// running total to the current one.
+///
+/// The refusal *count* comes from the worker (a running total), not a flag, so
+/// two refusals in quick succession are distinct. The UI holds the last count
+/// it acted on; when the published total moves past it, that is a new refusal
+/// and the ARM TX flash should start.
+///
+/// Extracted from an inline comparison in the tick so the "new refusal" edge
+/// can be tested without a running UI — the same reason [`arm_flash_lit`] is a
+/// function. The worker→snapshot plumbing is straight-line assignment; this is
+/// the decision that turns a changed total into a flash.
+pub fn refusal_since(current: u64, last: &mut u64) -> bool {
+    if current != *last {
+        *last = current;
+        true
+    } else {
+        false
+    }
+}
+
+/// How many UI ticks the ARM TX control flashes after refusing an action
+/// (`FR-TX-SAFE-06`), and whether it is lit on a given tick.
+///
+/// A *flash*, not a steady highlight: the control already has a resting lit
+/// state for "armed", so holding it lit would say the opposite of what
+/// happened. Alternating makes it unmistakably an alarm.
+pub const ARM_FLASH_TICKS: u8 = 18;
+
+/// Whether the ARM TX control should be drawn lit on this tick of the flash.
+///
+/// `remaining` counts down from [`ARM_FLASH_TICKS`] to 0; 0 means not flashing.
+/// Three ticks on, three off, twice over: it starts lit so the refusal is seen
+/// at once, and **ends dark** so the control settles back to its resting
+/// appearance rather than snapping out of a lit phase.
+pub fn arm_flash_lit(remaining: u8) -> bool {
+    remaining != 0 && (remaining - 1) / 3 % 2 == 1
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3308,5 +3347,60 @@ mod opt_override_tests {
         o.reconcile(Some(2_400));
         assert_eq!(o.or(Some(2_400)), Some(2_400));
         assert!(!o.is_pending());
+    }
+}
+
+#[cfg(test)]
+mod arm_flash_tests {
+    use super::{arm_flash_lit, refusal_since, ARM_FLASH_TICKS};
+
+    /// The refusal flash alternates and always ends dark, so the control
+    /// returns to its resting appearance rather than sticking lit.
+    ///
+    /// It must alternate rather than hold: ARM TX has a resting *lit* state
+    /// meaning "armed", so a steady highlight on refusal would assert the
+    /// opposite of what just happened.
+    /// trace: FR-TX-SAFE-06
+    /// A new refusal from the worker starts the flash exactly once; an
+    /// unchanged total does not re-trigger it.
+    ///
+    /// This is the edge the tick acts on. The bug it guards against would be a
+    /// flash that either never fires (comparison inverted) or fires every tick
+    /// (total not stored), the latter freezing the control permanently lit.
+    /// trace: FR-TX-SAFE-06
+    #[test]
+    fn fr_tx_safe_06_a_new_refusal_triggers_the_flash_once() {
+        let mut last = 0u64;
+        // Nothing has happened yet.
+        assert!(!refusal_since(0, &mut last), "no refusal, no flash");
+        // The worker reports the first refusal.
+        assert!(refusal_since(1, &mut last), "first refusal flashes");
+        // The same total on the next tick must NOT re-trigger — else the flash
+        // would restart every tick and never end.
+        assert!(
+            !refusal_since(1, &mut last),
+            "steady total does not re-flash"
+        );
+        assert!(!refusal_since(1, &mut last));
+        // A second, distinct refusal flashes again.
+        assert!(refusal_since(2, &mut last), "second refusal flashes");
+        // A jump of several (missed ticks) still counts as one edge.
+        assert!(refusal_since(9, &mut last));
+        assert!(!refusal_since(9, &mut last));
+    }
+
+    #[test]
+    fn fr_tx_safe_06_refusal_flash_alternates_and_ends_dark() {
+        assert!(!arm_flash_lit(0), "not flashing when the counter is spent");
+
+        let phases: Vec<bool> = (1..=ARM_FLASH_TICKS).rev().map(arm_flash_lit).collect();
+        assert!(phases[0], "starts lit, so the refusal is seen immediately");
+        assert!(
+            !phases[phases.len() - 1],
+            "ends dark, so the control settles back"
+        );
+        // At least two transitions — one on/off change is a glitch, not a flash.
+        let changes = phases.windows(2).filter(|w| w[0] != w[1]).count();
+        assert!(changes >= 2, "must actually blink: {phases:?}");
     }
 }
