@@ -317,6 +317,9 @@ struct App {
     ptt_toggle: bool,
     // Mode-adaptive UI: per-mode control emphasis (docs/concept/mode-aware-ui.md).
     mode_aware_ui: bool,
+    /// Automatically check for a newer release at start-up, opt-out preference
+    /// (FR-UI-UPD-02). Mirrors `Prefs::auto_update_check`.
+    auto_update_check: bool,
     // Elecraft K-Pod USB control surface enabled (runtime opt-in, FR-KPOD-04).
     kpod_enabled: bool,
     // K-Pod function-switch macro table: 16 slots (F1–F8 × tap/hold), each a CAT
@@ -632,6 +635,8 @@ enum Message {
     ToggleArm,
     TogglePttMode,
     ToggleModeAwareUi,
+    /// Auto update check on/off (FR-UI-UPD-02).
+    ToggleAutoUpdate,
     ToggleKpod,
     /// Run an assigned macro from the on-screen MACROS tab (FR-MACRO-01): send
     /// its CAT string, gated by the TX arm exactly as the K-Pod press is.
@@ -873,6 +878,7 @@ impl App {
         let ptt_hotkey = prefs.ptt_hotkey.clone();
         let ptt_toggle = prefs.ptt_toggle;
         let mode_aware_ui = prefs.mode_aware_ui;
+        let auto_update_check = prefs.auto_update_check;
         let diag_enabled = prefs.diagnostics_window;
         let tooltips = prefs.tooltips;
 
@@ -1037,6 +1043,7 @@ impl App {
             ptt_hotkey,
             ptt_toggle,
             mode_aware_ui,
+            auto_update_check,
             kpod_enabled,
             kpod_buttons,
             capturing_hotkey: false,
@@ -1060,6 +1067,12 @@ impl App {
             loaded_commands: Vec::new(),
             backup_status: String::new(),
         };
+        // One silent update check per launch when opted in (FR-UI-UPD-02). It
+        // reuses the operator-initiated path; only a found update surfaces
+        // anything, in the header status area.
+        if app.auto_update_check {
+            window_tasks.push(update_check_task());
+        }
         (app, Task::batch(window_tasks))
     }
 
@@ -1339,6 +1352,7 @@ impl App {
                     ptt_hotkey: self.ptt_hotkey.clone(),
                     ptt_toggle: self.ptt_toggle,
                     mode_aware_ui: self.mode_aware_ui,
+                    auto_update_check: self.auto_update_check,
                     kpod_enabled: self.kpod_enabled,
                     kpod_buttons: self.kpod_buttons.clone(),
                     ..Default::default()
@@ -2025,6 +2039,10 @@ impl App {
                 self.mode_aware_ui = !self.mode_aware_ui;
                 self.save_config();
             }
+            Message::ToggleAutoUpdate => {
+                self.auto_update_check = !self.auto_update_check;
+                self.save_config();
+            }
             Message::ToggleKpod => {
                 self.kpod_enabled = !self.kpod_enabled;
                 self.send(WorkerCmd::SetKpodEnabled(self.kpod_enabled));
@@ -2251,20 +2269,11 @@ impl App {
             Message::OpenUrl(url) => open_url(url),
             Message::OpenUrlOwned(url) => open_url(&url),
             Message::CheckUpdate => {
-                // Operator-initiated only; never on a timer. The request is
-                // blocking, so it runs off the UI thread (FR-UI-UPD-01).
+                // The blocking request runs off the UI thread. The About box
+                // shows "Checking…"; the start-up auto-check uses the same task
+                // without setting that visible state (FR-UI-UPD-01/02).
                 self.update_status = update::UpdateStatus::Checking;
-                let current = ui::app_version().to_string();
-                return Task::perform(
-                    async move {
-                        tokio::task::spawn_blocking(move || update::check_now(&current))
-                            .await
-                            .unwrap_or_else(|e| {
-                                update::UpdateStatus::Failed(format!("check did not run: {e}"))
-                            })
-                    },
-                    Message::UpdateChecked,
-                );
+                return update_check_task();
             }
             Message::UpdateChecked(status) => self.update_status = status,
             Message::AfRecord => self.send(WorkerCmd::AfRecord),
@@ -6120,11 +6129,39 @@ impl App {
         // is a bad trade, so this stays as it is until the status message has
         // somewhere else to go.
         let status_strip = Text::new(status_bits.join("  ·  ")).size(12).color(dim);
+        // Update notification (FR-UI-UPD-02): only a *found* update surfaces
+        // anything, and it lives here in the top status area beside the
+        // connection indicator, as a clickable link to the release page.
+        // Silent otherwise — checking, up-to-date and failed show nothing.
+        let update_note: Element<Message> = match &self.update_status {
+            update::UpdateStatus::Available { version, url } => {
+                let accent = role_color(ui::ColorRole::VfoA);
+                let url = url.clone();
+                Button::new(
+                    Text::new(format!("● update {version}"))
+                        .size(12)
+                        .color(accent),
+                )
+                .style(move |_t: &Theme, status: button::Status| button::Style {
+                    background: None,
+                    text_color: match status {
+                        button::Status::Hovered | button::Status::Pressed => Color::WHITE,
+                        _ => accent,
+                    },
+                    ..button::Style::default()
+                })
+                .padding(0)
+                .on_press(Message::OpenUrlOwned(url))
+                .into()
+            }
+            _ => Space::with_width(Length::Shrink).into(),
+        };
         let header = Row::new()
             .spacing(12)
             .align_y(Alignment::Center)
             .push(Text::new("K4 REMOTE").size(20))
             .push(status_ind)
+            .push(update_note)
             .push(
                 Text::new(self.ui.status.clone())
                     .size(12)
@@ -7523,6 +7560,22 @@ impl App {
                 Row::new()
                     .spacing(8)
                     .align_y(Alignment::Center)
+                    .push(small_btn_pair(
+                        self.auto_update_check,
+                        "Update check: ON",
+                        "Update check: OFF",
+                        Message::ToggleAutoUpdate,
+                    ))
+                    .push(
+                        Text::new("check GitHub for a newer release at start-up")
+                            .size(10)
+                            .color(dim),
+                    ),
+            )
+            .push(
+                Row::new()
+                    .spacing(8)
+                    .align_y(Alignment::Center)
                     .push(tipped(
                         self.tips_on(),
                         self.hover,
@@ -8422,6 +8475,21 @@ fn meter_style(strong: bool) -> impl Fn(&Theme) -> progress_bar::Style {
 
 /// Receiver badge: a filled tag in the VFO's semantic colour with dark text,
 /// like the K4's corner `A`/`B` markers (FR-UI-10).
+/// A background task that runs the blocking GitHub release check off the UI
+/// thread and reports the result (FR-UI-UPD-01/02). Shared by the About-box
+/// button and the start-up auto-check.
+fn update_check_task() -> Task<Message> {
+    let current = ui::app_version().to_string();
+    Task::perform(
+        async move {
+            tokio::task::spawn_blocking(move || update::check_now(&current))
+                .await
+                .unwrap_or_else(|e| update::UpdateStatus::Failed(format!("check did not run: {e}")))
+        },
+        Message::UpdateChecked,
+    )
+}
+
 fn badge(label: &'static str, role: ui::ColorRole) -> Element<'static, Message> {
     Container::new(Text::new(label).size(15).color(Color::BLACK))
         .style(move |_theme: &Theme| container::Style {

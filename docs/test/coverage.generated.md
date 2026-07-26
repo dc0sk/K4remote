@@ -162,7 +162,7 @@ Legend: ✅ test-traced · 🟡 waived (see r3-waivers.md) · ⚪ not test-requi
 | `FR-UI-TIP-01` | C | T/D | ✅ |
 | `FR-UI-TX-01` | M | T/D | ✅ |
 | `FR-UI-UPD-01` | C | T/D | ✅ |
-| `FR-UI-UPD-02` | C | T/D | ⚪ |
+| `FR-UI-UPD-02` | S | T/D | ✅ |
 | `FR-VFO-01` | M | T | ✅ |
 | `FR-VFO-02` | M | T | ✅ |
 | `FR-VFO-03` | M | T | ✅ |

@@ -116,6 +116,11 @@ pub struct Prefs {
     /// Use the mode-adaptive UI (per-mode control emphasis). Default on.
     #[serde(default = "default_true")]
     pub mode_aware_ui: bool,
+    /// Automatically check for a newer release at start-up (FR-UI-UPD-02).
+    /// Default on; opt-out here. One check per launch, silent unless an update
+    /// is found.
+    #[serde(default = "default_true")]
+    pub auto_update_check: bool,
     /// Enable the Elecraft K-Pod USB control surface. Default off (opt-in); the
     /// app runs normally whether or not a K-Pod is attached.
     #[serde(default)]
@@ -360,6 +365,7 @@ impl Default for Prefs {
             ptt_hotkey: default_ptt_hotkey(),
             ptt_toggle: true,
             mode_aware_ui: true,
+            auto_update_check: true,
             kpod_enabled: false,
             kpod_buttons: default_kpod_buttons(),
         }
