@@ -159,9 +159,31 @@ Windows on every push and pull request; **release** builds are in `release.yml`.
 
 ## Roadmap
 
-- **L4 hardware bring-up** — validate audio, PTT, spectrum, and the serial path against a real K4.
-- App-level keychain/serial polish from real-world use.
-- Possible Phase-2/3: an embedded CAT server for WSJT-X / loggers.
+The rig-control **operating backlog is essentially complete** as of 0.8.0 —
+VFO/mode/filter control, metering, panadapter, memories, transmit (voice + CW),
+the audio path, K-Pod, on-screen macros, DTMF, and transverter setup are all in.
+Most of it has been validated against a real K4; what's left is a short,
+honest list.
+
+**Blocked on hardware answers** (each unblocks a feature that is otherwise
+guesswork):
+- **Audio character** (`MX` / `BL` / `FX` / `AL`) — needs confirmation that a
+  radio-side audio setting actually reaches the *remote* stream. The K4 streams
+  RX audio at a fixed level regardless of its own AF gain, so this is an open
+  question, not an assumption.
+- **DVR / message centre** (`DARM`) — needs to know whether recording captures
+  the *remote operator's* streamed microphone or a mic at the radio.
+
+**Remaining hardware bring-up** — audio, PTT, waterfall rendering and the
+USB/serial path get their final validation against a live K4; most control paths
+are already confirmed.
+
+**Deferred, lower priority** — the mW power scale while operating on a
+transverter band, stored DTMF sequences, and `SI`-based V/I metering (whose
+response format the K4 Programmer's Reference leaves for a future revision).
+
+**Possible Phase 2/3** — an embedded CAT server so WSJT-X, loggers and other
+software can share the remote link.
 
 ## License
 
