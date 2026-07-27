@@ -10,7 +10,7 @@ during the 0.4.0 release, so earlier detail lives in the git history and in the
 change ledgers under [`docs/test/test-strategy.md`](docs/test/test-strategy.md)
 and [`docs/requirements/system-requirements.md`](docs/requirements/system-requirements.md).
 
-## [Unreleased]
+## [0.8.1] — 2026-07-27
 
 ### Added
 
@@ -19,6 +19,8 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
   status bar beside the connection indicator. On by default; turn it off under
   Settings. It stays silent unless there is a real update, and makes at most
   one request per launch.
+
+[0.8.1]: https://github.com/dc0sk/K4remote/releases/tag/v0.8.1
 
 ## [0.8.0] — 2026-07-25
 
