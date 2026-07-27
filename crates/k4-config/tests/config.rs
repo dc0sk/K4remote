@@ -247,3 +247,23 @@ fn fr_kpod_06_button_macros_seed_and_persist() {
         "edited table must persist"
     );
 }
+
+/// The automatic update check is opt-out: default on, and it survives a
+/// save/load round-trip so an operator's choice sticks.
+/// trace: FR-UI-UPD-02
+#[test]
+fn fr_ui_upd_02_auto_update_check_defaults_on_and_persists() {
+    assert!(
+        Prefs::default().auto_update_check,
+        "default opt-in: the check is on unless turned off"
+    );
+
+    // A round-trip through TOML preserves an explicit opt-out.
+    let prefs = Prefs {
+        auto_update_check: false,
+        ..Default::default()
+    };
+    let toml = toml::to_string(&prefs).expect("serialize");
+    let back: Prefs = toml::from_str(&toml).expect("deserialize");
+    assert!(!back.auto_update_check, "opt-out is remembered");
+}

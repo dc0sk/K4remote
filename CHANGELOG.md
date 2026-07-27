@@ -10,6 +10,16 @@ during the 0.4.0 release, so earlier detail lives in the git history and in the
 change ledgers under [`docs/test/test-strategy.md`](docs/test/test-strategy.md)
 and [`docs/requirements/system-requirements.md`](docs/requirements/system-requirements.md).
 
+## [Unreleased]
+
+### Added
+
+- **Automatic update check.** The app now checks GitHub for a newer release
+  once at start-up and, if there is one, shows a clickable link in the top
+  status bar beside the connection indicator. On by default; turn it off under
+  Settings. It stays silent unless there is a real update, and makes at most
+  one request per launch.
+
 ## [0.8.0] — 2026-07-25
 
 ### Added
