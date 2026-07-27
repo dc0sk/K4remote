@@ -9,7 +9,7 @@ stakeholder needs down to individual tests, enforced by a build gate.
 
 ![K4 Remote main window](docs/screenshots/main.png)
 
-> **Status:** v0.8.0 — feature-complete; hardware bring-up in progress.
+> **Status:** v0.8.1 — feature-complete; hardware bring-up in progress.
 > 326 hardware-free tests pass · clippy/fmt clean · traceability gate green · CI green on Linux/macOS/Windows.
 > VFO tuning, RIT/XIT, split, band, panadapter click-to-QSY, and the K-Pod (incl. F1–F8 tap/hold macros)
 > are validated against a real K4; audio / PTT / waterfall rendering / serial bring-up is ongoing.
@@ -25,6 +25,10 @@ stakeholder needs down to individual tests, enforced by a build gate.
 > sense, a waterfall that scrolls with the VFO, and labelled frequency/level scales synced to the
 > radio — plus **ATU and TUNE control**, an About-box **update check**, and **switchable control
 > tooltips**.
+>
+> **New in 0.8.1:** an **automatic update check** — the app looks for a newer release once at
+> start-up and shows a clickable link in the top bar if there is one (on by default, opt-out in
+> Settings).
 >
 > **New in 0.8.0:** a **locked VFO** now refuses the app's own tuning (with a LOCK badge),
 > a **DATA rate** selector (45/75 baud, PSK31/63), your **antenna names** (`ACN`) on the TX
