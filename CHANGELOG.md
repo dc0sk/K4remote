@@ -10,6 +10,19 @@ during the 0.4.0 release, so earlier detail lives in the git history and in the
 change ledgers under [`docs/test/test-strategy.md`](docs/test/test-strategy.md)
 and [`docs/requirements/system-requirements.md`](docs/requirements/system-requirements.md).
 
+## [Unreleased]
+
+### Added
+
+- **KPA1500 amplifier support (opt-in).** A new **KPA1500** section in Settings
+  with an enable toggle and a **Configuration…** button that opens a separate
+  window for the amplifier's connection — host, port (default 1500) and poll
+  interval. Off by default; your settings are saved. This first step wires the
+  connection to the amp's own Ethernet control server (a second link alongside
+  the K4); live amplifier metering and control follow in a later release. Only
+  the KPA1500 is supported — the KPA500 and KAT500 have no network interface of
+  their own.
+
 ## [0.9.0] — 2026-07-27
 
 ### Added

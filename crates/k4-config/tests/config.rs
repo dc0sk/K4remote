@@ -267,3 +267,38 @@ fn fr_ui_upd_02_auto_update_check_defaults_on_and_persists() {
     let back: Prefs = toml::from_str(&toml).expect("deserialize");
     assert!(!back.auto_update_check, "opt-out is remembered");
 }
+
+/// KPA1500 support is opt-in (default off) with a sensible default port/poll,
+/// and the enable flag plus the connection settings survive a save/load
+/// round-trip so the operator configures the amp once.
+/// trace: FR-AMP-01
+#[test]
+fn fr_amp_01_kpa1500_defaults_off_and_persists() {
+    let def = Prefs::default();
+    assert!(!def.kpa1500_enabled, "default opt-in: support is off");
+    assert_eq!(def.kpa1500_port, 1500, "the amp's command-server port");
+    assert_eq!(def.kpa1500_poll_ms, 500);
+    assert!(def.kpa1500_host.is_empty());
+
+    // A configured amp round-trips through TOML unchanged.
+    let prefs = Prefs {
+        kpa1500_enabled: true,
+        kpa1500_host: "192.168.1.50".into(),
+        kpa1500_port: 1500,
+        kpa1500_poll_ms: 250,
+        ..Default::default()
+    };
+    let toml = toml::to_string(&prefs).expect("serialize");
+    let back: Prefs = toml::from_str(&toml).expect("deserialize");
+    assert!(back.kpa1500_enabled);
+    assert_eq!(back.kpa1500_host, "192.168.1.50");
+    assert_eq!(back.kpa1500_port, 1500);
+    assert_eq!(back.kpa1500_poll_ms, 250);
+
+    // A config written before this feature (no KPA fields) loads with the
+    // opt-in default off — never surprising an upgrader with an amp link.
+    let legacy = "tune_step_hz = 100";
+    let old: Prefs = toml::from_str(legacy).expect("legacy config");
+    assert!(!old.kpa1500_enabled);
+    assert_eq!(old.kpa1500_port, 1500);
+}
