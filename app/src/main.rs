@@ -91,6 +91,19 @@ fn kpa1500_window_settings() -> iced::window::Settings {
     }
 }
 
+/// An in-progress amplifier ATU tune (FR-AMP-04). `saw_tuning` records that the
+/// amp has reported its tune actually started (`^TP1`), so completion is "started
+/// then stopped" rather than "not yet started".
+struct AmpTune {
+    started: Instant,
+    saw_tuning: bool,
+}
+
+/// Hard cap on an amplifier tune: the K4 carrier is dropped after this even if
+/// the amp never reports completion, so a hung tune can't strand the transmitter
+/// on air.
+const AMP_TUNE_TIMEOUT: Duration = Duration::from_secs(20);
+
 struct App {
     // connection form
     host: String,
@@ -232,6 +245,9 @@ struct App {
     kpa_tx: Sender<kpa::Cmd>,
     kpa: kpa::Shared,
     kpa_want: bool,
+    // An amplifier ATU tune in progress (FR-AMP-04): keys the K4 carrier and
+    // sends `^FT`, then drops the carrier on completion or a hard timeout.
+    amp_tune: Option<AmpTune>,
     // Diagnostics log: show/hide + follow-newest (auto-scroll).
     show_log: bool,
     log_autoscroll: bool,
@@ -794,6 +810,7 @@ enum Message {
     KpaSetMode(bool),
     KpaSetAtu(bool),
     KpaAntenna(u8),
+    KpaTune,
     ToggleLogAutoscroll,
     LogFilterChanged(String),
     /// A text-editor action from the read-only log view (selection/scroll; edits
@@ -1050,6 +1067,7 @@ impl App {
             kpa_tx,
             kpa: kpa::Shared::default(),
             kpa_want: false,
+            amp_tune: None,
             show_log: false,
             log_autoscroll: true,
             log_refresh_div: 0,
@@ -2297,7 +2315,14 @@ impl App {
                 }
             }
             Message::ToggleKey => self.send(WorkerCmd::Key(!self.ui.transmitting)),
-            Message::EmergencyStop => self.send(WorkerCmd::EmergencyStop),
+            Message::EmergencyStop => {
+                // Abort any amplifier tune too: the worker's e-stop drops the K4
+                // carrier (TU0), and we tell the amp to stop searching (`^FE`).
+                if self.amp_tune.take().is_some() {
+                    self.kpa_send(k4_kpa::cat::cancel_tune());
+                }
+                self.send(WorkerCmd::EmergencyStop);
+            }
             Message::PressDown => self.press_at = Some(std::time::Instant::now()),
             Message::TapOrHold(tap, hold) => {
                 // The radio's own convention: tap and hold are different
@@ -2578,6 +2603,23 @@ impl App {
                     self.kpa_send(cmd);
                 }
             }
+            Message::KpaTune => {
+                // An amplifier ATU tune keys the K4 carrier, so it is arm-gated
+                // exactly like the K4's own tune (FR-TX-SAFE-06): refused and
+                // flashing ARM TX when disarmed. When armed and the amp is up,
+                // key a steady carrier (TU1) and start the amp's search (`^FT`);
+                // the tick reconciler drops the carrier when it finishes.
+                if !self.ui.tx_armed {
+                    self.arm_flash = ui::ARM_FLASH_TICKS;
+                } else if self.kpa.conn == kpa::Conn::Connected && self.amp_tune.is_none() {
+                    self.send(WorkerCmd::Tune(k4_protocol::cat::TuneAction::Tune));
+                    self.kpa_send(k4_kpa::cat::start_tune());
+                    self.amp_tune = Some(AmpTune {
+                        started: Instant::now(),
+                        saw_tuning: false,
+                    });
+                }
+            }
             Message::ToggleLogAutoscroll => {
                 self.log_autoscroll = !self.log_autoscroll;
                 if self.log_autoscroll {
@@ -2837,6 +2879,37 @@ impl App {
                         self.kpa_connect();
                     } else {
                         let _ = self.kpa_tx.send(kpa::Cmd::Disconnect);
+                    }
+                }
+                // Drive an in-progress amplifier ATU tune to its end (FR-AMP-04):
+                // when the amp finishes, a hard timeout elapses, or a precondition
+                // drops, drop the K4 carrier and cancel the amp tune if it is
+                // still searching.
+                if self.amp_tune.is_some() {
+                    let amp_tuning_now = self.kpa.state.tuning == Some(true);
+                    if amp_tuning_now {
+                        if let Some(t) = self.amp_tune.as_mut() {
+                            t.saw_tuning = true;
+                        }
+                    }
+                    let t = self.amp_tune.as_ref().expect("checked is_some");
+                    let end = ui::amp_tune_should_end(
+                        t.saw_tuning,
+                        amp_tuning_now,
+                        t.started.elapsed(),
+                        AMP_TUNE_TIMEOUT,
+                        self.kpa.conn == kpa::Conn::Connected,
+                        self.ui.connected,
+                        self.ui.tx_armed,
+                    );
+                    if end {
+                        self.amp_tune = None;
+                        self.send(WorkerCmd::Tune(k4_protocol::cat::TuneAction::Exit));
+                        // If it was still searching (timeout / precondition drop
+                        // rather than natural completion), tell the amp to stop.
+                        if amp_tuning_now {
+                            self.kpa_send(k4_kpa::cat::cancel_tune());
+                        }
                     }
                 }
                 // Seed the config screens from the radio's reported values once
@@ -6286,7 +6359,17 @@ impl App {
         // Controls. Operate/Standby keys the amp in/out of line; the ATU and
         // antenna mirror the front panel. (A full ATU tune needs the K4 keyed
         // and is deferred to a later slice.)
-        let controls = Column::new()
+        // An ATU tune keys the K4, so it is arm-gated: the label reflects an
+        // in-progress tune, and a hint names the arm requirement (the ARM TX
+        // control itself lives in the main window).
+        let tuning = self.amp_tune.is_some();
+        let tune_label = if tuning { "TUNING…" } else { "ATU TUNE" };
+        let tune_row = Row::new().spacing(6).push(small_btn_stable(
+            tune_label.to_string(),
+            &["ATU TUNE", "TUNING…"],
+            Message::KpaTune,
+        ));
+        let mut controls = Column::new()
             .spacing(6)
             .push(Text::new("Controls").size(12).color(dim))
             .push(
@@ -6302,7 +6385,15 @@ impl App {
                     .push(small_btn("ATU BYP", Message::KpaSetAtu(false)))
                     .push(small_btn("ANT 1", Message::KpaAntenna(1)))
                     .push(small_btn("ANT 2", Message::KpaAntenna(2))),
+            )
+            .push(tune_row);
+        if !self.ui.tx_armed {
+            controls = controls.push(
+                Text::new("arm TX (main window) to run a tune")
+                    .size(11)
+                    .color(dim),
             );
+        }
         col.push(controls).into()
     }
 
