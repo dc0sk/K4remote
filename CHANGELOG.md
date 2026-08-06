@@ -23,8 +23,10 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
   (Operate/Standby, forward power, SWR, faults) and, in the KPA1500 window,
   full telemetry plus Operate/Standby, ATU in/bypass and antenna controls.
   Only the KPA1500 is supported — the KPA500 and KAT500 have no network
-  interface of their own. (A one-touch ATU tune, which needs the K4 keyed,
-  comes in a later release.)
+  interface of their own. A one-touch **ATU TUNE** in the amp window keys the
+  radio and runs the amplifier's tune, then drops the carrier when it finishes
+  (or after a safety timeout); it is arm-gated and stopped by the emergency
+  stop, like every other transmit action.
 
 ## [0.9.0] — 2026-07-27
 
