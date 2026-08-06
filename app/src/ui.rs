@@ -1909,9 +1909,105 @@ pub fn arm_flash_lit(remaining: u8) -> bool {
     remaining != 0 && (remaining - 1) / 3 % 2 == 1
 }
 
+/// The KPA1500 amplifier's top-bar indicator: a short label and a colour role,
+/// derived from the connection state and the latest telemetry (FR-AMP-03).
+///
+/// A fault wins over everything (red); otherwise Operate is green with the live
+/// power/SWR, Standby is amber, and not-yet-connected is dim. Pure so the
+/// wording and colour precedence can be tested without a socket.
+pub fn amp_indicator(
+    connecting: bool,
+    connected: bool,
+    s: &k4_kpa::KpaState,
+) -> (String, ColorRole) {
+    if !connected {
+        let label = if connecting { "AMP …" } else { "AMP —" };
+        return (label.to_string(), ColorRole::Inactive);
+    }
+    if s.is_faulted() {
+        let code = s.fault.unwrap_or(0);
+        return (format!("AMP FAULT {code:02X}"), ColorRole::OnAir);
+    }
+    match s.mode {
+        Some(k4_kpa::Mode::Operate) => {
+            let mut label = String::from("AMP OPER");
+            if let Some(w) = s.forward_w {
+                label.push_str(&format!("  {w} W"));
+            }
+            if let Some(swr) = s.swr() {
+                label.push_str(&format!("  SWR {swr:.1}"));
+            }
+            // Warn on a high SWR even in Operate, so it does not read as "all fine".
+            let role = if s.swr_tenths.is_some_and(|t| t >= 20) {
+                ColorRole::Caution
+            } else {
+                ColorRole::VfoB
+            };
+            (label, role)
+        }
+        Some(k4_kpa::Mode::Standby) => ("AMP STBY".to_string(), ColorRole::TxActive),
+        None => ("AMP …".to_string(), ColorRole::Inactive),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The amp indicator's colour precedence and wording: fault beats mode,
+    /// Operate is green (Caution on high SWR) with live power/SWR, Standby is
+    /// amber, and a down link is dim.
+    /// trace: FR-AMP-03
+    #[test]
+    fn fr_amp_03_amp_indicator_precedence_and_wording() {
+        use k4_kpa::{KpaState, Mode};
+        // Disconnected / connecting are dim.
+        assert_eq!(
+            amp_indicator(false, false, &KpaState::default()),
+            ("AMP —".to_string(), ColorRole::Inactive)
+        );
+        assert_eq!(
+            amp_indicator(true, false, &KpaState::default()).1,
+            ColorRole::Inactive
+        );
+        // A fault wins over mode and paints red.
+        let faulted = KpaState {
+            mode: Some(Mode::Operate),
+            fault: Some(0x91),
+            ..Default::default()
+        };
+        let (label, role) = amp_indicator(false, true, &faulted);
+        assert_eq!(role, ColorRole::OnAir);
+        assert!(label.contains("FAULT 91"), "{label:?}");
+        // Operate shows power + SWR and is green at a good SWR.
+        let good = KpaState {
+            mode: Some(Mode::Operate),
+            forward_w: Some(1200),
+            swr_tenths: Some(13),
+            ..Default::default()
+        };
+        let (label, role) = amp_indicator(false, true, &good);
+        assert_eq!(role, ColorRole::VfoB);
+        assert!(
+            label.contains("1200 W") && label.contains("SWR 1.3"),
+            "{label:?}"
+        );
+        // High SWR in Operate warns (Caution) rather than reading as fine.
+        let high = KpaState {
+            swr_tenths: Some(25),
+            ..good
+        };
+        assert_eq!(amp_indicator(false, true, &high).1, ColorRole::Caution);
+        // Standby is amber.
+        let stby = KpaState {
+            mode: Some(Mode::Standby),
+            ..Default::default()
+        };
+        assert_eq!(
+            amp_indicator(false, true, &stby),
+            ("AMP STBY".to_string(), ColorRole::TxActive)
+        );
+    }
 
     /// Each connection phase reports a distinct status label to the UI, and each
     /// failure kind maps to a distinguishable human-readable reason.
