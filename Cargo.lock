@@ -2222,6 +2222,7 @@ dependencies = [
  "k4-audio",
  "k4-config",
  "k4-diag",
+ "k4-kpa",
  "k4-kpod",
  "k4-protocol",
  "k4-session",
