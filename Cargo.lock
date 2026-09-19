@@ -2201,6 +2201,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "k4-spot"
+version = "0.9.0"
+
+[[package]]
 name = "k4-stream"
 version = "0.9.0"
 

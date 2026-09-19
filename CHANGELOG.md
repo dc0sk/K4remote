@@ -27,6 +27,13 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
   radio and runs the amplifier's tune, then drops the carrier when it finishes
   (or after a safety timeout); it is arm-gated and stopped by the emergency
   stop, like every other transmit action.
+- **Spot nameplates — settings (groundwork).** Settings has a new **Spot
+  nameplates** block: the longest a spot may be before it is hidden (default
+  15 minutes, 1 minute to 24 hours) and a **Networks…** button that opens a
+  window to switch spotting networks on and configure them — PSK Reporter, the
+  Reverse Beacon Network and a DX cluster of your choice. Every network is off
+  by default and your choices are saved. Nothing connects to a network and no
+  nameplates are drawn yet; the spectrum overlay and the network sources follow.
 
 ## [0.9.0] — 2026-07-27
 

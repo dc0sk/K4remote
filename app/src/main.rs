@@ -91,6 +91,36 @@ fn kpa1500_window_settings() -> iced::window::Settings {
     }
 }
 
+/// The detached spot-networks configuration window (FR-SPOT-04): one section per
+/// network, each with its own enable switch and settings.
+fn spot_window_settings() -> iced::window::Settings {
+    iced::window::Settings {
+        size: iced::Size::new(480.0, 640.0),
+        icon: app_icon(),
+        ..Default::default()
+    }
+}
+
+/// A spotting network the operator can enable (FR-SPOT-04).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SpotNet {
+    PskReporter,
+    Rbn,
+    DxCluster,
+}
+
+/// Keep only the characters a callsign login can hold — letters, digits and `/`
+/// — upper-cased and bounded, so the field can never carry a control or
+/// look-alike character into a login line (FR-SPOT-04).
+fn sanitise_spot_login(input: &str) -> String {
+    input
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '/')
+        .map(|c| c.to_ascii_uppercase())
+        .take(16)
+        .collect()
+}
+
 /// An in-progress amplifier ATU tune (FR-AMP-04). `saw_tuning` records that the
 /// amp has reported its tune actually started (`^TP1`), so completion is "started
 /// then stopped" rather than "not yet started".
@@ -238,6 +268,17 @@ struct App {
     kpa1500_host: String,
     kpa1500_port: String,
     kpa1500_poll: String,
+    // Spot nameplates on the spectrum (FR-SPOT-03/04): the age limit (a text
+    // buffer, minutes) and the spotting networks with their settings. The
+    // numeric fields keep text buffers so a half-typed value never has to be a
+    // valid number; the buffers resolve to defaults on save. The window id is
+    // present only while the networks dialog is open.
+    spot_config_window: Option<iced::window::Id>,
+    spot_max_age: String,
+    spot_networks: k4_config::SpotNetworks,
+    spot_psk_poll: String,
+    spot_rbn_port: String,
+    spot_dx_port: String,
     // KPA1500 client worker (FR-AMP-03): a shared snapshot the worker writes
     // and the UI copies on tick, a command channel, and the desired-connected
     // state so the connection can be reconciled against K4 connectivity.
@@ -806,6 +847,14 @@ enum Message {
     Kpa1500HostChanged(String),
     Kpa1500PortChanged(String),
     Kpa1500PollChanged(String),
+    // Spot nameplates (FR-SPOT-03/04).
+    SpotMaxAgeChanged(String),
+    ToggleSpotWindow,
+    ToggleSpotNetwork(SpotNet),
+    SpotHostChanged(SpotNet, String),
+    SpotPortChanged(SpotNet, String),
+    SpotLoginChanged(SpotNet, String),
+    SpotPskPollChanged(String),
     // KPA1500 amplifier controls (FR-AMP-03).
     KpaSetMode(bool),
     KpaSetAtu(bool),
@@ -939,6 +988,11 @@ impl App {
         let kpa1500_host = prefs.kpa1500_host.clone();
         let kpa1500_port = prefs.kpa1500_port.to_string();
         let kpa1500_poll = prefs.kpa1500_poll_ms.to_string();
+        let spot_max_age = prefs.spot_max_age_min().to_string();
+        let spot_networks = prefs.spot_networks.clone();
+        let spot_psk_poll = spot_networks.psk_reporter.poll_secs.to_string();
+        let spot_rbn_port = spot_networks.rbn.port.to_string();
+        let spot_dx_port = spot_networks.dx_cluster.port.to_string();
         // The amplifier worker starts idle (disconnected); the tick reconciler
         // connects it once the K4 is up and support is enabled.
         let kpa_shared = Arc::new(Mutex::new(kpa::Shared::default()));
@@ -1059,6 +1113,12 @@ impl App {
             diag_enabled,
             // The config window opens on demand, not at start-up.
             kpa1500_config_window: None,
+            spot_config_window: None,
+            spot_max_age,
+            spot_networks,
+            spot_psk_poll,
+            spot_rbn_port,
+            spot_dx_port,
             kpa1500_enabled,
             kpa1500_host,
             kpa1500_port,
@@ -1422,6 +1482,18 @@ impl App {
         }
     }
 
+    /// The spot networks as they will be saved: the live settings with each
+    /// numeric text buffer resolved, so an empty or unusable entry falls back to
+    /// its default rather than persisting a value the source cannot use
+    /// (FR-SPOT-04).
+    fn spot_networks_for_save(&self) -> k4_config::SpotNetworks {
+        let mut nets = self.spot_networks.clone();
+        nets.psk_reporter.poll_secs = k4_config::parse_spot_poll_secs(&self.spot_psk_poll);
+        nets.rbn.port = k4_config::parse_spot_port(&self.spot_rbn_port, 7000);
+        nets.dx_cluster.port = k4_config::parse_spot_port(&self.spot_dx_port, 7300);
+        nets
+    }
+
     fn save_config(&self) {
         let Ok(port) = self.port.parse::<u16>() else {
             return;
@@ -1467,6 +1539,8 @@ impl App {
                         .ok()
                         .filter(|ms| *ms >= 50)
                         .unwrap_or(500),
+                    spot_max_age_min: k4_config::parse_spot_max_age_min(&self.spot_max_age),
+                    spot_networks: self.spot_networks_for_save(),
                     kpod_enabled: self.kpod_enabled,
                     kpod_buttons: self.kpod_buttons.clone(),
                     ..Default::default()
@@ -2247,6 +2321,13 @@ impl App {
                         return iced::window::close(id);
                     }
                 }
+                // ESC in the spot-networks window closes it (FR-SPOT-04).
+                if is_esc && self.spot_config_window == Some(window) {
+                    if let Some(id) = self.spot_config_window.take() {
+                        self.save_config();
+                        return iced::window::close(id);
+                    }
+                }
                 // ESC dismisses an open modal (Settings / About, FR-UI-23) or
                 // cancels an in-progress hotkey capture, before other key handling.
                 if matches!(
@@ -2556,6 +2637,11 @@ impl App {
                     self.diag_enabled = false;
                     self.save_config();
                 }
+                if Some(id) == self.spot_config_window {
+                    // Closing the networks window persists whatever was edited.
+                    self.spot_config_window = None;
+                    self.save_config();
+                }
                 if Some(id) == self.kpa1500_config_window {
                     // Closing the config window persists whatever was edited;
                     // the enable toggle and settings survive independently.
@@ -2595,6 +2681,65 @@ impl App {
             }
             Message::Kpa1500PollChanged(v) => {
                 self.kpa1500_poll = v.chars().filter(char::is_ascii_digit).take(5).collect();
+            }
+            // Spot nameplates (FR-SPOT-03/04). The age limit is edited in the
+            // Settings dialog and saved as it changes (an unusable entry resolves
+            // to the default on save); the networks live in their own window.
+            Message::SpotMaxAgeChanged(v) => {
+                self.spot_max_age = v.chars().filter(char::is_ascii_digit).take(4).collect();
+                self.save_config();
+            }
+            Message::ToggleSpotWindow => {
+                if let Some(id) = self.spot_config_window.take() {
+                    self.save_config();
+                    return iced::window::close(id);
+                }
+                let (id, open) = iced::window::open(spot_window_settings());
+                self.spot_config_window = Some(id);
+                return open.map(|_| Message::WindowOpened);
+            }
+            Message::ToggleSpotNetwork(net) => {
+                match net {
+                    SpotNet::PskReporter => {
+                        let n = &mut self.spot_networks.psk_reporter;
+                        n.enabled = !n.enabled;
+                    }
+                    SpotNet::Rbn => {
+                        self.spot_networks.rbn.enabled = !self.spot_networks.rbn.enabled
+                    }
+                    SpotNet::DxCluster => {
+                        let n = &mut self.spot_networks.dx_cluster;
+                        n.enabled = !n.enabled;
+                    }
+                }
+                self.save_config();
+            }
+            Message::SpotHostChanged(net, v) => {
+                let host = v.trim().to_string();
+                match net {
+                    SpotNet::Rbn => self.spot_networks.rbn.host = host,
+                    SpotNet::DxCluster => self.spot_networks.dx_cluster.host = host,
+                    SpotNet::PskReporter => {}
+                }
+            }
+            Message::SpotPortChanged(net, v) => {
+                let digits: String = v.chars().filter(char::is_ascii_digit).take(5).collect();
+                match net {
+                    SpotNet::Rbn => self.spot_rbn_port = digits,
+                    SpotNet::DxCluster => self.spot_dx_port = digits,
+                    SpotNet::PskReporter => {}
+                }
+            }
+            Message::SpotLoginChanged(net, v) => {
+                let login = sanitise_spot_login(&v);
+                match net {
+                    SpotNet::Rbn => self.spot_networks.rbn.login = login,
+                    SpotNet::DxCluster => self.spot_networks.dx_cluster.login = login,
+                    SpotNet::PskReporter => {}
+                }
+            }
+            Message::SpotPskPollChanged(v) => {
+                self.spot_psk_poll = v.chars().filter(char::is_ascii_digit).take(5).collect();
             }
             Message::KpaSetMode(operate) => self.kpa_send(k4_kpa::cat::set_mode(operate)),
             Message::KpaSetAtu(inline) => self.kpa_send(k4_kpa::cat::set_atu_mode(inline)),
@@ -6197,6 +6342,187 @@ impl App {
             .into()
     }
 
+    /// The Settings-dialog block for spot nameplates (FR-SPOT-03/04): the maximum
+    /// spot age, and the entry point to the per-network configuration window.
+    fn spot_settings_view(&self) -> Element<'_, Message> {
+        let dim = role_color(ui::ColorRole::Inactive);
+        // What the field resolves to: shown live so an unusable entry visibly
+        // falls back instead of silently saving something else.
+        let effective = k4_config::parse_spot_max_age_min(&self.spot_max_age);
+        let nets = &self.spot_networks;
+        let on = [
+            nets.psk_reporter.enabled,
+            nets.rbn.enabled,
+            nets.dx_cluster.enabled,
+        ]
+        .iter()
+        .filter(|e| **e)
+        .count();
+        Column::new()
+            .spacing(6)
+            .push(
+                Row::new()
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                    .push(Text::new("Hide spots older than").size(12))
+                    .push(
+                        TextInput::new("15", &self.spot_max_age)
+                            .on_input(Message::SpotMaxAgeChanged)
+                            .size(13)
+                            .width(Length::Fixed(60.0)),
+                    )
+                    .push(Text::new("min").size(12)),
+            )
+            .push(
+                Text::new(format!(
+                    "Spots older than {effective} min are hidden (allowed: {}–{} min).",
+                    k4_config::SPOT_MAX_AGE_MIN_MIN,
+                    k4_config::SPOT_MAX_AGE_MAX_MIN
+                ))
+                .size(11)
+                .color(dim),
+            )
+            .push(
+                Row::new()
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                    .push(Text::new(format!("Spotting networks: {on} of 3 on")).size(12))
+                    .push(small_btn("Networks…", Message::ToggleSpotWindow)),
+            )
+            .into()
+    }
+
+    /// One labelled text field row for the spot-networks window.
+    fn spot_field<'a>(
+        label: &'static str,
+        placeholder: &'static str,
+        value: &'a str,
+        width: f32,
+        on_input: impl Fn(String) -> Message + 'a,
+    ) -> Element<'a, Message> {
+        Row::new()
+            .spacing(8)
+            .align_y(Alignment::Center)
+            .push(Text::new(label).size(12).width(Length::Fixed(72.0)))
+            .push(
+                TextInput::new(placeholder, value)
+                    .on_input(on_input)
+                    .size(13)
+                    .width(Length::Fixed(width)),
+            )
+            .into()
+    }
+
+    /// One telnet-source section (RBN or a DX cluster): enable switch, host,
+    /// port and login (FR-SPOT-04).
+    fn spot_cluster_section<'a>(
+        net: SpotNet,
+        on_label: &'static str,
+        off_label: &'static str,
+        cfg: &'a k4_config::ClusterPrefs,
+        port_buf: &'a str,
+        default_port: &'static str,
+    ) -> Element<'a, Message> {
+        Column::new()
+            .spacing(8)
+            .push(small_btn_pair(
+                cfg.enabled,
+                on_label,
+                off_label,
+                Message::ToggleSpotNetwork(net),
+            ))
+            .push(Self::spot_field(
+                "Host",
+                "hostname",
+                &cfg.host,
+                230.0,
+                move |v| Message::SpotHostChanged(net, v),
+            ))
+            .push(Self::spot_field(
+                "Port",
+                default_port,
+                port_buf,
+                90.0,
+                move |v| Message::SpotPortChanged(net, v),
+            ))
+            .push(Self::spot_field(
+                "Login",
+                "your callsign",
+                &cfg.login,
+                150.0,
+                move |v| Message::SpotLoginChanged(net, v),
+            ))
+            .into()
+    }
+
+    /// The detached spot-networks window body (FR-SPOT-04): every spotting
+    /// network with its own enable switch and settings. Closing the window
+    /// (Done / ESC / the window control) persists via `save_config`.
+    fn spot_config_view(&self) -> Element<'_, Message> {
+        set_active_theme(self.effective_theme());
+        let dim = role_color(ui::ColorRole::Inactive);
+        let nets = &self.spot_networks;
+        let col = Column::new()
+            .spacing(12)
+            .push(Text::new("Spotting networks").size(16))
+            .push(
+                Text::new(
+                    "Networks whose spots are drawn as nameplates on the spectrum. \
+                     All are off until you turn them on. The sources are not connected \
+                     yet — these settings are saved for when they are.",
+                )
+                .size(11)
+                .color(dim),
+            )
+            .push(Text::new("PSK Reporter").size(13))
+            .push(small_btn_pair(
+                nets.psk_reporter.enabled,
+                "PSK Reporter: ON",
+                "PSK Reporter: OFF",
+                Message::ToggleSpotNetwork(SpotNet::PskReporter),
+            ))
+            .push(Self::spot_field(
+                "Poll (s)",
+                "300",
+                &self.spot_psk_poll,
+                90.0,
+                Message::SpotPskPollChanged,
+            ))
+            .push(Text::new("Reverse Beacon Network").size(13))
+            .push(Self::spot_cluster_section(
+                SpotNet::Rbn,
+                "RBN: ON",
+                "RBN: OFF",
+                &nets.rbn,
+                &self.spot_rbn_port,
+                "7000",
+            ))
+            .push(Text::new("DX cluster").size(13))
+            .push(Self::spot_cluster_section(
+                SpotNet::DxCluster,
+                "DX cluster: ON",
+                "DX cluster: OFF",
+                &nets.dx_cluster,
+                &self.spot_dx_port,
+                "7300",
+            ))
+            .push(
+                Container::new(
+                    Row::new()
+                        .push(horizontal_space())
+                        .push(small_btn("Done", Message::ToggleSpotWindow)),
+                )
+                .width(Length::Fill)
+                .padding([8, 0]),
+            );
+        Container::new(scrollable(col))
+            .style(panel_style)
+            .padding(16)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+    }
+
     /// The detached KPA1500 configuration window body (FR-AMP-01): the enable
     /// toggle plus the amplifier's connection settings. Editing a field updates
     /// its buffer; closing the window (Done / ESC / the window control) persists
@@ -6403,6 +6729,8 @@ impl App {
             "K4 Remote — Diagnostics".into()
         } else if Some(window) == self.kpa1500_config_window {
             "K4 Remote — KPA1500".into()
+        } else if Some(window) == self.spot_config_window {
+            "K4 Remote — Spot networks".into()
         } else {
             "K4 Remote".into()
         }
@@ -6418,6 +6746,10 @@ impl App {
         // The detached KPA1500 configuration window (FR-AMP-01).
         if Some(window) == self.kpa1500_config_window {
             return self.kpa1500_config_view();
+        }
+        // The detached spot-networks window (FR-SPOT-04).
+        if Some(window) == self.spot_config_window {
+            return self.spot_config_view();
         }
         let dim = role_color(ui::ColorRole::Inactive);
 
@@ -7673,6 +8005,8 @@ impl App {
             .push(self.backup_section_view())
             .push(Text::new("K-Pod function switches").size(12).color(dim))
             .push(self.kpod_buttons_view())
+            .push(Text::new("Spot nameplates").size(12).color(dim))
+            .push(self.spot_settings_view())
             .push(Text::new("KPA1500 amplifier").size(12).color(dim))
             .push(
                 Row::new()
@@ -9759,5 +10093,27 @@ mod stable_width_tests {
             widest.chars().count() <= reserved,
             "widest real reading was {widest:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod spot_settings_tests {
+    use super::sanitise_spot_login;
+
+    /// FR-SPOT-04: the login field keeps only what a callsign holds — letters,
+    /// digits and `/` — upper-cased and bounded, so a control or look-alike
+    /// character can never reach a login line.
+    /// trace: FR-SPOT-04
+    #[test]
+    fn fr_spot_04_login_field_is_a_bounded_callsign() {
+        assert_eq!(sanitise_spot_login("dc0sk"), "DC0SK");
+        assert_eq!(sanitise_spot_login(" dc0sk/p "), "DC0SK/P");
+        // Control characters, spaces, telnet separators and a bidi override go.
+        assert_eq!(sanitise_spot_login("dc0\r\nsk\u{202e};x"), "DC0SKX");
+        // Non-ASCII look-alikes are dropped, not transliterated.
+        assert_eq!(sanitise_spot_login("dс0sk"), "D0SK"); // Cyrillic 'с'
+        assert_eq!(sanitise_spot_login(""), "");
+        // Bounded: a pasted blob cannot grow the field.
+        assert_eq!(sanitise_spot_login(&"A".repeat(200)).len(), 16);
     }
 }

@@ -15,6 +15,7 @@ members = [
     "crates/k4-diag",
     "crates/k4-kpod",
     "crates/k4-kpa",
+    "crates/k4-spot",
     "app",
     "xtask",
 ]

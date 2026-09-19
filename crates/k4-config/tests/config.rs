@@ -64,7 +64,14 @@ fn fr_cfg_03_no_secret_in_serialized_config() {
         },
         ..Default::default()
     };
-    let toml = cfg.to_toml().unwrap().to_lowercase();
+    // The spot-network table is named after PSK Reporter (FR-SPOT-04), a spotting
+    // service and not TLS-PSK key material. Exempt exactly that token; any other
+    // "psk" in the file still trips the guard.
+    let toml = cfg
+        .to_toml()
+        .unwrap()
+        .to_lowercase()
+        .replace("psk_reporter", "");
     assert!(!toml.contains("password"));
     assert!(!toml.contains("secret"));
     assert!(!toml.contains("psk"));
@@ -301,4 +308,108 @@ fn fr_amp_01_kpa1500_defaults_off_and_persists() {
     let old: Prefs = toml::from_str(legacy).expect("legacy config");
     assert!(!old.kpa1500_enabled);
     assert_eq!(old.kpa1500_port, 1500);
+}
+
+/// FR-SPOT-03: the spot age limit defaults to 15 min, is bounded to 1 min – 24 h,
+/// survives a TOML round-trip, and an unusable value — typed into Settings or
+/// hand-edited into the file — resolves to the default instead of being kept.
+/// trace: FR-SPOT-03
+#[test]
+fn fr_spot_03_max_age_default_bounds_persist() {
+    use k4_config::{parse_spot_max_age_min, sanitise_spot_max_age_min};
+
+    assert_eq!(Prefs::default().spot_max_age_min(), 15, "the default limit");
+
+    // Bounds: both edges are legal, one step outside is not.
+    assert_eq!(sanitise_spot_max_age_min(1), 1);
+    assert_eq!(sanitise_spot_max_age_min(24 * 60), 24 * 60);
+    assert_eq!(sanitise_spot_max_age_min(0), 15, "0 would hide every spot");
+    assert_eq!(sanitise_spot_max_age_min(24 * 60 + 1), 15);
+
+    // The Settings field: digits in range are taken, anything else is the default.
+    assert_eq!(parse_spot_max_age_min("30"), 30);
+    assert_eq!(parse_spot_max_age_min(" 45 "), 45);
+    for bad in ["", "abc", "-5", "0", "99999", "12.5"] {
+        assert_eq!(parse_spot_max_age_min(bad), 15, "input {bad:?}");
+    }
+
+    // A chosen limit round-trips through TOML.
+    let prefs = Prefs {
+        spot_max_age_min: 60,
+        ..Default::default()
+    };
+    let back: Prefs = toml::from_str(&toml::to_string(&prefs).expect("serialize")).expect("parse");
+    assert_eq!(back.spot_max_age_min(), 60);
+
+    // A config from before this feature loads with the default, and a
+    // hand-edited out-of-range value reads back as the default too.
+    let old: Prefs = toml::from_str("tune_step_hz = 100").expect("legacy config");
+    assert_eq!(old.spot_max_age_min(), 15);
+    let edited: Prefs = toml::from_str("tune_step_hz = 100\nspot_max_age_min = 0").expect("edited");
+    assert_eq!(edited.spot_max_age_min(), 15);
+}
+
+/// FR-SPOT-04: every spotting network defaults to off — a fresh install, and a
+/// config written before this feature, contact no third party — and a configured
+/// set of networks round-trips through TOML unchanged.
+/// trace: FR-SPOT-04
+#[test]
+fn fr_spot_04_networks_default_off_and_persist() {
+    let def = Prefs::default().spot_networks;
+    assert!(!def.any_enabled(), "no network is on by default");
+    assert!(!def.psk_reporter.enabled && !def.rbn.enabled && !def.dx_cluster.enabled);
+    assert_eq!(def.psk_reporter.poll_secs, 300);
+    assert_eq!(def.rbn.host, "telnet.reversebeacon.net");
+    assert_eq!(def.rbn.port, 7000);
+    assert!(
+        def.dx_cluster.host.is_empty(),
+        "a cluster needs a chosen host"
+    );
+
+    // A configured set round-trips: each network keeps its own enable + settings.
+    let mut nets = def.clone();
+    nets.psk_reporter.enabled = true;
+    nets.psk_reporter.poll_secs = 600;
+    nets.rbn.enabled = true;
+    nets.rbn.login = "DC0SK".into();
+    nets.dx_cluster.host = "cluster.example.org".into();
+    nets.dx_cluster.port = 7373;
+    let prefs = Prefs {
+        spot_networks: nets.clone(),
+        ..Default::default()
+    };
+    let back: Prefs = toml::from_str(&toml::to_string(&prefs).expect("serialize")).expect("parse");
+    assert_eq!(back.spot_networks, nets);
+    assert!(back.spot_networks.any_enabled());
+    assert!(
+        !back.spot_networks.dx_cluster.enabled,
+        "toggles are independent"
+    );
+
+    // The Settings port/poll fields: a usable number is taken, anything else is
+    // the default rather than a saved zero.
+    use k4_config::{parse_spot_poll_secs, parse_spot_port};
+    assert_eq!(parse_spot_port("7373", 7300), 7373);
+    assert_eq!(parse_spot_poll_secs("600"), 600);
+    for bad in ["", "0", "abc", "70000", "-1"] {
+        assert_eq!(parse_spot_port(bad, 7300), 7300, "port {bad:?}");
+    }
+    for bad in ["", "0", "abc", "-1"] {
+        assert_eq!(parse_spot_poll_secs(bad), 300, "poll {bad:?}");
+    }
+
+    // A pre-feature config — and one naming only some networks — loads with the
+    // rest off and at their defaults.
+    let old: Prefs = toml::from_str("tune_step_hz = 100").expect("legacy config");
+    assert!(!old.spot_networks.any_enabled());
+    assert_eq!(old.spot_networks, def);
+    let partial: Prefs =
+        toml::from_str("tune_step_hz = 100\n[spot_networks.psk_reporter]\nenabled = true\n")
+            .expect("partial config");
+    assert!(partial.spot_networks.psk_reporter.enabled);
+    assert_eq!(partial.spot_networks.psk_reporter.poll_secs, 300);
+    assert_eq!(
+        partial.spot_networks.rbn, def.rbn,
+        "unnamed network keeps its defaults"
+    );
 }
