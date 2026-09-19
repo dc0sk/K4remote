@@ -1,8 +1,8 @@
 ---
 title: "External References"
 status: Draft
-version: "0.3"
-updated: 2026-07-02
+version: "0.4"
+updated: 2026-09-19
 authors:
   - Simon Keimer (DC0SK)
 owns: [R-EXT]
@@ -317,3 +317,29 @@ clean-room per `CON-09` (facts/interoperability, not copied text).
 - **Resolution rule:** any CAT command flagged "to confirm" in a spec or code
   comment is resolved against the **Programmer's Reference D12** here, then
   verified against a real radio (`ASM-05`) before being marked confirmed.
+
+---
+
+## R-EXT-04 — SDRoxide (spot-marker design inspiration)
+
+- **What:** A desktop SDR transceiver application installed on the author's machine
+  (`/usr/bin/sdroxide`, docs in `/usr/share/doc/sdroxide/README.md`). Consulted 2026-09-19 for how it
+  presents **spotting-network spots as markers on the panadapter**.
+- **License:** ships several license files — GPL-3.0-or-later plus bundled third-party components
+  (AGPL-3.0, GPL-2.0, BSD, MIT). Treated as **copyleft**, the same clean-room posture as
+  `R-EXT-01` / `CON-09`: ideas and observable behaviour only; no source, comments or structure copied.
+- **Facts taken** (observable behaviour, restated in our own words): spots from several networks
+  (DX cluster, POTA, SOTA, PSK Reporter, RBN, WSPRnet, FreeDV Reporter) are shown as clickable,
+  colour-coded markers along the spectrum; each network is enabled separately with its own host/port
+  or poll interval; there is one **maximum spot age** (its default is 15 min) and a **current-band-only**
+  option; clicking a spot tunes to it. These informed `FR-SPOT-03/-04/-10/-11`.
+- **Not taken:** it also *uploads* reception reports; K4 Remote deliberately does not (`FR-SPOT-12`).
+- **Caution:** its configuration directory holds the operator's account credentials in plain text.
+  Only the *structure* of that file was used; nothing from it belongs in this repository.
+
+## R-EXT-05 — Spotting networks (to be read before implementation)
+
+PSK Reporter, the Reverse Beacon Network, DX clusters, WSPRnet, POTA, SOTA and FreeDV Reporter are
+the candidate sources for `FR-SPOT-*`. Their retrieval interfaces, rate guidance and line formats are
+**not yet read** — this entry is a placeholder that `OP-7` requires be filled from each network's own
+published documentation (with URL and date) before any source is implemented.

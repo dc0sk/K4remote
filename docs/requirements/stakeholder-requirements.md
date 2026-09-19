@@ -1,8 +1,8 @@
 ---
 title: "Stakeholder Requirements"
 status: Draft
-version: "0.1"
-updated: 2026-06-25
+version: "0.2"
+updated: 2026-09-19
 authors:
   - Simon Keimer (DC0SK)
 owns: [STK]
@@ -10,7 +10,7 @@ owns: [STK]
 
 # Stakeholder Requirements
 
-**Version:** 0.1 (Draft) · **Date:** 2026-06-25 · **Author:** DC0SK
+**Version:** 0.2 (Draft) · **Date:** 2026-09-19 · **Author:** DC0SK
 Trace: owns `STK-`. Upstream of [system-requirements.md](system-requirements.md); downstream of
 [vision-and-scope.md](vision-and-scope.md). Each `STK` is realized by ≥1 `FR`/`NFR` (rule R1).
 
@@ -39,9 +39,11 @@ These are **solution-independent needs**. They say *what* stakeholders need, not
 | `STK-18` | SH-2 | Add the USB/serial (local) transport later without re-architecting. | S | FR-CONN-ABSTRACT, ADR-02 |
 | `STK-19` | SH-1 | Be informed when other clients are connected to the same radio (shared-control awareness). | C | FR-SES-MULTI |
 | `STK-20` | SH-1 | Recover gracefully and automatically from transient network interruptions. | S | FR-SES-RECONNECT, NFR-REL-* |
+| `STK-21` | SH-1 | See which stations are active on the band as named markers on the spectrum, drawn from public spotting networks I choose and configure, with a limit on how old a spot may be. | S | FR-SPOT-* |
 
 ## Change history
 
 | Date | Ver | Author | Change |
 |---|---|---|---|
 | 2026-06-25 | 0.1 | DC0SK | Initial draft baseline (STK-01..20). |
+| 2026-09-19 | 0.2 | DC0SK | Added STK-21 (spot nameplates on the spectrum) → FR-SPOT-*. |
