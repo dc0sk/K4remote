@@ -1,0 +1,11 @@
+[package]
+name = "k4-kpa"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Elecraft KPA1500 linear-amplifier remote CAT codec: telemetry parsing + control encoding (FR-AMP-02)."
+
+[dependencies]
+# Pure protocol, dependency-free — the socket I/O and polling live in the app.
