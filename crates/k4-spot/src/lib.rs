@@ -6,6 +6,7 @@
 //! All times are Unix seconds. The caller supplies `now`, so nothing here reads a
 //! clock and every result is deterministic.
 
+pub mod layout;
 mod model;
 mod store;
 

@@ -32,8 +32,14 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
   15 minutes, 1 minute to 24 hours) and a **Networks…** button that opens a
   window to switch spotting networks on and configure them — PSK Reporter, the
   Reverse Beacon Network and a DX cluster of your choice. Every network is off
-  by default and your choices are saved. Nothing connects to a network and no
-  nameplates are drawn yet; the spectrum overlay and the network sources follow.
+  by default and your choices are saved. Nothing connects to a network yet.
+- **Spot nameplates on the spectrum (groundwork).** The panadapter can now label
+  stations: a small callsign plate at the top of the spectrum with a tick down to
+  the trace at the station's frequency. Crowded plates stack into up to three
+  lanes, and any that do not fit are counted as "+N". A spot older than your age
+  limit, or outside the view, is not shown. No network feeds it yet, so the only
+  way to see it is `--demo`, which shows some sample spots; the network sources
+  follow.
 
 ### Changed
 

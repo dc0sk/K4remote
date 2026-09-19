@@ -77,6 +77,7 @@ k4-audio = { path = "../crates/k4-audio" }
 k4-config = { path = "../crates/k4-config" }
 k4-diag = { path = "../crates/k4-diag" }
 k4-kpa = { path = "../crates/k4-kpa" }
+k4-spot = { path = "../crates/k4-spot" }
 iced = { version = "0.13", features = ["tokio", "canvas", "image", "advanced"] }
 # Casting the f32 bin rows to bytes for the GPU waterfall upload (FR-PAN-12).
 bytemuck = "1"

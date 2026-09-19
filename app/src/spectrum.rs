@@ -8,6 +8,7 @@ use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke, Text};
 use iced::widget::image;
 use iced::{Color, Pixels, Point, Rectangle, Renderer, Size, Theme};
 
+use crate::spots::{unix_now, SpotHandle};
 use crate::worker::{PanHandle, PanRow};
 use k4_stream::render::{
     axis_ticks, bin_to_x, column_to_bin, db_grid_step, dbm_to_color, dbm_to_y, hz_per_bin,
@@ -79,6 +80,10 @@ pub struct Spectrum<'a, Message> {
     pub pan: &'a PanHandle,
     /// Which receiver this pane shows: 0 = main/A, 1 = sub/B.
     pub rx: usize,
+    /// The spots to label on the spectrum (FR-SPOT-01/02), and how old one may be and still show
+    /// (FR-SPOT-03).
+    pub spots: &'a SpotHandle,
+    pub spot_max_age_secs: u64,
     /// The waterfall is drawn by the GPU widget under this canvas (FR-PAN-12), so the canvas
     /// must leave that band transparent and skip the CPU rasteriser.
     pub gpu_waterfall: bool,
@@ -102,6 +107,88 @@ pub struct Spectrum<'a, Message> {
     pub on_qsy: fn(bool, u64) -> Message,
     /// Wheel scroll → step this VFO up (`+1`) / down (`-1`).
     pub on_wheel: fn(bool, i32) -> Message,
+}
+
+impl<Message> Spectrum<'_, Message> {
+    /// Draw a nameplate for every current spot inside the view: a small callsign label in one of a
+    /// few lanes at the top of the spectrum band, and a tick down from it to the trace at the
+    /// spot's frequency. Labels are moved to keep neighbours from covering each other; the tick
+    /// never is, so it always marks the true frequency (FR-SPOT-01/02).
+    fn draw_spots(&self, frame: &mut Frame, w: f32, spec_h: f32, latest: &[f32]) {
+        use k4_spot::layout::{
+            declutter, label_width, max_lanes, spot_x, Item, LANES_TOP, LANE_H, PLATE_PAD,
+        };
+        let lanes = max_lanes(spec_h);
+        if lanes == 0 || self.span_hz == 0 {
+            return;
+        }
+        let now = unix_now();
+        // (callsign, marker x, item for the layout), for every fresh spot inside the view.
+        let visible: Vec<(String, Item)> = match self.spots.lock() {
+            Ok(store) => store
+                .spots()
+                .iter()
+                .filter(|s| k4_spot::is_fresh(now, s.time, self.spot_max_age_secs))
+                .filter_map(|s| {
+                    let x = spot_x(s.freq_hz, self.center_hz, self.span_hz, w)?;
+                    Some((
+                        s.call.clone(),
+                        Item {
+                            x,
+                            label_w: label_width(&s.call),
+                            time: s.time,
+                        },
+                    ))
+                })
+                .collect(),
+            Err(_) => return,
+        };
+        if visible.is_empty() {
+            return;
+        }
+        let items: Vec<Item> = visible.iter().map(|(_, it)| *it).collect();
+        let layout = declutter(&items, w, lanes);
+
+        let plate = Color::from_rgba8(18, 22, 32, 0.88);
+        let marker = Color::from_rgba8(255, 200, 80, 0.9);
+        let text = Color::from_rgb8(236, 238, 246);
+        let plate_h = LANE_H - 2.0;
+        for p in &layout.placed {
+            let (call, it) = &visible[p.index];
+            let y = LANES_TOP + p.lane as f32 * LANE_H;
+            // The tick runs from the plate down to the trace at this frequency (never upward, so a
+            // strong signal above the labels still gets a short tick rather than a backwards one).
+            let n = latest.len();
+            let trace_y = if n > 1 {
+                let bin = (((it.x / w) * n as f32) as usize).min(n - 1);
+                dbm_to_y(latest[bin], self.top_dbm, self.range_db, spec_h)
+            } else {
+                spec_h
+            };
+            let top = y + plate_h;
+            frame.stroke(
+                &Path::line(Point::new(it.x, top), Point::new(it.x, trace_y.max(top))),
+                Stroke::default().with_width(1.0).with_color(marker),
+            );
+            frame.fill_rectangle(Point::new(p.left, y), Size::new(it.label_w, plate_h), plate);
+            frame.fill_text(Text {
+                content: call.clone(),
+                position: Point::new(p.left + PLATE_PAD, y + 1.0),
+                color: text,
+                size: Pixels(9.0),
+                ..Text::default()
+            });
+        }
+        if layout.dropped > 0 {
+            frame.fill_text(Text {
+                content: format!("+{}", layout.dropped),
+                position: Point::new(34.0, 2.0),
+                color: marker,
+                size: Pixels(9.0),
+                ..Text::default()
+            });
+        }
+    }
 }
 
 impl<Message> canvas::Program<Message> for Spectrum<'_, Message> {
@@ -319,6 +406,9 @@ impl<Message> canvas::Program<Message> for Spectrum<'_, Message> {
                     .with_color(Color::from_rgb8(0, 230, 120)),
             );
         }
+
+        // Spot nameplates over the spectrum (FR-SPOT-01/02).
+        self.draw_spots(&mut frame, w, spec_h, latest);
 
         // Waterfall (newest row at the top of its band), rasterised into one
         // RGBA image and drawn with a single `draw_image`.
