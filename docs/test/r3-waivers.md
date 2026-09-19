@@ -26,6 +26,5 @@ features not yet implemented. Everything else must carry a real test.
 | `FR-SPOT-01` | Spot nameplates (marker placement; Ver `T`, priority `S`): not yet implemented — planned (SRS v0.56, `OP-7`). Remove this waiver and add the named test when the feature lands. |
 | `FR-SPOT-02` | Spot nameplates (declutter layout; Ver `T`, priority `S`): not yet implemented — planned (SRS v0.56, `OP-7`). Remove this waiver and add the named test when the feature lands. |
 | `FR-SPOT-05` | Spot nameplates (PSK Reporter source; Ver `T`, priority `S`): not yet implemented — planned (SRS v0.56, `OP-7`). Remove this waiver and add the named test when the feature lands. |
-| `FR-SPOT-06` | Spot nameplates (spot store; Ver `T`, priority `S`): not yet implemented — planned (SRS v0.56, `OP-7`). Remove this waiver and add the named test when the feature lands. |
 | `FR-SPOT-07` | Spot nameplates (cluster sources; Ver `T`, priority `S`): not yet implemented — planned (SRS v0.56, `OP-7`). Remove this waiver and add the named test when the feature lands. |
 | `FR-SPOT-09` | Spot nameplates (source failure isolation; Ver `T`, priority `S`): not yet implemented — planned (SRS v0.56, `OP-7`). Remove this waiver and add the named test when the feature lands. |
