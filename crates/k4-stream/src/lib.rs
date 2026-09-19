@@ -9,6 +9,7 @@
 //! and the device I/O live in `k4-audio`.
 
 pub mod audio;
+pub mod gpu_waterfall;
 pub mod pan;
 pub mod render;
 
