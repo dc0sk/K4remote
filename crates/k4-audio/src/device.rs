@@ -169,9 +169,9 @@ impl AudioOutput {
     pub fn submit_stereo_12k(&mut self, pcm: &[f32]) {
         let mut left = Vec::with_capacity(pcm.len() / 2);
         let mut right = Vec::with_capacity(pcm.len() / 2);
-        for frame in pcm.chunks_exact(2) {
-            left.push(frame[0]);
-            right.push(frame[1]);
+        for &[main, sub] in pcm.as_chunks::<2>().0 {
+            left.push(main);
+            right.push(sub);
         }
         let mut l = Vec::new();
         let mut r = Vec::new();
