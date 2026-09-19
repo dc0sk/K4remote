@@ -76,6 +76,7 @@ k4-stream = { path = "../crates/k4-stream" }
 k4-audio = { path = "../crates/k4-audio" }
 k4-config = { path = "../crates/k4-config" }
 k4-diag = { path = "../crates/k4-diag" }
+k4-kpa = { path = "../crates/k4-kpa" }
 iced = { version = "0.13", features = ["tokio", "canvas", "image"] }
 ureq = { version = "3.3.0", default-features = false, features = ["rustls"] }
 tokio = { version = "1.53.0", default-features = false, features = ["rt"] }

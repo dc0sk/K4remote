@@ -7,6 +7,7 @@
 //! ADR-15): a dark layered theme, banded frame, grids of two-line state
 //! buttons, and proportional S-meter bars (FR-UI-08..15).
 
+mod kpa;
 mod meter;
 mod spectrum;
 mod tips;
@@ -84,8 +85,7 @@ fn diag_window_settings() -> iced::window::Settings {
 /// for the amplifier's host/port/poll settings.
 fn kpa1500_window_settings() -> iced::window::Settings {
     iced::window::Settings {
-        size: iced::Size::new(420.0, 320.0),
-        resizable: false,
+        size: iced::Size::new(460.0, 600.0),
         icon: app_icon(),
         ..Default::default()
     }
@@ -225,6 +225,13 @@ struct App {
     kpa1500_host: String,
     kpa1500_port: String,
     kpa1500_poll: String,
+    // KPA1500 client worker (FR-AMP-03): a shared snapshot the worker writes
+    // and the UI copies on tick, a command channel, and the desired-connected
+    // state so the connection can be reconciled against K4 connectivity.
+    kpa_shared: Arc<Mutex<kpa::Shared>>,
+    kpa_tx: Sender<kpa::Cmd>,
+    kpa: kpa::Shared,
+    kpa_want: bool,
     // Diagnostics log: show/hide + follow-newest (auto-scroll).
     show_log: bool,
     log_autoscroll: bool,
@@ -783,6 +790,10 @@ enum Message {
     Kpa1500HostChanged(String),
     Kpa1500PortChanged(String),
     Kpa1500PollChanged(String),
+    // KPA1500 amplifier controls (FR-AMP-03).
+    KpaSetMode(bool),
+    KpaSetAtu(bool),
+    KpaAntenna(u8),
     ToggleLogAutoscroll,
     LogFilterChanged(String),
     /// A text-editor action from the read-only log view (selection/scroll; edits
@@ -911,6 +922,11 @@ impl App {
         let kpa1500_host = prefs.kpa1500_host.clone();
         let kpa1500_port = prefs.kpa1500_port.to_string();
         let kpa1500_poll = prefs.kpa1500_poll_ms.to_string();
+        // The amplifier worker starts idle (disconnected); the tick reconciler
+        // connects it once the K4 is up and support is enabled.
+        let kpa_shared = Arc::new(Mutex::new(kpa::Shared::default()));
+        let (kpa_tx, kpa_rx) = mpsc::channel();
+        kpa::spawn(kpa_rx, Arc::clone(&kpa_shared));
 
         // Open the main window; the daemon starts with none (FR-DIAG-04).
         let (main_window, open_main) = iced::window::open(iced::window::Settings {
@@ -1030,6 +1046,10 @@ impl App {
             kpa1500_host,
             kpa1500_port,
             kpa1500_poll,
+            kpa_shared,
+            kpa_tx,
+            kpa: kpa::Shared::default(),
+            kpa_want: false,
             show_log: false,
             log_autoscroll: true,
             log_refresh_div: 0,
@@ -1358,6 +1378,30 @@ impl App {
             self.kpod_buttons.iter().map(|b| b.cat.clone()).collect(),
         ));
         self.save_config();
+    }
+
+    /// Tell the amplifier worker to (re)connect using the current form values
+    /// (FR-AMP-03). Port/poll fall back to the defaults if the fields are empty.
+    fn kpa_connect(&self) {
+        let port = self.kpa1500_port.parse::<u16>().unwrap_or(1500);
+        let interval_ms = self
+            .kpa1500_poll
+            .parse::<u64>()
+            .ok()
+            .filter(|ms| *ms >= 50)
+            .unwrap_or(500);
+        let _ = self.kpa_tx.send(kpa::Cmd::Connect {
+            host: self.kpa1500_host.clone(),
+            port,
+            interval_ms,
+        });
+    }
+
+    /// Send a control command to the amplifier if it is connected.
+    fn kpa_send(&self, cmd: impl Into<String>) {
+        if self.kpa.conn == kpa::Conn::Connected {
+            let _ = self.kpa_tx.send(kpa::Cmd::Send(cmd.into()));
+        }
     }
 
     fn save_config(&self) {
@@ -2492,6 +2536,10 @@ impl App {
                     // the enable toggle and settings survive independently.
                     self.kpa1500_config_window = None;
                     self.save_config();
+                    // Apply any host/port/poll edit to a live connection.
+                    if self.kpa_want {
+                        self.kpa_connect();
+                    }
                 }
             }
             // KPA1500 support (FR-AMP-01): the enable toggle, the detached
@@ -2503,6 +2551,9 @@ impl App {
             Message::ToggleKpa1500Window => {
                 if let Some(id) = self.kpa1500_config_window.take() {
                     self.save_config();
+                    if self.kpa_want {
+                        self.kpa_connect();
+                    }
                     return iced::window::close(id);
                 }
                 let (id, open) = iced::window::open(kpa1500_window_settings());
@@ -2519,6 +2570,13 @@ impl App {
             }
             Message::Kpa1500PollChanged(v) => {
                 self.kpa1500_poll = v.chars().filter(char::is_ascii_digit).take(5).collect();
+            }
+            Message::KpaSetMode(operate) => self.kpa_send(k4_kpa::cat::set_mode(operate)),
+            Message::KpaSetAtu(inline) => self.kpa_send(k4_kpa::cat::set_atu_mode(inline)),
+            Message::KpaAntenna(n) => {
+                if let Some(cmd) = k4_kpa::cat::select_antenna(n) {
+                    self.kpa_send(cmd);
+                }
             }
             Message::ToggleLogAutoscroll => {
                 self.log_autoscroll = !self.log_autoscroll;
@@ -2762,6 +2820,24 @@ impl App {
             Message::Tick => {
                 if let Ok(snap) = self.snapshot.lock() {
                     self.ui = snap.clone();
+                }
+                // Copy the amplifier snapshot and reconcile its connection
+                // (FR-AMP-03): connect only while the K4 is up and support is on
+                // with a host set; disconnect otherwise. Driven off the tick so
+                // it follows K4 connect/disconnect, the enable toggle, and host
+                // edits without wiring each event by hand.
+                if let Ok(g) = self.kpa_shared.lock() {
+                    self.kpa = g.clone();
+                }
+                let want =
+                    self.kpa1500_enabled && self.ui.connected && !self.kpa1500_host.is_empty();
+                if want != self.kpa_want {
+                    self.kpa_want = want;
+                    if want {
+                        self.kpa_connect();
+                    } else {
+                        let _ = self.kpa_tx.send(kpa::Cmd::Disconnect);
+                    }
                 }
                 // Seed the config screens from the radio's reported values once
                 // per connection, as the connect GET burst lands (FR-UI-19).
@@ -6107,6 +6183,7 @@ impl App {
             .push(host_row)
             .push(port_row)
             .push(poll_row)
+            .push(self.kpa_status_view())
             .push(
                 Container::new(
                     Row::new()
@@ -6116,12 +6193,117 @@ impl App {
                 .width(Length::Fill)
                 .padding([8, 0]),
             );
-        Container::new(col)
+        Container::new(scrollable(col))
             .style(panel_style)
             .padding(16)
             .width(Length::Fill)
             .height(Length::Fill)
             .into()
+    }
+
+    /// The live-status half of the KPA1500 window (FR-AMP-03): connection state,
+    /// and — once connected — the amplifier's telemetry and its controls.
+    fn kpa_status_view(&self) -> Element<'_, Message> {
+        let dim = role_color(ui::ColorRole::Inactive);
+        let conn_text = match self.kpa.conn {
+            kpa::Conn::Disconnected => "not connected",
+            kpa::Conn::Connecting => "connecting…",
+            kpa::Conn::Connected => "connected",
+        };
+        let mut col = Column::new()
+            .spacing(8)
+            .push(Text::new("Amplifier").size(12).color(dim))
+            .push(Text::new(conn_text).size(12));
+        // Surface a transport error while not connected (offline, wrong host).
+        if self.kpa.conn != kpa::Conn::Connected {
+            if let Some(err) = &self.kpa.error {
+                col = col.push(
+                    Text::new(err.clone())
+                        .size(11)
+                        .color(role_color(ui::ColorRole::Caution)),
+                );
+            }
+            return col.into();
+        }
+
+        let s = &self.kpa.state;
+        let row = |name: &'static str, val: String| {
+            Row::new()
+                .spacing(8)
+                .push(
+                    Text::new(name)
+                        .size(12)
+                        .color(dim)
+                        .width(Length::Fixed(84.0)),
+                )
+                .push(Text::new(val).size(12))
+        };
+        let dash = || "—".to_string();
+        let mode_txt = match s.mode {
+            Some(k4_kpa::Mode::Operate) => "OPERATE".to_string(),
+            Some(k4_kpa::Mode::Standby) => "STANDBY".to_string(),
+            None => dash(),
+        };
+        let power_txt = match (s.forward_w, s.swr()) {
+            (Some(w), Some(swr)) => format!("{w} W    SWR {swr:.1}"),
+            (Some(w), None) => format!("{w} W"),
+            _ => dash(),
+        };
+        col = col
+            .push(row("Mode", mode_txt))
+            .push(row("Power", power_txt))
+            .push(row(
+                "Temp",
+                s.temp_c.map_or_else(dash, |t| format!("{t} °C")),
+            ))
+            .push(row(
+                "Band",
+                s.band_name().map(str::to_string).unwrap_or_else(dash),
+            ))
+            .push(row(
+                "Antenna",
+                s.antenna.map_or_else(dash, |a| format!("ANT {a}")),
+            ))
+            .push(row(
+                "ATU",
+                match s.atu_mode_inline {
+                    Some(true) => "in line".to_string(),
+                    Some(false) => "bypassed".to_string(),
+                    None => dash(),
+                },
+            ))
+            .push(row("Fan", s.fan.map_or_else(dash, |f| f.to_string())))
+            .push(row(
+                "Fault",
+                s.fault_text()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| "none".to_string()),
+            ));
+        if let Some(fw) = &s.firmware {
+            col = col.push(row("Firmware", fw.clone()));
+        }
+
+        // Controls. Operate/Standby keys the amp in/out of line; the ATU and
+        // antenna mirror the front panel. (A full ATU tune needs the K4 keyed
+        // and is deferred to a later slice.)
+        let controls = Column::new()
+            .spacing(6)
+            .push(Text::new("Controls").size(12).color(dim))
+            .push(
+                Row::new()
+                    .spacing(6)
+                    .push(small_btn("OPERATE", Message::KpaSetMode(true)))
+                    .push(small_btn("STANDBY", Message::KpaSetMode(false))),
+            )
+            .push(
+                Row::new()
+                    .spacing(6)
+                    .push(small_btn("ATU IN", Message::KpaSetAtu(true)))
+                    .push(small_btn("ATU BYP", Message::KpaSetAtu(false)))
+                    .push(small_btn("ANT 1", Message::KpaAntenna(1)))
+                    .push(small_btn("ANT 2", Message::KpaAntenna(2))),
+            );
+        col.push(controls).into()
     }
 
     /// Per-window title (daemon).
@@ -6329,12 +6511,37 @@ impl App {
             }
             _ => Space::with_width(Length::Shrink).into(),
         };
+        // KPA1500 amp indicator (FR-AMP-03): shown only when support is enabled;
+        // a click opens the amp window. Colour and wording follow the telemetry.
+        let amp_note: Element<Message> = if self.kpa1500_enabled {
+            let (label, role) = ui::amp_indicator(
+                self.kpa.conn == kpa::Conn::Connecting,
+                self.kpa.conn == kpa::Conn::Connected,
+                &self.kpa.state,
+            );
+            let color = role_color(role);
+            Button::new(Text::new(label).size(12).color(color))
+                .style(move |_t: &Theme, status: button::Status| button::Style {
+                    background: None,
+                    text_color: match status {
+                        button::Status::Hovered | button::Status::Pressed => Color::WHITE,
+                        _ => color,
+                    },
+                    ..button::Style::default()
+                })
+                .padding(0)
+                .on_press(Message::ToggleKpa1500Window)
+                .into()
+        } else {
+            Space::with_width(Length::Shrink).into()
+        };
         let header = Row::new()
             .spacing(12)
             .align_y(Alignment::Center)
             .push(Text::new("K4 REMOTE").size(20))
             .push(status_ind)
             .push(update_note)
+            .push(amp_note)
             .push(
                 Text::new(self.ui.status.clone())
                     .size(12)

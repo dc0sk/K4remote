@@ -17,11 +17,14 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
 - **KPA1500 amplifier support (opt-in).** A new **KPA1500** section in Settings
   with an enable toggle and a **Configuration…** button that opens a separate
   window for the amplifier's connection — host, port (default 1500) and poll
-  interval. Off by default; your settings are saved. This first step wires the
-  connection to the amp's own Ethernet control server (a second link alongside
-  the K4); live amplifier metering and control follow in a later release. Only
-  the KPA1500 is supported — the KPA500 and KAT500 have no network interface of
-  their own.
+  interval. Off by default; your settings are saved. The app connects to the
+  amp's own Ethernet control server (a second link alongside the K4) whenever
+  the K4 is connected, and shows it **live**: a top-bar amp indicator
+  (Operate/Standby, forward power, SWR, faults) and, in the KPA1500 window,
+  full telemetry plus Operate/Standby, ATU in/bypass and antenna controls.
+  Only the KPA1500 is supported — the KPA500 and KAT500 have no network
+  interface of their own. (A one-touch ATU tune, which needs the K4 keyed,
+  comes in a later release.)
 
 ## [0.9.0] — 2026-07-27
 
