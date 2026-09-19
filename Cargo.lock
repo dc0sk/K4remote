@@ -2202,6 +2202,9 @@ dependencies = [
 [[package]]
 name = "k4-spot"
 version = "0.9.0"
+dependencies = [
+ "k4-stream",
+]
 
 [[package]]
 name = "k4-stream"
@@ -2230,6 +2233,7 @@ dependencies = [
  "k4-kpod",
  "k4-protocol",
  "k4-session",
+ "k4-spot",
  "k4-stream",
  "k4-transport",
  "tokio",

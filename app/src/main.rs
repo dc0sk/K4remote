@@ -10,6 +10,7 @@
 mod kpa;
 mod meter;
 mod spectrum;
+mod spots;
 mod tips;
 mod ui;
 mod update;
@@ -161,6 +162,8 @@ struct App {
     snapshot: Arc<Mutex<UiSnapshot>>,
     /// Shared pan history the panadapter reads directly (FR-PAN-12/13).
     pan: worker::PanHandle,
+    /// The spots labelled on the spectrum (FR-SPOT-01/02); `--demo` injects some.
+    spots: spots::SpotHandle,
     /// Draw the waterfall on the GPU (false = the CPU rasteriser, when there is no wgpu adapter).
     gpu_waterfall: bool,
     // last snapshot read (what the view renders)
@@ -930,8 +933,10 @@ impl App {
         let snapshot = Arc::new(Mutex::new(initial.clone()));
         let pan: worker::PanHandle = Arc::default();
         worker::spawn(cmd_rx, Arc::clone(&snapshot), Arc::clone(&pan));
+        let spots: spots::SpotHandle = Arc::default();
         if demo {
             worker::spawn_demo_pan_feed(Arc::clone(&pan), Arc::clone(&snapshot));
+            spots::spawn_demo_spots(Arc::clone(&spots));
         }
 
         // Load persisted config: prefill the last-used connection (FR-CFG-01/05)
@@ -1066,6 +1071,7 @@ impl App {
             cmd_tx,
             snapshot,
             pan,
+            spots,
             gpu_waterfall: waterfall_gpu::gpu_available(),
             ui: initial,
             view_mode: ViewMode::default(),
@@ -3018,6 +3024,13 @@ impl App {
             Message::Tick => {
                 if let Ok(snap) = self.snapshot.lock() {
                     self.ui = snap.clone();
+                }
+                // Drop spots past the age limit, so the store never holds ones that can no longer
+                // be shown (FR-SPOT-03).
+                if let Ok(mut store) = self.spots.lock() {
+                    let max_age =
+                        u64::from(k4_config::parse_spot_max_age_min(&self.spot_max_age)) * 60;
+                    store.purge(spots::unix_now(), max_age);
                 }
                 // Copy the amplifier snapshot and reconcile its connection
                 // (FR-AMP-03): connect only while the K4 is up and support is on
@@ -7567,6 +7580,10 @@ impl App {
                     pan: &self.pan,
                     rx: usize::from(p.is_b()),
                     gpu_waterfall: self.gpu_waterfall,
+                    spots: &self.spots,
+                    spot_max_age_secs: u64::from(k4_config::parse_spot_max_age_min(
+                        &self.spot_max_age,
+                    )) * 60,
                     top_dbm,
                     range_db,
                     is_b: p.is_b(),

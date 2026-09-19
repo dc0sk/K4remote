@@ -23,8 +23,6 @@ features not yet implemented. Everything else must carry a real test.
 | `NFR-PERF-01` | Latency budget (≤150 ms control round-trip, Ver `T/A`): requires wall-clock measurement against a LAN/radio, not available in the hardware-free suite. To be measured in the L4 HIL run and recorded in `docs/test/hil-runs/`. |
 | `NFR-PERF-CW` | CW keying-jitter budget (≤10 ms, Ver `T`): requires real-time timing measurement of paddle→`KZ` emission under an OS scheduler; belongs to a bench/HIL run, not a deterministic unit test. |
 | `FR-VFO-ID` | Station-ID (`ID`) set/display (Ver `T`, priority `S`): not yet implemented — planned. Remove this waiver and add a round-trip test when the feature lands. |
-| `FR-SPOT-01` | Spot nameplates (marker placement; Ver `T`, priority `S`): not yet implemented — planned (SRS v0.56, `OP-7`). Remove this waiver and add the named test when the feature lands. |
-| `FR-SPOT-02` | Spot nameplates (declutter layout; Ver `T`, priority `S`): not yet implemented — planned (SRS v0.56, `OP-7`). Remove this waiver and add the named test when the feature lands. |
 | `FR-SPOT-05` | Spot nameplates (PSK Reporter source; Ver `T`, priority `S`): not yet implemented — planned (SRS v0.56, `OP-7`). Remove this waiver and add the named test when the feature lands. |
 | `FR-SPOT-07` | Spot nameplates (cluster sources; Ver `T`, priority `S`): not yet implemented — planned (SRS v0.56, `OP-7`). Remove this waiver and add the named test when the feature lands. |
 | `FR-SPOT-09` | Spot nameplates (source failure isolation; Ver `T`, priority `S`): not yet implemented — planned (SRS v0.56, `OP-7`). Remove this waiver and add the named test when the feature lands. |

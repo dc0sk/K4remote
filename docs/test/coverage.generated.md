@@ -114,8 +114,8 @@ Legend: ✅ test-traced · 🟡 waived (see r3-waivers.md) · ⚪ not test-requi
 | `FR-SES-MULTI` | C | T | ⚪ |
 | `FR-SES-PING` | M | T | ✅ |
 | `FR-SES-RECONNECT` | S | T | ✅ |
-| `FR-SPOT-01` | S | T/D | 🟡 |
-| `FR-SPOT-02` | S | T/D | 🟡 |
+| `FR-SPOT-01` | S | T/D | ✅ |
+| `FR-SPOT-02` | S | T/D | ✅ |
 | `FR-SPOT-03` | S | T | ✅ |
 | `FR-SPOT-04` | S | T/D | ✅ |
 | `FR-SPOT-05` | S | T/D | 🟡 |

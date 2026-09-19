@@ -9,3 +9,7 @@ description = "Spot-nameplate logic: spot age filtering (FR-SPOT-03); the spot m
 
 [dependencies]
 # Pure logic, dependency-free — network I/O lives in the app's source workers.
+
+[dev-dependencies]
+# Tests hold the marker placement to the trace's own bin→x mapping.
+k4-stream = { path = "../k4-stream" }
