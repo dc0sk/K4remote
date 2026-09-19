@@ -7,6 +7,7 @@ Legend: ✅ test-traced · 🟡 waived (see r3-waivers.md) · ⚪ not test-requi
 | `FR-AMP-01` | S | T/D | ✅ |
 | `FR-AMP-02` | S | T | ✅ |
 | `FR-AMP-03` | S | T/D | ✅ |
+| `FR-AMP-04` | S | T/D | ✅ |
 | `FR-ANT-01` | C | T | ✅ |
 | `FR-ANT-02` | S | T | ✅ |
 | `FR-ATU-01` | S | T/D | ✅ |

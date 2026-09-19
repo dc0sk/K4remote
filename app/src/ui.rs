@@ -1950,6 +1950,30 @@ pub fn amp_indicator(
     }
 }
 
+/// Decide whether an in-progress amplifier ATU tune should **end** and the K4
+/// carrier be dropped (FR-AMP-04).
+///
+/// It ends when the amp finished (we saw its tune start, and it is no longer
+/// tuning), when a hard safety timeout elapses, or when any precondition falls
+/// away (the amp or K4 link dropped, or TX was disarmed mid-tune). The timeout
+/// is the safety net: a tune keys the transmitter, so the carrier must never be
+/// left on if the amp's tune hangs or its `^TP` reply is missed.
+pub fn amp_tune_should_end(
+    saw_tuning: bool,
+    amp_tuning_now: bool,
+    elapsed: std::time::Duration,
+    timeout: std::time::Duration,
+    amp_connected: bool,
+    k4_connected: bool,
+    tx_armed: bool,
+) -> bool {
+    (saw_tuning && !amp_tuning_now)
+        || elapsed >= timeout
+        || !amp_connected
+        || !k4_connected
+        || !tx_armed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2007,6 +2031,40 @@ mod tests {
             amp_indicator(false, true, &stby),
             ("AMP STBY".to_string(), ColorRole::TxActive)
         );
+    }
+
+    /// An amp ATU tune ends on completion, on a hard timeout (even if the amp
+    /// never reported starting), and on any dropped precondition — but keeps
+    /// running while the amp is mid-tune with everything still up.
+    /// trace: FR-AMP-04
+    #[test]
+    fn fr_amp_04_tune_end_conditions() {
+        use std::time::Duration;
+        let short = Duration::from_secs(1);
+        let long = Duration::from_secs(30);
+        // Mid-tune, all preconditions holding, within the timeout → keep going.
+        assert!(!amp_tune_should_end(
+            true, true, short, long, true, true, true
+        ));
+        // Saw it start and it is no longer tuning → done.
+        assert!(amp_tune_should_end(
+            true, false, short, long, true, true, true
+        ));
+        // Hard timeout ends it even if the amp never reported tuning (missed
+        // `^TP`), so the carrier can't be stranded on.
+        assert!(amp_tune_should_end(
+            false, true, long, short, true, true, true
+        ));
+        // Any dropped precondition ends it immediately.
+        assert!(amp_tune_should_end(
+            true, true, short, long, false, true, true
+        ));
+        assert!(amp_tune_should_end(
+            true, true, short, long, true, false, true
+        ));
+        assert!(amp_tune_should_end(
+            true, true, short, long, true, true, false
+        ));
     }
 
     /// Each connection phase reports a distinct status label to the UI, and each
