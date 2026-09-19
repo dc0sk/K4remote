@@ -119,7 +119,7 @@ Legend: ✅ test-traced · 🟡 waived (see r3-waivers.md) · ⚪ not test-requi
 | `FR-SPOT-03` | S | T | ✅ |
 | `FR-SPOT-04` | S | T/D | ✅ |
 | `FR-SPOT-05` | S | T/D | 🟡 |
-| `FR-SPOT-06` | S | T | 🟡 |
+| `FR-SPOT-06` | S | T | ✅ |
 | `FR-SPOT-07` | S | T/D | 🟡 |
 | `FR-SPOT-08` | C | D | ⚪ |
 | `FR-SPOT-09` | S | T/D | 🟡 |

@@ -1,9 +1,18 @@
 //! Spot-nameplate logic (FR-SPOT-*): pure and dependency-free, so it is testable
-//! offline. This slice is the **age rule** (FR-SPOT-03); the spot model, store and
-//! network sources build on it.
+//! offline. It holds the **age rule** (FR-SPOT-03) and the network-neutral
+//! **spot model, source interface and store** (FR-SPOT-06); the network sources
+//! and the overlay build on them.
 //!
 //! All times are Unix seconds. The caller supplies `now`, so nothing here reads a
 //! clock and every result is deterministic.
+
+mod model;
+mod store;
+
+pub use model::{
+    normalise_callsign, sanitise_text, Network, SourceError, Spot, SpotSource, MAX_TEXT_LEN,
+};
+pub use store::{Insert, SpotStore, DEDUPE_TOLERANCE_HZ, DEFAULT_CAPACITY};
 
 /// How long ago a spot was stamped, in seconds.
 ///
