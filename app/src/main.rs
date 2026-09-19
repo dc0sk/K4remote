@@ -13,6 +13,7 @@ mod spectrum;
 mod tips;
 mod ui;
 mod update;
+mod waterfall_gpu;
 mod worker;
 
 use ui::ViewMode;
@@ -158,6 +159,10 @@ struct App {
     // bridge to the worker
     cmd_tx: Sender<WorkerCmd>,
     snapshot: Arc<Mutex<UiSnapshot>>,
+    /// Shared pan history the panadapter reads directly (FR-PAN-12/13).
+    pan: worker::PanHandle,
+    /// Draw the waterfall on the GPU (false = the CPU rasteriser, when there is no wgpu adapter).
+    gpu_waterfall: bool,
     // last snapshot read (what the view renders)
     ui: UiSnapshot,
     // switchable single-A / single-B / dual view (FR-UI-08, ARC-15)
@@ -923,7 +928,11 @@ impl App {
             UiSnapshot::default()
         };
         let snapshot = Arc::new(Mutex::new(initial.clone()));
-        worker::spawn(cmd_rx, Arc::clone(&snapshot));
+        let pan: worker::PanHandle = Arc::default();
+        worker::spawn(cmd_rx, Arc::clone(&snapshot), Arc::clone(&pan));
+        if demo {
+            worker::spawn_demo_pan_feed(Arc::clone(&pan), Arc::clone(&snapshot));
+        }
 
         // Load persisted config: prefill the last-used connection (FR-CFG-01/05)
         // and restore the peer cache (FR-CFG-04).
@@ -1056,6 +1065,8 @@ impl App {
             config_path,
             cmd_tx,
             snapshot,
+            pan,
+            gpu_waterfall: waterfall_gpu::gpu_available(),
             ui: initial,
             view_mode: ViewMode::default(),
             // Start on the spectrum/waterfall, not a pre-opened BAND screen.
@@ -7493,10 +7504,10 @@ impl App {
                 ui::ColorRole::VfoA
             };
             // Each pane draws its own receiver's trace/waterfall (FR-PAN-02).
-            let (latest, waterfall) = if p.is_b() {
-                (&self.ui.spectrum_sub, &self.ui.waterfall_sub)
+            let latest = if p.is_b() {
+                &self.ui.spectrum_sub
             } else {
-                (&self.ui.spectrum_latest, &self.ui.waterfall)
+                &self.ui.spectrum_latest
             };
             let pane_center_hz = if p.is_b() {
                 self.ui.vfo_b_hz
@@ -7551,9 +7562,11 @@ impl App {
                 .padding(8)
                 .into()
             } else {
-                Canvas::new(spectrum::Spectrum {
+                let canvas = Canvas::new(spectrum::Spectrum {
                     latest: &latest.bins,
-                    waterfall,
+                    pan: &self.pan,
+                    rx: usize::from(p.is_b()),
+                    gpu_waterfall: self.gpu_waterfall,
                     top_dbm,
                     range_db,
                     is_b: p.is_b(),
@@ -7565,8 +7578,39 @@ impl App {
                     on_wheel: Message::PaneWheel,
                 })
                 .width(Length::Fill)
-                .height(Length::Fill)
-                .into()
+                .height(Length::Fill);
+                if self.gpu_waterfall {
+                    // The waterfall is a GPU widget under the canvas (FR-PAN-12): the bottom 60 %
+                    // of the pane, matching the canvas's own 40/60 split. The canvas sits on top,
+                    // transparent over that band, and keeps the grid, overlays and all mouse
+                    // handling (click-to-QSY, wheel tuning).
+                    let waterfall = iced::widget::Shader::new(waterfall_gpu::WaterfallProgram {
+                        pan: Arc::clone(&self.pan),
+                        rx: usize::from(p.is_b()),
+                        view: waterfall_gpu::View {
+                            center_hz: pan_center_hz as i64,
+                            span_hz: pan_span_hz,
+                            top_dbm,
+                            range_db,
+                        },
+                    })
+                    .width(Length::Fill)
+                    .height(Length::FillPortion(6));
+                    let under = Container::new(
+                        Column::new()
+                            .push(iced::widget::Space::with_height(Length::FillPortion(4)))
+                            .push(waterfall),
+                    )
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .style(|_| iced::widget::container::Style {
+                        background: Some(Background::Color(Color::from_rgb8(10, 10, 14))),
+                        ..Default::default()
+                    });
+                    iced::widget::stack![under, canvas].into()
+                } else {
+                    canvas.into()
+                }
             };
             // Only in dual (A+B) view does the TX-VFO choice matter: the pane
             // matching the transmit VFO (B under split, else A) gets an accent

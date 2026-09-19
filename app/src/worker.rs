@@ -36,9 +36,10 @@ const TX_FRAME_SAMPLES: usize = 240;
 /// which matters on the Pi target (NFR-PORT-02).
 ///
 /// Worst case: 64 rows × 1024 bins × 4 B × 2 receivers ≈ 512 kB resident.
-const SPECTRUM_WIDTH: usize = 1024;
+pub const SPECTRUM_WIDTH: usize = 1024;
 /// Waterfall history depth (rows).
-const WATERFALL_ROWS: usize = 64;
+/// Waterfall rows retained per receiver (also the GPU ring texture height, FR-PAN-12).
+pub const WATERFALL_ROWS: usize = 64;
 
 /// Whether a `<cmd>?;` rejection should be announced now, and what to say.
 ///
@@ -74,6 +75,57 @@ pub struct PanRow {
     /// Pan span (Hz) when this row was sampled.
     pub span_hz: u32,
 }
+
+/// The pan history, shared between the worker (which fills it) and the panadapter (which reads it
+/// straight from here, at display rate — FR-PAN-12/13).
+///
+/// It used to travel inside [`UiSnapshot`], which meant every `publish()` copied both 64-row
+/// histories (~0.5 MB) and the UI only saw new rows on its 100 ms tick. Held here instead, the GPU
+/// waterfall uploads just the rows that arrived, and nothing is copied per publish.
+///
+/// Rows are stored newest first. `total` counts rows ever pushed per receiver — monotonic, and
+/// **not** reset by [`clear`](Self::clear) — so a reader can tell how many rows are new.
+#[derive(Debug, Default)]
+pub struct PanShared {
+    rows: [VecDeque<PanRow>; 2],
+    total: [u64; 2],
+}
+
+impl PanShared {
+    /// Add the newest row for receiver `rx` (0 = main/A, 1 = sub/B), dropping the oldest beyond
+    /// [`WATERFALL_ROWS`].
+    pub fn push(&mut self, rx: usize, row: PanRow) {
+        let rx = rx.min(1);
+        self.rows[rx].push_front(row);
+        while self.rows[rx].len() > WATERFALL_ROWS {
+            self.rows[rx].pop_back();
+        }
+        self.total[rx] += 1;
+    }
+
+    /// Forget the history (disconnect, or the pan was reset). `total` keeps counting.
+    pub fn clear(&mut self, rx: usize) {
+        self.rows[rx.min(1)].clear();
+    }
+
+    /// The history for `rx`, newest first.
+    pub fn rows(&self, rx: usize) -> &VecDeque<PanRow> {
+        &self.rows[rx.min(1)]
+    }
+
+    /// Rows ever pushed for `rx`.
+    pub fn total(&self, rx: usize) -> u64 {
+        self.total[rx.min(1)]
+    }
+
+    /// The most recent row for `rx`.
+    pub fn newest(&self, rx: usize) -> Option<&PanRow> {
+        self.rows[rx.min(1)].front()
+    }
+}
+
+/// Shared handle to the pan history.
+pub type PanHandle = Arc<Mutex<PanShared>>;
 
 impl PanRow {
     /// Build a row from a decoded frame, cropping to the display span and
@@ -271,10 +323,6 @@ pub struct UiSnapshot {
     pub spectrum_latest: PanRow,
     /// Latest spectrum trace for the sub RX / VFO B.
     pub spectrum_sub: PanRow,
-    /// Waterfall history (main RX / VFO A), newest row first.
-    pub waterfall: Vec<PanRow>,
-    /// Waterfall history for the sub RX / VFO B.
-    pub waterfall_sub: Vec<PanRow>,
     /// Latest mini-pan trace (0x03), empty if disabled.
     pub mini_pan: Vec<f32>,
     /// Recent diagnostic log lines (FR-DIAG-01/02).
@@ -284,6 +332,85 @@ pub struct UiSnapshot {
     /// Full radio state model, for the config screens to read back their current
     /// values on connect (FR-UI-19 read-back). `None` fields = not yet reported.
     pub radio: RadioState,
+}
+
+/// Feed a live synthetic spectrum for `--demo`, so the panadapter and waterfall can be inspected
+/// (and profiled) with no radio: a noise floor, drifting carriers, keyed CW-like carriers and a
+/// wide SSB-like hump, ~30 rows per second per receiver. Deterministic apart from timing.
+///
+/// The snapshot's latest-row fields are kept current too, since the pane's placeholder and axis
+/// come from them.
+pub fn spawn_demo_pan_feed(pan: PanHandle, snapshot: Arc<Mutex<UiSnapshot>>) {
+    thread::spawn(move || {
+        const PERIOD: Duration = Duration::from_millis(33);
+        let mut state = [0x9E37_79B9_7F4A_7C15u64, 0xD1B5_4A32_D192_ED03u64];
+        let mut t = 0.0f32;
+        let mut next = Instant::now();
+        loop {
+            t += PERIOD.as_secs_f32();
+            for (rx, rng_state) in state.iter_mut().enumerate() {
+                let rng = |s: &mut u64| {
+                    *s ^= *s >> 12;
+                    *s ^= *s << 25;
+                    *s ^= *s >> 27;
+                    (s.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 40) as f32 / (1u64 << 24) as f32
+                };
+                let mut bins: Vec<f32> = (0..SPECTRUM_WIDTH)
+                    .map(|_| -118.0 + (rng(rng_state) - 0.5) * 8.0)
+                    .collect();
+                let mut bump = |centre: f32, width: f32, peak: f32| {
+                    let lo = (centre - 4.0 * width).max(0.0) as usize;
+                    let hi = ((centre + 4.0 * width) as usize).min(SPECTRUM_WIDTH - 1);
+                    for (i, b) in bins.iter_mut().enumerate().take(hi + 1).skip(lo) {
+                        let d = (i as f32 - centre) / width;
+                        *b = b.max(peak - 9.0 * d * d);
+                    }
+                };
+                let shift = 40.0 * rx as f32;
+                for k in 0..5 {
+                    let drift = 30.0 * (t * 0.05 * (k as f32 + 1.0) + k as f32).sin();
+                    bump(
+                        120.0 + 190.0 * k as f32 + shift + drift,
+                        1.5,
+                        -70.0 + 6.0 * k as f32,
+                    );
+                }
+                for (k, period) in [0.6f32, 1.1].iter().enumerate() {
+                    if (t / period + k as f32 * 0.3).fract() < 0.55 {
+                        bump(300.0 + 420.0 * k as f32 + shift, 1.2, -62.0);
+                    }
+                }
+                bump(
+                    800.0 - shift,
+                    22.0,
+                    -95.0 + 22.0 * (0.5 + 0.5 * (t * 1.7).sin()),
+                );
+                let row = PanRow {
+                    bins,
+                    center_hz: if rx == 0 { 14_074_000 } else { 14_061_100 },
+                    span_hz: 48_000,
+                };
+                if let Ok(mut p) = pan.lock() {
+                    p.push(rx, row.clone());
+                }
+                if let Ok(mut s) = snapshot.lock() {
+                    if rx == 0 {
+                        s.spectrum_latest = row;
+                    } else {
+                        s.spectrum_sub = row;
+                    }
+                    s.spectrum_bins = SPECTRUM_WIDTH;
+                }
+            }
+            next += PERIOD;
+            let now = Instant::now();
+            if next > now {
+                thread::sleep(next - now);
+            } else {
+                next = now;
+            }
+        }
+    });
 }
 
 /// Sample snapshot for offline UI inspection (`--demo`). Lets the GUI show the
@@ -414,7 +541,8 @@ struct WorkerState {
     // Per-receiver spectrum/waterfall, indexed by `PanFrame.receiver` (0=main/A,
     // 1=sub/B), so a dual-pan view shows each RX's own trace (FR-PAN-02).
     spectrum_latest: [PanRow; 2],
-    waterfall: [VecDeque<PanRow>; 2],
+    /// Shared pan history (see [`PanShared`]); the panadapter reads it directly.
+    pan: PanHandle,
     // Latest mini-pan (0x03) trace, if enabled (FR-UI-14).
     mini_pan: Vec<f32>,
     diag: DiagLog,
@@ -452,7 +580,7 @@ struct WorkerState {
 type ConnectOutcome = Result<(AnyLink, SessionConfig), String>;
 
 impl WorkerState {
-    fn new() -> Self {
+    fn new(pan: PanHandle) -> Self {
         Self {
             #[cfg(feature = "kpod")]
             kpod: kpod::KpodState::new(),
@@ -481,7 +609,7 @@ impl WorkerState {
             spectrum_bins: 0,
             reported_error: None,
             spectrum_latest: [PanRow::default(), PanRow::default()],
-            waterfall: [VecDeque::new(), VecDeque::new()],
+            pan,
             mini_pan: Vec::new(),
             // Debug level so the raw CAT console shows traffic; bounded ring.
             // Sized to hold a few minutes of busy traffic so lines don't scroll
@@ -557,15 +685,22 @@ impl WorkerState {
         self.spectrum_bins = 0;
         for rx in 0..2 {
             self.spectrum_latest[rx] = PanRow::default();
-            self.waterfall[rx].clear();
+        }
+        if let Ok(mut pan) = self.pan.lock() {
+            pan.clear(0);
+            pan.clear(1);
         }
         self.mini_pan.clear();
     }
 }
 
 /// Spawn the worker thread and return its handle.
-pub fn spawn(rx: Receiver<WorkerCmd>, snapshot: Arc<Mutex<UiSnapshot>>) -> thread::JoinHandle<()> {
-    thread::spawn(move || run(rx, snapshot))
+pub fn spawn(
+    rx: Receiver<WorkerCmd>,
+    snapshot: Arc<Mutex<UiSnapshot>>,
+    pan: PanHandle,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || run(rx, snapshot, pan))
 }
 
 fn set_status(snapshot: &Arc<Mutex<UiSnapshot>>, status: impl Into<String>) {
@@ -693,8 +828,6 @@ fn publish(snapshot: &Arc<Mutex<UiSnapshot>>, ws: &mut WorkerState) {
         s.spectrum_bins = ws.spectrum_bins;
         s.spectrum_latest = ws.spectrum_latest[0].clone();
         s.spectrum_sub = ws.spectrum_latest[1].clone();
-        s.waterfall = ws.waterfall[0].iter().cloned().collect();
-        s.waterfall_sub = ws.waterfall[1].iter().cloned().collect();
         s.mini_pan = ws.mini_pan.clone();
         s.diag_lines = Arc::clone(&ws.diag_lines);
         s.radio = st.clone();
@@ -845,8 +978,8 @@ fn poll_pending(ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnapshot>>) {
     }
 }
 
-fn run(rx: Receiver<WorkerCmd>, snapshot: Arc<Mutex<UiSnapshot>>) {
-    let mut ws = WorkerState::new();
+fn run(rx: Receiver<WorkerCmd>, snapshot: Arc<Mutex<UiSnapshot>>, pan: PanHandle) {
+    let mut ws = WorkerState::new(pan);
 
     loop {
         // 1. Drain pending UI commands.
@@ -1110,9 +1243,8 @@ fn service(ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnapshot>>) {
                 let display_span_hz = if rx == 1 { span_sub } else { span_main };
                 let row = PanRow::from_frame(&frame, display_span_hz, SPECTRUM_WIDTH);
                 ws.spectrum_latest[rx] = row.clone();
-                ws.waterfall[rx].push_front(row);
-                while ws.waterfall[rx].len() > WATERFALL_ROWS {
-                    ws.waterfall[rx].pop_back();
+                if let Ok(mut pan) = ws.pan.lock() {
+                    pan.push(rx, row);
                 }
             }
         }

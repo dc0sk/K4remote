@@ -8,7 +8,7 @@ use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke, Text};
 use iced::widget::image;
 use iced::{Color, Pixels, Point, Rectangle, Renderer, Size, Theme};
 
-use crate::worker::PanRow;
+use crate::worker::{PanHandle, PanRow};
 use k4_stream::render::{
     axis_ticks, bin_to_x, column_to_bin, db_grid_step, dbm_to_color, dbm_to_y, hz_per_bin,
 };
@@ -31,7 +31,7 @@ const MAX_TEXTURE_WIDTH: usize = 2048;
 /// transparent.
 ///
 /// trace: FR-PAN-09
-fn waterfall_rgba(
+pub(crate) fn waterfall_rgba(
     rows: &[PanRow],
     view_center_hz: i64,
     view_span_hz: u32,
@@ -71,11 +71,17 @@ fn waterfall_rgba(
 
 /// Canvas program drawing a spectrum trace (top) and waterfall (bottom).
 pub struct Spectrum<'a, Message> {
-    /// Latest trace, downsampled dBm bins.
+    /// Latest trace from the UI snapshot: the fallback until the shared history has a row.
     pub latest: &'a [f32],
-    /// Waterfall rows, newest first, each carrying the pan geometry it was
-    /// sampled at so the history can scroll with the VFO (FR-PAN-06).
-    pub waterfall: &'a [PanRow],
+    /// The shared pan history. The trace is read from its newest row at draw time so it is as
+    /// fresh as the waterfall (FR-PAN-13); the CPU waterfall reads its rows from here too,
+    /// each carrying the geometry it was sampled at so history scrolls with the VFO (FR-PAN-06).
+    pub pan: &'a PanHandle,
+    /// Which receiver this pane shows: 0 = main/A, 1 = sub/B.
+    pub rx: usize,
+    /// The waterfall is drawn by the GPU widget under this canvas (FR-PAN-12), so the canvas
+    /// must leave that band transparent and skip the CPU rasteriser.
+    pub gpu_waterfall: bool,
     /// dBm at the top of the spectrum window.
     pub top_dbm: f32,
     /// dB span of the spectrum window.
@@ -163,7 +169,24 @@ impl<Message> canvas::Program<Message> for Spectrum<'_, Message> {
         let spec_h = h * 0.4;
         let wf_h = h - spec_h;
 
-        frame.fill_rectangle(Point::ORIGIN, Size::new(w, h), Color::from_rgb8(10, 10, 14));
+        // The newest row, at draw time. Falls back to the snapshot's latest trace before the
+        // shared history has anything.
+        let newest: Vec<f32> = self
+            .pan
+            .lock()
+            .ok()
+            .and_then(|p| p.newest(self.rx).map(|r| r.bins.clone()))
+            .unwrap_or_else(|| self.latest.to_vec());
+        let latest: &[f32] = &newest;
+
+        // In GPU mode the waterfall band belongs to the shader widget underneath, so only the
+        // spectrum band gets a background here.
+        let bg_h = if self.gpu_waterfall { spec_h } else { h };
+        frame.fill_rectangle(
+            Point::ORIGIN,
+            Size::new(w, bg_h),
+            Color::from_rgb8(10, 10, 14),
+        );
 
         // dB grid + scale over the spectrum area (drawn under the trace).
         let grid = Color::from_rgba8(255, 255, 255, 0.07);
@@ -220,7 +243,7 @@ impl<Message> canvas::Program<Message> for Spectrum<'_, Message> {
             }
 
             // Resolution readout: span and Hz per displayed column.
-            let per_bin = hz_per_bin(self.span_hz, self.latest.len());
+            let per_bin = hz_per_bin(self.span_hz, latest.len());
             let span_khz = self.span_hz as f32 / 1000.0;
             frame.fill_text(Text {
                 content: if per_bin > 0.0 {
@@ -276,10 +299,10 @@ impl<Message> canvas::Program<Message> for Spectrum<'_, Message> {
         }
 
         // Spectrum trace.
-        if self.latest.len() > 1 {
-            let n = self.latest.len();
+        if latest.len() > 1 {
+            let n = latest.len();
             let trace = Path::new(|b| {
-                for (i, &dbm) in self.latest.iter().enumerate() {
+                for (i, &dbm) in latest.iter().enumerate() {
                     let x = bin_to_x(i, n, w);
                     let y = dbm_to_y(dbm, self.top_dbm, self.range_db, spec_h);
                     if i == 0 {
@@ -309,11 +332,19 @@ impl<Message> canvas::Program<Message> for Spectrum<'_, Message> {
         // frequencies it was sampled at, so retuning still *scrolls* the
         // history (FR-PAN-06), rows sampled at another span still map at their
         // own scale, and anything scrolled off-canvas is simply transparent.
-        let rows = self.waterfall.len();
+        let cpu_rows: Vec<PanRow> = if self.gpu_waterfall {
+            Vec::new()
+        } else {
+            self.pan
+                .lock()
+                .map(|p| p.rows(self.rx).iter().cloned().collect())
+                .unwrap_or_default()
+        };
+        let rows = cpu_rows.len();
         if rows > 0 && w >= 1.0 && wf_h >= 1.0 && self.span_hz > 0 {
             let tex_w = (w.round() as usize).clamp(1, MAX_TEXTURE_WIDTH);
             let rgba = waterfall_rgba(
-                self.waterfall,
+                &cpu_rows,
                 self.center_hz as i64,
                 self.span_hz,
                 self.top_dbm,

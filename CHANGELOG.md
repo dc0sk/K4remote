@@ -35,6 +35,18 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
   by default and your choices are saved. Nothing connects to a network and no
   nameplates are drawn yet; the spectrum overlay and the network sources follow.
 
+### Changed
+
+- **A smoother, GPU-drawn spectrum and waterfall.** The waterfall is now drawn by
+  the graphics card and the spectrum refreshes at your display's rate while data
+  is arriving, instead of ten times a second. On a test machine that is about 5×
+  the frame rate at no more CPU, and the cost no longer grows with the size of
+  the waterfall. Nothing changes in how it looks or scrolls. If the waterfall is
+  ever blank, `K4_WATERFALL=cpu` in the environment switches back to the previous
+  drawing; the app also does this by itself when no graphics adapter is found.
+- `--demo` now shows a live, moving spectrum so the panadapter can be inspected
+  without a radio.
+
 ## [0.9.0] — 2026-07-27
 
 ### Added

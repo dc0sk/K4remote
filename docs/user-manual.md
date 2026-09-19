@@ -2,7 +2,7 @@
 title: "K4 Remote — User Manual"
 status: Draft
 version: "0.9.0"
-updated: 2026-07-26
+updated: 2026-09-19
 authors:
   - Simon Keimer (DC0SK)
 ---
@@ -458,6 +458,13 @@ The **theme** (dark / light / high-contrast / follow-system) cycles from the hea
 ---
 
 ## 12. Troubleshooting
+
+**The waterfall is blank, garbled or stutters.**
+The waterfall is drawn by your graphics card. The app falls back to drawing it on the CPU by
+itself when it finds no graphics adapter, but a driver that reports one and then misbehaves can
+still give a blank or wrong picture. Start the app with `K4_WATERFALL=cpu` (for example
+`K4_WATERFALL=cpu k4remote`) to force the CPU drawing, and `K4_WATERFALL=gpu` to force the graphics
+card. If `cpu` fixes it, please report your graphics card and driver.
 
 **The K-Pod isn't detected.**
 Make sure **K-Pod: ON** in Settings and that the device is plugged into the computer. On Linux you
