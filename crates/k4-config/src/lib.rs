@@ -121,6 +121,22 @@ pub struct Prefs {
     /// is found.
     #[serde(default = "default_true")]
     pub auto_update_check: bool,
+    /// Enable KPA1500 linear-amplifier support (FR-AMP-01). Default off
+    /// (opt-in). When on, the app talks to the amp over its **own** Ethernet
+    /// CAT server — a second connection alongside the K4 link, not the K4's
+    /// one-way `EC` passthrough. Host/port/poll are set in the separate
+    /// KPA1500 configuration window.
+    #[serde(default)]
+    pub kpa1500_enabled: bool,
+    /// KPA1500 remote-head host (IP or hostname). Empty until configured.
+    #[serde(default)]
+    pub kpa1500_host: String,
+    /// KPA1500 remote-head TCP command-server port. Default 1500.
+    #[serde(default = "default_kpa1500_port")]
+    pub kpa1500_port: u16,
+    /// KPA1500 telemetry poll interval, milliseconds. Default 500.
+    #[serde(default = "default_kpa1500_poll_ms")]
+    pub kpa1500_poll_ms: u16,
     /// Enable the Elecraft K-Pod USB control surface. Default off (opt-in); the
     /// app runs normally whether or not a K-Pod is attached.
     #[serde(default)]
@@ -344,6 +360,16 @@ fn default_true() -> bool {
     true
 }
 
+/// The KPA1500's TCP command-server port (its remote-head interface).
+fn default_kpa1500_port() -> u16 {
+    1500
+}
+
+/// Default KPA1500 telemetry poll interval, milliseconds.
+fn default_kpa1500_poll_ms() -> u16 {
+    500
+}
+
 impl Default for Prefs {
     fn default() -> Self {
         Self {
@@ -366,6 +392,10 @@ impl Default for Prefs {
             ptt_toggle: true,
             mode_aware_ui: true,
             auto_update_check: true,
+            kpa1500_enabled: false,
+            kpa1500_host: String::new(),
+            kpa1500_port: 1500,
+            kpa1500_poll_ms: 500,
             kpod_enabled: false,
             kpod_buttons: default_kpod_buttons(),
         }

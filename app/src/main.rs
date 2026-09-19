@@ -80,6 +80,17 @@ fn diag_window_settings() -> iced::window::Settings {
     }
 }
 
+/// The detached KPA1500 configuration window (FR-AMP-01): a small fixed dialog
+/// for the amplifier's host/port/poll settings.
+fn kpa1500_window_settings() -> iced::window::Settings {
+    iced::window::Settings {
+        size: iced::Size::new(420.0, 320.0),
+        resizable: false,
+        icon: app_icon(),
+        ..Default::default()
+    }
+}
+
 struct App {
     // connection form
     host: String,
@@ -205,6 +216,15 @@ struct App {
     main_window: iced::window::Id,
     diag_window: Option<iced::window::Id>,
     diag_enabled: bool,
+    // KPA1500 amplifier support (FR-AMP-01): an opt-in toggle plus a detached
+    // configuration window (host/port/poll) for the amp's own Ethernet CAT
+    // server. The window id is present only while the dialog is open; the
+    // enable flag and the connection settings persist.
+    kpa1500_config_window: Option<iced::window::Id>,
+    kpa1500_enabled: bool,
+    kpa1500_host: String,
+    kpa1500_port: String,
+    kpa1500_poll: String,
     // Diagnostics log: show/hide + follow-newest (auto-scroll).
     show_log: bool,
     log_autoscroll: bool,
@@ -757,6 +777,12 @@ enum Message {
     ToggleDiagWindow,
     WindowOpened,
     WindowClosed(iced::window::Id),
+    // KPA1500 amplifier support (FR-AMP-01).
+    ToggleKpa1500,
+    ToggleKpa1500Window,
+    Kpa1500HostChanged(String),
+    Kpa1500PortChanged(String),
+    Kpa1500PollChanged(String),
     ToggleLogAutoscroll,
     LogFilterChanged(String),
     /// A text-editor action from the read-only log view (selection/scroll; edits
@@ -881,6 +907,10 @@ impl App {
         let auto_update_check = prefs.auto_update_check;
         let diag_enabled = prefs.diagnostics_window;
         let tooltips = prefs.tooltips;
+        let kpa1500_enabled = prefs.kpa1500_enabled;
+        let kpa1500_host = prefs.kpa1500_host.clone();
+        let kpa1500_port = prefs.kpa1500_port.to_string();
+        let kpa1500_poll = prefs.kpa1500_poll_ms.to_string();
 
         // Open the main window; the daemon starts with none (FR-DIAG-04).
         let (main_window, open_main) = iced::window::open(iced::window::Settings {
@@ -994,6 +1024,12 @@ impl App {
             main_window,
             diag_window,
             diag_enabled,
+            // The config window opens on demand, not at start-up.
+            kpa1500_config_window: None,
+            kpa1500_enabled,
+            kpa1500_host,
+            kpa1500_port,
+            kpa1500_poll,
             show_log: false,
             log_autoscroll: true,
             log_refresh_div: 0,
@@ -1353,6 +1389,22 @@ impl App {
                     ptt_toggle: self.ptt_toggle,
                     mode_aware_ui: self.mode_aware_ui,
                     auto_update_check: self.auto_update_check,
+                    kpa1500_enabled: self.kpa1500_enabled,
+                    kpa1500_host: self.kpa1500_host.clone(),
+                    // An empty or out-of-range field falls back to the default
+                    // rather than persisting a value the amp can't use.
+                    kpa1500_port: self
+                        .kpa1500_port
+                        .parse::<u16>()
+                        .ok()
+                        .filter(|p| *p != 0)
+                        .unwrap_or(1500),
+                    kpa1500_poll_ms: self
+                        .kpa1500_poll
+                        .parse::<u16>()
+                        .ok()
+                        .filter(|ms| *ms >= 50)
+                        .unwrap_or(500),
                     kpod_enabled: self.kpod_enabled,
                     kpod_buttons: self.kpod_buttons.clone(),
                     ..Default::default()
@@ -2126,6 +2178,13 @@ impl App {
                         return iced::window::close(id);
                     }
                 }
+                // ESC in the KPA1500 config window closes that window (FR-AMP-01).
+                if is_esc && self.kpa1500_config_window == Some(window) {
+                    if let Some(id) = self.kpa1500_config_window.take() {
+                        self.save_config();
+                        return iced::window::close(id);
+                    }
+                }
                 // ESC dismisses an open modal (Settings / About, FR-UI-23) or
                 // cancels an in-progress hotkey capture, before other key handling.
                 if matches!(
@@ -2428,6 +2487,38 @@ impl App {
                     self.diag_enabled = false;
                     self.save_config();
                 }
+                if Some(id) == self.kpa1500_config_window {
+                    // Closing the config window persists whatever was edited;
+                    // the enable toggle and settings survive independently.
+                    self.kpa1500_config_window = None;
+                    self.save_config();
+                }
+            }
+            // KPA1500 support (FR-AMP-01): the enable toggle, the detached
+            // configuration window, and its host/port/poll fields.
+            Message::ToggleKpa1500 => {
+                self.kpa1500_enabled = !self.kpa1500_enabled;
+                self.save_config();
+            }
+            Message::ToggleKpa1500Window => {
+                if let Some(id) = self.kpa1500_config_window.take() {
+                    self.save_config();
+                    return iced::window::close(id);
+                }
+                let (id, open) = iced::window::open(kpa1500_window_settings());
+                self.kpa1500_config_window = Some(id);
+                return open.map(|_| Message::WindowOpened);
+            }
+            Message::Kpa1500HostChanged(v) => {
+                self.kpa1500_host = v.trim().to_string();
+            }
+            Message::Kpa1500PortChanged(v) => {
+                // Keep only digits so the field can never hold an unparseable
+                // port; an empty field falls back to the default on save.
+                self.kpa1500_port = v.chars().filter(char::is_ascii_digit).take(5).collect();
+            }
+            Message::Kpa1500PollChanged(v) => {
+                self.kpa1500_poll = v.chars().filter(char::is_ascii_digit).take(5).collect();
             }
             Message::ToggleLogAutoscroll => {
                 self.log_autoscroll = !self.log_autoscroll;
@@ -5957,10 +6048,88 @@ impl App {
             .into()
     }
 
+    /// The detached KPA1500 configuration window body (FR-AMP-01): the enable
+    /// toggle plus the amplifier's connection settings. Editing a field updates
+    /// its buffer; closing the window (Done / ESC / the window control) persists
+    /// via `save_config`. Telemetry and control land in a later change — this
+    /// window is the enable + connection surface.
+    fn kpa1500_config_view(&self) -> Element<'_, Message> {
+        set_active_theme(self.effective_theme());
+        let dim = role_color(ui::ColorRole::Inactive);
+        let label = |t: &'static str| Text::new(t).size(12).width(Length::Fixed(72.0));
+        let host_row = Row::new()
+            .spacing(8)
+            .align_y(Alignment::Center)
+            .push(label("Host"))
+            .push(
+                TextInput::new("IP or hostname", &self.kpa1500_host)
+                    .on_input(Message::Kpa1500HostChanged)
+                    .size(13)
+                    .width(Length::Fixed(210.0)),
+            );
+        let port_row = Row::new()
+            .spacing(8)
+            .align_y(Alignment::Center)
+            .push(label("Port"))
+            .push(
+                TextInput::new("1500", &self.kpa1500_port)
+                    .on_input(Message::Kpa1500PortChanged)
+                    .size(13)
+                    .width(Length::Fixed(90.0)),
+            );
+        let poll_row = Row::new()
+            .spacing(8)
+            .align_y(Alignment::Center)
+            .push(label("Poll (ms)"))
+            .push(
+                TextInput::new("500", &self.kpa1500_poll)
+                    .on_input(Message::Kpa1500PollChanged)
+                    .size(13)
+                    .width(Length::Fixed(90.0)),
+            );
+        let col = Column::new()
+            .spacing(12)
+            .push(Text::new("KPA1500 Amplifier").size(16))
+            .push(
+                Text::new(
+                    "Connects to the amplifier's own Ethernet remote-control \
+                     server — a second link alongside the K4.",
+                )
+                .size(11)
+                .color(dim),
+            )
+            .push(small_btn_pair(
+                self.kpa1500_enabled,
+                "Support: ON",
+                "Support: OFF",
+                Message::ToggleKpa1500,
+            ))
+            .push(host_row)
+            .push(port_row)
+            .push(poll_row)
+            .push(
+                Container::new(
+                    Row::new()
+                        .push(horizontal_space())
+                        .push(small_btn("Done", Message::ToggleKpa1500Window)),
+                )
+                .width(Length::Fill)
+                .padding([8, 0]),
+            );
+        Container::new(col)
+            .style(panel_style)
+            .padding(16)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+    }
+
     /// Per-window title (daemon).
     fn title(&self, window: iced::window::Id) -> String {
         if Some(window) == self.diag_window {
             "K4 Remote — Diagnostics".into()
+        } else if Some(window) == self.kpa1500_config_window {
+            "K4 Remote — KPA1500".into()
         } else {
             "K4 Remote".into()
         }
@@ -5972,6 +6141,10 @@ impl App {
         // The detached diagnostics window renders only the console (FR-DIAG-04).
         if Some(window) == self.diag_window {
             return self.diag_window_view();
+        }
+        // The detached KPA1500 configuration window (FR-AMP-01).
+        if Some(window) == self.kpa1500_config_window {
+            return self.kpa1500_config_view();
         }
         let dim = role_color(ui::ColorRole::Inactive);
 
@@ -7202,6 +7375,19 @@ impl App {
             .push(self.backup_section_view())
             .push(Text::new("K-Pod function switches").size(12).color(dim))
             .push(self.kpod_buttons_view())
+            .push(Text::new("KPA1500 amplifier").size(12).color(dim))
+            .push(
+                Row::new()
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                    .push(small_btn_pair(
+                        self.kpa1500_enabled,
+                        "Support: ON",
+                        "Support: OFF",
+                        Message::ToggleKpa1500,
+                    ))
+                    .push(small_btn("Configuration…", Message::ToggleKpa1500Window)),
+            )
             .push(
                 Container::new(
                     Row::new()
