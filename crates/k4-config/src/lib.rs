@@ -137,6 +137,15 @@ pub struct Prefs {
     /// KPA1500 telemetry poll interval, milliseconds. Default 500.
     #[serde(default = "default_kpa1500_poll_ms")]
     pub kpa1500_poll_ms: u16,
+    /// Longest a spot may be before its nameplate is hidden, minutes
+    /// (FR-SPOT-03). Default 15; read through [`Prefs::spot_max_age_min`], which
+    /// clamps a hand-edited value back into range.
+    #[serde(default = "default_spot_max_age_min")]
+    pub spot_max_age_min: u32,
+    /// Which spotting networks feed the spectrum nameplates, and each one's
+    /// settings (FR-SPOT-04). Every network defaults to off.
+    #[serde(default)]
+    pub spot_networks: SpotNetworks,
     /// Enable the Elecraft K-Pod USB control surface. Default off (opt-in); the
     /// app runs normally whether or not a K-Pod is attached.
     #[serde(default)]
@@ -370,6 +379,166 @@ fn default_kpa1500_poll_ms() -> u16 {
     500
 }
 
+/// Default and bounds for the spot age limit, minutes (FR-SPOT-03).
+pub const SPOT_MAX_AGE_DEFAULT_MIN: u32 = 15;
+pub const SPOT_MAX_AGE_MIN_MIN: u32 = 1;
+pub const SPOT_MAX_AGE_MAX_MIN: u32 = 24 * 60;
+
+fn default_spot_max_age_min() -> u32 {
+    SPOT_MAX_AGE_DEFAULT_MIN
+}
+
+/// Bring a spot age limit (minutes) into `1 min ..= 24 h`; anything outside the
+/// range — a hand-edited config, a stray `0` — falls back to the default rather
+/// than hiding every spot or keeping them forever.
+pub fn sanitise_spot_max_age_min(min: u32) -> u32 {
+    if (SPOT_MAX_AGE_MIN_MIN..=SPOT_MAX_AGE_MAX_MIN).contains(&min) {
+        min
+    } else {
+        SPOT_MAX_AGE_DEFAULT_MIN
+    }
+}
+
+/// Parse the Settings age field: digits only, in range, else the default
+/// (FR-SPOT-03) — an empty or unusable entry never becomes a saved value.
+pub fn parse_spot_max_age_min(input: &str) -> u32 {
+    input
+        .trim()
+        .parse::<u32>()
+        .map(sanitise_spot_max_age_min)
+        .unwrap_or(SPOT_MAX_AGE_DEFAULT_MIN)
+}
+
+/// Default PSK Reporter poll interval, seconds. The lower bound the service
+/// tolerates is settled with the source itself (FR-SPOT-05, `OP-7`).
+pub const SPOT_PSK_POLL_DEFAULT_SECS: u32 = 300;
+
+/// Parse a Settings port field: a non-zero `u16`, else `default` — an empty or
+/// unusable entry never becomes a saved port (FR-SPOT-04).
+pub fn parse_spot_port(input: &str, default: u16) -> u16 {
+    input
+        .trim()
+        .parse::<u16>()
+        .ok()
+        .filter(|p| *p != 0)
+        .unwrap_or(default)
+}
+
+/// Parse a Settings poll-interval field, seconds: non-zero, else the PSK
+/// Reporter default (FR-SPOT-04).
+pub fn parse_spot_poll_secs(input: &str) -> u32 {
+    input
+        .trim()
+        .parse::<u32>()
+        .ok()
+        .filter(|s| *s != 0)
+        .unwrap_or(SPOT_PSK_POLL_DEFAULT_SECS)
+}
+
+/// PSK Reporter as a spot source (FR-SPOT-04).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PskReporterPrefs {
+    /// Off until the operator turns it on.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Poll interval, seconds.
+    #[serde(default = "default_psk_poll_secs")]
+    pub poll_secs: u32,
+}
+
+fn default_psk_poll_secs() -> u32 {
+    SPOT_PSK_POLL_DEFAULT_SECS
+}
+
+impl Default for PskReporterPrefs {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            poll_secs: SPOT_PSK_POLL_DEFAULT_SECS,
+        }
+    }
+}
+
+/// A telnet spot source — the Reverse Beacon Network or a DX cluster
+/// (FR-SPOT-04, connected by FR-SPOT-07).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClusterPrefs {
+    /// Off until the operator turns it on.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Host to connect to. Empty until configured (for a DX cluster).
+    #[serde(default)]
+    pub host: String,
+    /// TCP port.
+    #[serde(default)]
+    pub port: u16,
+    /// Callsign to log in with; empty means the operator's own.
+    #[serde(default)]
+    pub login: String,
+}
+
+impl ClusterPrefs {
+    /// The Reverse Beacon Network's telnet feed. The host and port are
+    /// prefilled defaults, still to be confirmed against RBN's own documentation
+    /// (`OP-7`); the network stays off until enabled.
+    pub fn rbn() -> Self {
+        Self {
+            enabled: false,
+            host: "telnet.reversebeacon.net".into(),
+            port: 7000,
+            login: String::new(),
+        }
+    }
+
+    /// A DX cluster: no host until the operator picks one.
+    pub fn dx_cluster() -> Self {
+        Self {
+            enabled: false,
+            host: String::new(),
+            port: 7300,
+            login: String::new(),
+        }
+    }
+}
+
+/// The spotting networks and their settings (FR-SPOT-04). All off by default,
+/// so a fresh install — or a config from before this feature — contacts no third
+/// party.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpotNetworks {
+    #[serde(default)]
+    pub psk_reporter: PskReporterPrefs,
+    #[serde(default = "ClusterPrefs::rbn")]
+    pub rbn: ClusterPrefs,
+    #[serde(default = "ClusterPrefs::dx_cluster")]
+    pub dx_cluster: ClusterPrefs,
+}
+
+impl Default for SpotNetworks {
+    fn default() -> Self {
+        Self {
+            psk_reporter: PskReporterPrefs::default(),
+            rbn: ClusterPrefs::rbn(),
+            dx_cluster: ClusterPrefs::dx_cluster(),
+        }
+    }
+}
+
+impl SpotNetworks {
+    /// Whether any network is switched on.
+    pub fn any_enabled(&self) -> bool {
+        self.psk_reporter.enabled || self.rbn.enabled || self.dx_cluster.enabled
+    }
+}
+
+impl Prefs {
+    /// The spot age limit in minutes, always within `1 min ..= 24 h`
+    /// (FR-SPOT-03).
+    pub fn spot_max_age_min(&self) -> u32 {
+        sanitise_spot_max_age_min(self.spot_max_age_min)
+    }
+}
+
 impl Default for Prefs {
     fn default() -> Self {
         Self {
@@ -396,6 +565,8 @@ impl Default for Prefs {
             kpa1500_host: String::new(),
             kpa1500_port: 1500,
             kpa1500_poll_ms: 500,
+            spot_max_age_min: SPOT_MAX_AGE_DEFAULT_MIN,
+            spot_networks: SpotNetworks::default(),
             kpod_enabled: false,
             kpod_buttons: default_kpod_buttons(),
         }

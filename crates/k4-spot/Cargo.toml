@@ -1,0 +1,11 @@
+[package]
+name = "k4-spot"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Spot-nameplate logic: spot age filtering (FR-SPOT-03); the spot model, store and sources build on it."
+
+[dependencies]
+# Pure logic, dependency-free — network I/O lives in the app's source workers.

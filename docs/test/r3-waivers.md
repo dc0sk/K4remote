@@ -25,8 +25,6 @@ features not yet implemented. Everything else must carry a real test.
 | `FR-VFO-ID` | Station-ID (`ID`) set/display (Ver `T`, priority `S`): not yet implemented — planned. Remove this waiver and add a round-trip test when the feature lands. |
 | `FR-SPOT-01` | Spot nameplates (marker placement; Ver `T`, priority `S`): not yet implemented — planned (SRS v0.56, `OP-7`). Remove this waiver and add the named test when the feature lands. |
 | `FR-SPOT-02` | Spot nameplates (declutter layout; Ver `T`, priority `S`): not yet implemented — planned (SRS v0.56, `OP-7`). Remove this waiver and add the named test when the feature lands. |
-| `FR-SPOT-03` | Spot nameplates (max-age filter + persistence; Ver `T`, priority `S`): not yet implemented — planned (SRS v0.56, `OP-7`). Remove this waiver and add the named test when the feature lands. |
-| `FR-SPOT-04` | Spot nameplates (network selection + persistence; Ver `T`, priority `S`): not yet implemented — planned (SRS v0.56, `OP-7`). Remove this waiver and add the named test when the feature lands. |
 | `FR-SPOT-05` | Spot nameplates (PSK Reporter source; Ver `T`, priority `S`): not yet implemented — planned (SRS v0.56, `OP-7`). Remove this waiver and add the named test when the feature lands. |
 | `FR-SPOT-06` | Spot nameplates (spot store; Ver `T`, priority `S`): not yet implemented — planned (SRS v0.56, `OP-7`). Remove this waiver and add the named test when the feature lands. |
 | `FR-SPOT-07` | Spot nameplates (cluster sources; Ver `T`, priority `S`): not yet implemented — planned (SRS v0.56, `OP-7`). Remove this waiver and add the named test when the feature lands. |
