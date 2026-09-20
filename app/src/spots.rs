@@ -29,14 +29,14 @@ const DEMO: &[(&str, i64, Network, u64)] = &[
     ("EA3FOO", -12_000, Network::Rbn, 90),
     ("OK1ZZ", -11_800, Network::PskReporter, 30),
     ("G4XYZ", -11_700, Network::Rbn, 300),
-    ("HB9QQ", -3_000, Network::PskReporter, 10),
+    ("HB9QQ", -3_000, Network::DxCluster, 10),
     // A tight cluster of five, more than three lanes can hold.
     ("JA1AAA", 1_200, Network::Rbn, 5),
     ("W1AW", 1_350, Network::PskReporter, 60),
     ("N2XX", 1_500, Network::Rbn, 120),
     ("VE3CCC", 1_620, Network::PskReporter, 200),
     ("VK2DDD", 1_700, Network::Rbn, 400),
-    ("SM5DDD", 9_500, Network::Rbn, 400),
+    ("SM5DDD", 9_500, Network::DxCluster, 400),
     ("PY2EEE", 15_000, Network::PskReporter, 600),
     ("ZL1FFF", 23_900, Network::Rbn, 800), // just inside the right edge
     ("VK9GGG", 40_000, Network::Rbn, 15),  // outside a 48 kHz view

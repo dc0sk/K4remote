@@ -123,8 +123,8 @@ Legend: ✅ test-traced · 🟡 waived (see r3-waivers.md) · ⚪ not test-requi
 | `FR-SPOT-07` | S | T/D | ✅ |
 | `FR-SPOT-08` | C | D | ⚪ |
 | `FR-SPOT-09` | S | T/D | ✅ |
-| `FR-SPOT-10` | C | T/D | ⚪ |
-| `FR-SPOT-11` | C | T/D | ⚪ |
+| `FR-SPOT-10` | C | T/D | ✅ |
+| `FR-SPOT-11` | C | T/D | ✅ |
 | `FR-SPOT-12` | S | I/D | ⚪ |
 | `FR-STREAM-01` | M | T | ✅ |
 | `FR-STREAM-02` | M | T | ✅ |

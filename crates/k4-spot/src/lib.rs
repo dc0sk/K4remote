@@ -13,7 +13,9 @@ pub mod mqtt;
 pub mod mqtt_source;
 pub mod psk;
 mod store;
+pub mod style;
 pub mod telnet;
+pub mod tooltip;
 
 pub use model::{
     normalise_callsign, sanitise_text, Network, SourceError, Spot, SpotSource, MAX_TEXT_LEN,

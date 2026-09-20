@@ -109,52 +109,85 @@ pub struct Spectrum<'a, Message> {
     pub on_wheel: fn(bool, i32) -> Message,
 }
 
+/// The spots shown on a pane and where their plates go: the one layout that drawing, hover and
+/// click all use, so a click lands on what was drawn (FR-SPOT-10).
+struct SpotView {
+    spots: Vec<k4_spot::Spot>,
+    items: Vec<k4_spot::layout::Item>,
+    layout: k4_spot::layout::Layout,
+    now: u64,
+}
+
 impl<Message> Spectrum<'_, Message> {
+    /// Every fresh spot inside the view, and the layout of their plates for a spectrum band
+    /// `spec_h` tall and `w` wide. `None` when there is nothing to show or no room for a plate.
+    fn spot_view(&self, w: f32, spec_h: f32) -> Option<SpotView> {
+        use k4_spot::layout::{declutter, label_width, max_lanes, spot_x, Item};
+        let lanes = max_lanes(spec_h);
+        if lanes == 0 || self.span_hz == 0 {
+            return None;
+        }
+        let now = unix_now();
+        let mut spots = Vec::new();
+        let mut items = Vec::new();
+        for s in self.spots.lock().ok()?.spots() {
+            if !k4_spot::is_fresh(now, s.time, self.spot_max_age_secs) {
+                continue;
+            }
+            let Some(x) = spot_x(s.freq_hz, self.center_hz, self.span_hz, w) else {
+                continue;
+            };
+            items.push(Item {
+                x,
+                label_w: label_width(&s.call),
+                time: s.time,
+            });
+            spots.push(s.clone());
+        }
+        if spots.is_empty() {
+            return None;
+        }
+        let layout = declutter(&items, w, lanes);
+        Some(SpotView {
+            spots,
+            items,
+            layout,
+            now,
+        })
+    }
+
+    /// The spot whose nameplate is under `pos` (in the pane), if any (FR-SPOT-10).
+    fn spot_at(&self, pos: Point, w: f32, spec_h: f32) -> Option<k4_spot::Spot> {
+        let view = self.spot_view(w, spec_h)?;
+        let i = k4_spot::layout::hit_test(&view.items, &view.layout, pos.x, pos.y)?;
+        view.spots.into_iter().nth(i)
+    }
+
     /// Draw a nameplate for every current spot inside the view: a small callsign label in one of a
     /// few lanes at the top of the spectrum band, and a tick down from it to the trace at the
     /// spot's frequency. Labels are moved to keep neighbours from covering each other; the tick
-    /// never is, so it always marks the true frequency (FR-SPOT-01/02).
-    fn draw_spots(&self, frame: &mut Frame, w: f32, spec_h: f32, latest: &[f32]) {
-        use k4_spot::layout::{
-            declutter, label_width, max_lanes, spot_x, Item, LANES_TOP, LANE_H, PLATE_PAD,
-        };
-        let lanes = max_lanes(spec_h);
-        if lanes == 0 || self.span_hz == 0 {
+    /// never is, so it always marks the true frequency (FR-SPOT-01/02). Each is coloured for its
+    /// source and fades as it ages (FR-SPOT-11), and hovering one shows its details (FR-SPOT-10).
+    fn draw_spots(
+        &self,
+        frame: &mut Frame,
+        w: f32,
+        spec_h: f32,
+        latest: &[f32],
+        pointer: Option<Point>,
+    ) {
+        use k4_spot::layout::{hit_test, LANES_TOP, LANE_H, PLATE_H, PLATE_PAD};
+        use k4_spot::style::{age_alpha, source_rgb};
+        use k4_spot::tooltip::{tooltip_lines, tooltip_origin, tooltip_size, LINE_H};
+        let Some(view) = self.spot_view(w, spec_h) else {
             return;
-        }
-        let now = unix_now();
-        // (callsign, marker x, item for the layout), for every fresh spot inside the view.
-        let visible: Vec<(String, Item)> = match self.spots.lock() {
-            Ok(store) => store
-                .spots()
-                .iter()
-                .filter(|s| k4_spot::is_fresh(now, s.time, self.spot_max_age_secs))
-                .filter_map(|s| {
-                    let x = spot_x(s.freq_hz, self.center_hz, self.span_hz, w)?;
-                    Some((
-                        s.call.clone(),
-                        Item {
-                            x,
-                            label_w: label_width(&s.call),
-                            time: s.time,
-                        },
-                    ))
-                })
-                .collect(),
-            Err(_) => return,
         };
-        if visible.is_empty() {
-            return;
-        }
-        let items: Vec<Item> = visible.iter().map(|(_, it)| *it).collect();
-        let layout = declutter(&items, w, lanes);
 
         let plate = Color::from_rgba8(18, 22, 32, 0.88);
-        let marker = Color::from_rgba8(255, 200, 80, 0.9);
-        let text = Color::from_rgb8(236, 238, 246);
-        let plate_h = LANE_H - 2.0;
-        for p in &layout.placed {
-            let (call, it) = &visible[p.index];
+        for p in &view.layout.placed {
+            let (spot, it) = (&view.spots[p.index], &view.items[p.index]);
+            let (r, g, b) = source_rgb(spot.network);
+            let alpha = age_alpha(view.now.saturating_sub(spot.time), self.spot_max_age_secs);
             let y = LANES_TOP + p.lane as f32 * LANE_H;
             // The tick runs from the plate down to the trace at this frequency (never upward, so a
             // strong signal above the labels still gets a short tick rather than a backwards one).
@@ -165,25 +198,62 @@ impl<Message> Spectrum<'_, Message> {
             } else {
                 spec_h
             };
-            let top = y + plate_h;
+            let top = y + PLATE_H;
             frame.stroke(
                 &Path::line(Point::new(it.x, top), Point::new(it.x, trace_y.max(top))),
-                Stroke::default().with_width(1.0).with_color(marker),
+                Stroke::default()
+                    .with_width(1.0)
+                    .with_color(Color::from_rgba8(r, g, b, alpha * 0.9)),
             );
-            frame.fill_rectangle(Point::new(p.left, y), Size::new(it.label_w, plate_h), plate);
+            frame.fill_rectangle(Point::new(p.left, y), Size::new(it.label_w, PLATE_H), plate);
             frame.fill_text(Text {
-                content: call.clone(),
+                content: spot.call.clone(),
                 position: Point::new(p.left + PLATE_PAD, y + 1.0),
-                color: text,
+                color: Color::from_rgba8(r, g, b, alpha),
                 size: Pixels(9.0),
                 ..Text::default()
             });
         }
-        if layout.dropped > 0 {
+        if view.layout.dropped > 0 {
             frame.fill_text(Text {
-                content: format!("+{}", layout.dropped),
+                content: format!("+{}", view.layout.dropped),
                 position: Point::new(34.0, 2.0),
-                color: marker,
+                color: Color::from_rgb8(170, 176, 188),
+                size: Pixels(9.0),
+                ..Text::default()
+            });
+        }
+
+        // Hover: the details of the spot under the pointer, drawn last so nothing covers them.
+        let Some(at) = pointer else { return };
+        let Some(i) = hit_test(&view.items, &view.layout, at.x, at.y) else {
+            return;
+        };
+        let spot = &view.spots[i];
+        let lines = tooltip_lines(spot, view.now);
+        let size = tooltip_size(&lines);
+        let (x, y) = tooltip_origin((at.x, at.y), size, (w, spec_h * 2.5));
+        let (r, g, b) = source_rgb(spot.network);
+        frame.fill_rectangle(
+            Point::new(x, y),
+            Size::new(size.0, size.1),
+            Color::from_rgba8(18, 22, 32, 0.97),
+        );
+        frame.stroke(
+            &Path::rectangle(Point::new(x, y), Size::new(size.0, size.1)),
+            Stroke::default()
+                .with_width(1.0)
+                .with_color(Color::from_rgba8(r, g, b, 0.7)),
+        );
+        for (n, line) in lines.iter().enumerate() {
+            frame.fill_text(Text {
+                content: line.clone(),
+                position: Point::new(x + PLATE_PAD, y + PLATE_PAD + n as f32 * LINE_H),
+                color: if n == 0 {
+                    Color::from_rgb8(r, g, b)
+                } else {
+                    Color::from_rgb8(220, 224, 234)
+                },
                 size: Pixels(9.0),
                 ..Text::default()
             });
@@ -208,12 +278,19 @@ impl<Message> canvas::Program<Message> for Spectrum<'_, Message> {
         };
         match event {
             // Click → QSY. Return `Ignored` so a wrapping mouse_area can still
-            // select this pane's TX VFO in dual view.
+            // select this pane's TX VFO in dual view. A click on a spot's nameplate tunes to that
+            // spot's frequency (FR-SPOT-10); anywhere else, to the clicked position. Tuning only:
+            // nothing here can key the transmitter.
             canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
                 if self.span_hz > 0 =>
             {
-                let frac = (pos.x / bounds.width).clamp(0.0, 1.0) as f64 - 0.5;
-                let hz = (self.center_hz as f64 + frac * self.span_hz as f64).max(0.0) as u64;
+                let hz = match self.spot_at(pos, bounds.width, bounds.height * 0.4) {
+                    Some(spot) => spot.freq_hz,
+                    None => {
+                        let frac = (pos.x / bounds.width).clamp(0.0, 1.0) as f64 - 0.5;
+                        (self.center_hz as f64 + frac * self.span_hz as f64).max(0.0) as u64
+                    }
+                };
                 (
                     canvas::event::Status::Ignored,
                     Some((self.on_qsy)(self.is_b, hz)),
@@ -249,7 +326,7 @@ impl<Message> canvas::Program<Message> for Spectrum<'_, Message> {
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
-        _cursor: mouse::Cursor,
+        cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
         let (w, h) = (bounds.width, bounds.height);
@@ -408,7 +485,7 @@ impl<Message> canvas::Program<Message> for Spectrum<'_, Message> {
         }
 
         // Spot nameplates over the spectrum (FR-SPOT-01/02).
-        self.draw_spots(&mut frame, w, spec_h, latest);
+        self.draw_spots(&mut frame, w, spec_h, latest, cursor.position_in(bounds));
 
         // Waterfall (newest row at the top of its band), rasterised into one
         // RGBA image and drawn with a single `draw_image`.
@@ -614,5 +691,201 @@ mod tests {
         let rows = vec![row(14_200_000, 50_000, vec![-60.0; 17])];
         let rgba = waterfall_rgba(&rows, 14_200_000, 50_000, -30.0, 100.0, tex_w);
         assert!((0..tex_w).all(|c| alpha(&rgba, tex_w, c, 0) == 0xFF));
+    }
+}
+
+#[cfg(test)]
+mod spot_click_tests {
+    use super::*;
+    use crate::spots::unix_now;
+    use crate::worker::PanShared;
+    use iced::widget::canvas::Program;
+    use k4_spot::{Network, Spot, SpotStore};
+    use std::sync::{Arc, Mutex};
+
+    const CENTER: u64 = 14_074_000;
+    const SPAN: u32 = 48_000;
+    const W: f32 = 1000.0;
+    const H: f32 = 300.0;
+
+    fn qsy(is_b: bool, hz: u64) -> (bool, u64) {
+        (is_b, hz)
+    }
+    fn wheel(is_b: bool, dir: i32) -> (bool, u64) {
+        (is_b, dir as u64)
+    }
+
+    fn store(spots: &[(&str, u64, u64)]) -> SpotHandle {
+        let mut s = SpotStore::default();
+        for (call, freq, age) in spots {
+            s.insert(Spot::new(call, *freq, unix_now() - age, Network::Rbn).unwrap());
+        }
+        Arc::new(Mutex::new(s))
+    }
+
+    fn with<R>(spots: &SpotHandle, f: impl FnOnce(&Spectrum<'_, (bool, u64)>) -> R) -> R {
+        let pan: PanHandle = Arc::new(Mutex::new(PanShared::default()));
+        let sp = Spectrum {
+            latest: &[],
+            pan: &pan,
+            rx: 0,
+            gpu_waterfall: true,
+            spots,
+            spot_max_age_secs: 900,
+            top_dbm: -40.0,
+            range_db: 90.0,
+            is_b: false,
+            center_hz: CENTER,
+            span_hz: SPAN,
+            vfo_hz: CENTER,
+            passband_hz: None,
+            on_qsy: qsy,
+            on_wheel: wheel,
+        };
+        f(&sp)
+    }
+
+    fn click(sp: &Spectrum<'_, (bool, u64)>, x: f32, y: f32) -> Option<(bool, u64)> {
+        let bounds = Rectangle::new(Point::ORIGIN, Size::new(W, H));
+        let (_, msg) = sp.update(
+            &mut (),
+            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+            bounds,
+            mouse::Cursor::Available(Point::new(x, y)),
+        );
+        msg
+    }
+
+    /// What a click at `x` tunes to when it is not on a plate: the position under the pointer.
+    fn position_hz(x: f32) -> u64 {
+        let frac = f64::from(x / W).clamp(0.0, 1.0) - 0.5;
+        (CENTER as f64 + frac * f64::from(SPAN)) as u64
+    }
+
+    /// FR-SPOT-10: a click on a nameplate tunes to that spot's own frequency, not to wherever on the
+    /// plate the pointer happened to be; a click anywhere else still tunes to the pointer's position;
+    /// a spot that has aged out or lies outside the view cannot be clicked.
+    /// trace: FR-SPOT-10
+    #[test]
+    fn fr_spot_10_click_on_a_nameplate_tunes_to_the_spot() {
+        let near = CENTER + 10_000;
+        let far = CENTER - 20_000;
+        let store = store(&[
+            ("K1AAA", near, 30),
+            ("K2BBB", far, 60),
+            ("K3OLD", CENTER + 2_000, 3_600), // older than the 900 s limit
+            ("K4OUT", CENTER + 90_000, 10),   // outside the view
+        ]);
+        with(&store, |sp| {
+            let spec_h = H * 0.4;
+            let view = sp.spot_view(W, spec_h).expect("two spots are shown");
+            assert_eq!(
+                view.spots.len(),
+                2,
+                "the old and the out-of-view spot are not shown"
+            );
+            let plate = |call: &str| {
+                let p = view
+                    .layout
+                    .placed
+                    .iter()
+                    .find(|p| view.spots[p.index].call == call)
+                    .expect("placed");
+                let it = view.items[p.index];
+                let y = k4_spot::layout::LANES_TOP + p.lane as f32 * k4_spot::layout::LANE_H;
+                (p.left, it.label_w, y, it.x)
+            };
+
+            // Click near the LEFT edge of K1AAA's plate: the pointer's position is nowhere near the
+            // spot's frequency, yet the click tunes to the spot exactly.
+            let (left, w_plate, y, marker_x) = plate("K1AAA");
+            let (cx, cy) = (left + 1.0, y + 3.0);
+            assert_ne!(
+                position_hz(cx),
+                near,
+                "test setup: the pointer is not on the frequency"
+            );
+            assert_eq!(click(sp, cx, cy), Some((false, near)));
+            // …and near the right edge.
+            assert_eq!(click(sp, left + w_plate - 1.0, cy), Some((false, near)));
+            assert!(
+                (marker_x - (left + w_plate / 2.0)).abs() <= w_plate,
+                "the plate is by its marker"
+            );
+
+            // The other spot's plate tunes to the other spot's frequency.
+            let (l2, _, y2, _) = plate("K2BBB");
+            assert_eq!(click(sp, l2 + 2.0, y2 + 3.0), Some((false, far)));
+
+            // Just past the plate, and over the trace: the pointer's own position.
+            assert_eq!(
+                click(sp, left + w_plate + 2.0, cy),
+                Some((false, position_hz(left + w_plate + 2.0)))
+            );
+            assert_eq!(click(sp, cx, 200.0), Some((false, position_hz(cx))));
+            // Where the OLD spot's plate would have been (2 kHz right of centre): no plate, so the
+            // click tunes to the position, and to nothing else.
+            let old_x = W * (0.5 + 2_000.0 / SPAN as f32);
+            assert_eq!(click(sp, old_x, 20.0), Some((false, position_hz(old_x))));
+        });
+    }
+
+    /// FR-SPOT-10: the click path only tunes. It returns the tune message for the pane it belongs to
+    /// and never anything else; a right click and a click outside the pane do nothing.
+    /// trace: FR-SPOT-10
+    #[test]
+    fn fr_spot_10_only_a_left_click_inside_the_pane_tunes() {
+        let store = store(&[("K1AAA", CENTER + 10_000, 30)]);
+        with(&store, |sp| {
+            let bounds = Rectangle::new(Point::ORIGIN, Size::new(W, H));
+            let right = sp.update(
+                &mut (),
+                canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)),
+                bounds,
+                mouse::Cursor::Available(Point::new(500.0, 20.0)),
+            );
+            assert_eq!(right.1, None, "a right click does nothing");
+            let outside = sp.update(
+                &mut (),
+                canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+                bounds,
+                mouse::Cursor::Available(Point::new(W + 50.0, 20.0)),
+            );
+            assert_eq!(outside.1, None, "a click outside the pane does nothing");
+            let unavailable = sp.update(
+                &mut (),
+                canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+                bounds,
+                mouse::Cursor::Unavailable,
+            );
+            assert_eq!(unavailable.1, None);
+            // With no span known there is nothing to map a click to.
+            let no_span = Spectrum {
+                span_hz: 0,
+                ..clone_view(sp)
+            };
+            assert_eq!(click(&no_span, 500.0, 20.0), None);
+        });
+    }
+
+    /// A copy of the program with the same borrows, for a variation.
+    fn clone_view<'a>(sp: &Spectrum<'a, (bool, u64)>) -> Spectrum<'a, (bool, u64)> {
+        Spectrum {
+            latest: sp.latest,
+            pan: sp.pan,
+            rx: sp.rx,
+            gpu_waterfall: sp.gpu_waterfall,
+            spots: sp.spots,
+            spot_max_age_secs: sp.spot_max_age_secs,
+            top_dbm: sp.top_dbm,
+            range_db: sp.range_db,
+            is_b: sp.is_b,
+            center_hz: sp.center_hz,
+            span_hz: sp.span_hz,
+            vfo_hz: sp.vfo_hz,
+            passband_hz: sp.passband_hz,
+            on_qsy: sp.on_qsy,
+            on_wheel: sp.on_wheel,
+        }
     }
 }

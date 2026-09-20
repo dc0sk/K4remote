@@ -53,6 +53,12 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
   nothing identifying; only the bands you are on are requested, and nothing is
   requested when no radio is connected. (This replaces the poll interval the
   setting used to have.)
+- **Nameplates you can click, and that show where they came from.** Click a
+  nameplate on the spectrum to tune to that station's frequency, and hover one
+  to see its callsign, frequency, mode, where it was reported, who heard it, the
+  signal report and how long ago. Plates are coloured by source (amber RBN, blue
+  PSK Reporter, lilac DX cluster) and fade as they age, so the fresh ones stand
+  out.
 
 ### Changed
 

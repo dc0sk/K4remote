@@ -452,6 +452,13 @@ For RBN and DX cluster set the **Login** to **your own callsign**: clusters requ
 is not. Only spots within about 300 kHz of a VFO are kept; the rest are dropped, and a flood is
 rate-limited (shown as "shed").
 
+**Click a plate to tune** to that station's frequency (a click anywhere else on the spectrum still
+tunes to the spot under the pointer). Nothing here transmits. **Hover a plate** to see its callsign,
+frequency and mode, which network reported it and who heard it, the signal report, and how long ago.
+
+Plates are coloured by where the spot came from — **amber** RBN, **blue** PSK Reporter, **lilac** DX
+cluster — and fade as they age, down to half strength at the age limit, so the freshest stand out.
+
 To see the display without connecting anything, start the app with `--demo`: it shows sample spots.
 
 > 📷 **Screenshot needed — `screenshots/settings-backup.png`:** The **K4 settings backup** section

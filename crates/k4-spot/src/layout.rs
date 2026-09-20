@@ -10,6 +10,8 @@
 pub const LANE_H: f32 = 13.0;
 /// Top of the first lane: clear of the span/resolution readout in the corner.
 pub const LANES_TOP: f32 = 14.0;
+/// Height of a plate within its lane: a little less than the lane, so lanes do not touch.
+pub const PLATE_H: f32 = LANE_H - 2.0;
 /// Most lanes ever used.
 pub const MAX_LANES: usize = 3;
 /// Estimated width of one label character, pixels. The label font is proportional, so this is an
@@ -125,10 +127,85 @@ pub fn declutter(items: &[Item], width: f32, lanes: usize) -> Layout {
     out
 }
 
+/// The item whose plate is under a pointer at `(x, y)` in the pane, if any. Only plates count — the
+/// gaps between them, and the rest of the pane, do not — and the answer is the item's index in the
+/// slice handed to [`declutter`], not its position in the layout. The geometry is the one the plates
+/// are drawn with, so a click lands on what was seen.
+pub fn hit_test(items: &[Item], layout: &Layout, x: f32, y: f32) -> Option<usize> {
+    layout.placed.iter().find_map(|p| {
+        let top = LANES_TOP + p.lane as f32 * LANE_H;
+        let w = items[p.index].label_w;
+        (x >= p.left && x < p.left + w && y >= top && y < top + PLATE_H).then_some(p.index)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use k4_stream::render::bin_to_x;
+
+    /// FR-SPOT-10: a pointer over a plate finds that plate's spot — by the index it was given, not
+    /// its place in the layout — and a pointer over a gap, a lane separator or empty pane finds none.
+    /// trace: FR-SPOT-10
+    #[test]
+    fn fr_spot_10_hit_test_finds_the_plate_under_the_pointer() {
+        // Three spots given in an order unlike the layout's (which sorts by position). Two share a
+        // marker so they stack in two lanes.
+        let items = [
+            item(500.0, 60.0, 30),
+            item(100.0, 40.0, 10),
+            item(500.0, 60.0, 20),
+        ];
+        let l = declutter(&items, 800.0, 2);
+        assert_eq!(l.dropped, 0);
+        let lane_y = |lane: usize| LANES_TOP + lane as f32 * LANE_H;
+        for p in &l.placed {
+            let it = items[p.index];
+            let (top, mid_x) = (lane_y(p.lane), p.left + it.label_w / 2.0);
+            // The middle of the plate finds this very item.
+            assert_eq!(
+                hit_test(&items, &l, mid_x, top + PLATE_H / 2.0),
+                Some(p.index)
+            );
+            // The left edge is inside, the right edge is not; likewise top and bottom.
+            assert_eq!(hit_test(&items, &l, p.left, top), Some(p.index));
+            assert_eq!(hit_test(&items, &l, p.left + it.label_w, top), None);
+            assert_eq!(
+                hit_test(&items, &l, mid_x, top + PLATE_H),
+                None,
+                "the bottom edge is outside"
+            );
+            assert_eq!(hit_test(&items, &l, mid_x, top - 0.1), None, "just above");
+        }
+        // Empty pane, the strip above the first lane, and far below.
+        assert_eq!(
+            hit_test(&items, &l, 300.0, LANES_TOP + 0.5),
+            None,
+            "between the plates"
+        );
+        assert_eq!(hit_test(&items, &l, 400.0, 5.0), None, "above the lanes");
+        assert_eq!(hit_test(&items, &l, 400.0, 250.0), None, "over the trace");
+        // Nothing placed, nothing to hit.
+        assert_eq!(
+            hit_test(&items, &Layout::default(), 500.0, LANES_TOP + 1.0),
+            None
+        );
+        // Two plates in different lanes at the same x are told apart by y alone.
+        let stacked = l
+            .placed
+            .iter()
+            .filter(|p| items[p.index].x == 500.0)
+            .count();
+        assert_eq!(stacked, 2);
+        let top_lane_hit = hit_test(&items, &l, 500.0, lane_y(0) + 1.0).unwrap();
+        let second_lane_hit = hit_test(&items, &l, 500.0, lane_y(1) + 1.0).unwrap();
+        assert_ne!(top_lane_hit, second_lane_hit);
+        assert_eq!(
+            items[top_lane_hit].time, 30,
+            "the newest is in the top lane"
+        );
+        assert_eq!(items[second_lane_hit].time, 20);
+    }
 
     /// FR-SPOT-01: a spot at the frequency of a trace bin's cell centre lands on exactly the x the
     /// trace draws that bin at; outside the view it draws nothing; and it follows a retune or a
