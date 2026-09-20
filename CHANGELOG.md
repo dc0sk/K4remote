@@ -46,8 +46,13 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
   end-users use a DX cluster that carries its spots rather than its own relay
   servers, so the relay is prefilled but off and a DX cluster is the route it
   prefers. Spots outside your view are dropped and a flood is rate-limited. Each
-  network shows whether it is connected, or why not. PSK Reporter is not
-  connected yet.
+  network shows whether it is connected, or why not.
+- **Live spots from PSK Reporter.** Turn on **PSK Reporter** in the same window
+  and stations heard on the bands your VFOs are on appear as nameplates in real
+  time. It uses PSK Reporter's public live feed, needs no login, and sends
+  nothing identifying; only the bands you are on are requested, and nothing is
+  requested when no radio is connected. (This replaces the poll interval the
+  setting used to have.)
 
 ### Changed
 

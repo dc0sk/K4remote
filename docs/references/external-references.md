@@ -1,7 +1,7 @@
 ---
 title: "External References"
 status: Draft
-version: "0.5"
+version: "0.7"
 updated: 2026-09-20
 authors:
   - Simon Keimer (DC0SK)
@@ -340,8 +340,8 @@ clean-room per `CON-09` (facts/interoperability, not copied text).
 ## R-EXT-05 — Spotting networks
 
 The candidate sources for `FR-SPOT-*`. Each is read from its own published documentation before a
-source is built (`OP-7`). **Read so far: the Reverse Beacon Network and the DX-cluster line format.**
-PSK Reporter, WSPRnet, POTA, SOTA and FreeDV Reporter are **not yet read**.
+source is built (`OP-7`). **Read so far: the Reverse Beacon Network, the DX-cluster line format and PSK
+Reporter.** WSPRnet, POTA, SOTA and FreeDV Reporter are **not yet read**.
 
 ### Reverse Beacon Network and DX-cluster telnet feeds (read 2026-09-19)
 
@@ -393,5 +393,62 @@ the relay, so that is treated as **unverified**.
 **Searched and found not to contain the format** (recorded so nobody repeats it): RBN's "Get Smart
 About the RBN" page; N6TV's 2015 CW-skimmer slides (image-only, no text); the HamPost skimmer guide.
 
+### PSK Reporter (read and observed 2026-09-20)
+
+Two interfaces, both public and both meant for this kind of use.
+
+**Query API, documented** — <https://pskreporter.info/pskdev.html>:
+- `GET https://retrieve.pskreporter.info/query`, response an XML `receptionReports` document of
+  `receptionReport` elements. Documented parameters include `frange` (`lower-upper` in Hz),
+  `flowStartSeconds` (a negative number of seconds, at most 24 hours), `mode`, `rptlimit`, `rronly`,
+  `noactive`, `nolocator`, `senderCallsign` / `receiverCallsign` / `callsign` ("use only one of the
+  three") and an optional `appcontact` (an email address, if you want the operator to be able to
+  contact you). Documented attributes: `receiverCallsign`, `receiverLocator`, `senderCallsign`,
+  `senderLocator`, `frequency` (unsigned integer, **Hz**), `flowStartSeconds` (**Unix seconds**), `sNR`
+  (integer), `mode` (an ADIF MODE or SUBMODE).
+- **Usage rules, in the page's terms:** retrieve "no more often than once every five minutes" (so all
+  receivers have time to report); the operator "reserves the right to block or rate limit anybody who
+  imposes a significant load", and may in future **require compression** from frequent users. **No
+  numeric limit is stated.**
+- **Not documented:** whether a query with no callsign parameter is allowed (see the observation
+  below), and any MQTT feed.
+
+**MQTT feed, documented** — <https://www.mqtt.pskreporter.info/>: host `mqtt.pskreporter.info`; ports
+1883 (TCP), 1884 (TLS), 1885 (WebSocket), 1886 (WebSocket + TLS); topic
+`pskr/filter/v2/{band}/{mode}/{tx_call}/{rx_call}/{tx_grid}/{rx_grid}/{tx_dxcc}/{rx_dxcc}` with the MQTT
+wildcards `+` and `#`; variants `v2` (filtered), `v2raw` (unfiltered) and `v2raw_1pc` (a 1 % sample); a
+flat JSON payload with `sq` (sequence), `f` (Hz), `md` (mode), `rp` (SNR, dB), `t` and `t_tx` (epoch
+times), `sc`/`sl` (sender callsign and locator), `rc`/`rl` (receiver), `sa`/`ra` (DXCC) and `b` (band).
+**Not documented:** authentication, rate limits, fair-use rules, and the band token's format.
+
+**Observed directly (2026-09-20), minimal and capped, nothing identifying sent** (no `appcontact`, no
+account; a random MQTT client id):
+- **One HTTP request** for a 1 kHz `frange` with `flowStartSeconds=-900&rptlimit=5&rronly=1`: HTTP 200,
+  `text/xml`, gzip when asked, `cache-control: public,max-age=90`, served through a CDN. **A query with
+  no callsign works.** The response carries `lastSequenceNumber` and `maxFlowStartSeconds` elements, and
+  reports with extra attributes beyond the documented ones (`senderDXCC`, `senderDXCCCode`,
+  `senderDXCCLocator`, `senderLotwUpload`, `senderEqslAuthGuar`). **`frange` and `rptlimit` were not
+  hard bounds:** reports well outside the requested range came back, and more records than `rptlimit`.
+  A client must filter and cap the response itself.
+- **One MQTT subscription, 1.4 s, capped at 40 KB**, to the whole `pskr/filter/v2/#` tree: plain TCP on
+  port 1883 was accepted with no authentication (CONNACK 0, SUBACK QoS 0). **179 messages arrived in
+  1.4 s — about 130 a second for the whole tree**, so an unfiltered subscription is a firehose. A real
+  topic looks like `pskr/filter/v2/20m/FT8/AA1AAA/BB2BBB/FN31/JO50/291/230` (band token `20m`, mode
+  `FT8`), and the payload like `{"sq":72916355844,"f":14074742,"md":"FT8","rp":-9,"t":1789899105,
+  "t_tx":1789899090,"sc":"AA1AAA","sl":"FN31pr","rc":"BB2BBB","rl":"JO50ab","sa":291,"ra":230,"b":"20m"}`
+  (callsigns replaced here). `sq` is on the same scale as the HTTP `lastSequenceNumber`.
+- **Band tokens seen (a 3.9 s sample, 1 111 messages, ~290 a second):** `160m`, `80m`, `40m`, `30m`,
+  `20m`, `17m`, `15m`, `12m`, `10m`, `2m`, `13cm`, `3cm`; every payload was flat JSON and the topic's band
+  segment always equalled the payload's `b`. `60m`, `6m` and `4m` were **not seen** and are assumed to
+  follow the same `<n>m` pattern — unverified. Modes seen: FT8, FT4, WSPR, FT2, CW.
+- **A band-scoped subscription works:** `pskr/filter/v2/20m/#` (5.3 s) delivered **only** 20 m
+  (277 of 277 messages, ~53 a second, ~12 KB/s) against 130–290 a second for the whole tree.
+- These are single observations of a live service, not a specification.
+
+**Decision (DC0SK, 2026-09-20):** K4 Remote uses the **live MQTT feed over plain TCP** (port 1883), not
+the query API, with a hand-written client. It subscribes to `pskr/filter/v2/<band>/#` for the bands the
+VFOs are on and to nothing when there is no radio; TLS (port 1884) is a later step. PSK Reporter
+documents no rate or fair-use rules for the MQTT feed.
+
 ### Not yet read
-PSK Reporter, WSPRnet, POTA, SOTA, FreeDV Reporter.
+WSPRnet, POTA, SOTA, FreeDV Reporter.

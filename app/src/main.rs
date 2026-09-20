@@ -174,6 +174,7 @@ struct App {
     spot_sent: (
         Option<k4_spot::telnet::TelnetConfig>,
         Option<k4_spot::telnet::TelnetConfig>,
+        Option<k4_spot::mqtt_source::MqttConfig>,
     ),
     spot_window_sent: Option<(u64, u64)>,
     /// Draw the waterfall on the GPU (false = the CPU rasteriser, when there is no wgpu adapter).
@@ -296,7 +297,7 @@ struct App {
     spot_config_window: Option<iced::window::Id>,
     spot_max_age: String,
     spot_networks: k4_config::SpotNetworks,
-    spot_psk_poll: String,
+    spot_psk_port: String,
     spot_rbn_port: String,
     spot_dx_port: String,
     // KPA1500 client worker (FR-AMP-03): a shared snapshot the worker writes
@@ -874,7 +875,6 @@ enum Message {
     SpotHostChanged(SpotNet, String),
     SpotPortChanged(SpotNet, String),
     SpotLoginChanged(SpotNet, String),
-    SpotPskPollChanged(String),
     // KPA1500 amplifier controls (FR-AMP-03).
     KpaSetMode(bool),
     KpaSetAtu(bool),
@@ -1019,7 +1019,7 @@ impl App {
         let kpa1500_poll = prefs.kpa1500_poll_ms.to_string();
         let spot_max_age = prefs.spot_max_age_min().to_string();
         let spot_networks = prefs.spot_networks.clone();
-        let spot_psk_poll = spot_networks.psk_reporter.poll_secs.to_string();
+        let spot_psk_port = spot_networks.psk_reporter.port.to_string();
         let spot_rbn_port = spot_networks.rbn.port.to_string();
         let spot_dx_port = spot_networks.dx_cluster.port.to_string();
         // The amplifier worker starts idle (disconnected); the tick reconciler
@@ -1090,7 +1090,7 @@ impl App {
             spot_tx,
             spot_status,
             spot_status_ui: spot_sources::Statuses::default(),
-            spot_sent: (None, None),
+            spot_sent: (None, None, None),
             spot_window_sent: None,
             gpu_waterfall: waterfall_gpu::gpu_available(),
             ui: initial,
@@ -1153,7 +1153,7 @@ impl App {
             spot_config_window: None,
             spot_max_age,
             spot_networks,
-            spot_psk_poll,
+            spot_psk_port,
             spot_rbn_port,
             spot_dx_port,
             kpa1500_enabled,
@@ -1525,7 +1525,8 @@ impl App {
     /// (FR-SPOT-04).
     fn spot_networks_for_save(&self) -> k4_config::SpotNetworks {
         let mut nets = self.spot_networks.clone();
-        nets.psk_reporter.poll_secs = k4_config::parse_spot_poll_secs(&self.spot_psk_poll);
+        nets.psk_reporter.port =
+            k4_config::parse_spot_port(&self.spot_psk_port, k4_config::SPOT_PSK_DEFAULT_PORT);
         nets.rbn.port = k4_config::parse_spot_port(&self.spot_rbn_port, 7000);
         nets.dx_cluster.port = k4_config::parse_spot_port(&self.spot_dx_port, 7300);
         nets
@@ -2756,7 +2757,7 @@ impl App {
                 match net {
                     SpotNet::Rbn => self.spot_networks.rbn.host = host,
                     SpotNet::DxCluster => self.spot_networks.dx_cluster.host = host,
-                    SpotNet::PskReporter => {}
+                    SpotNet::PskReporter => self.spot_networks.psk_reporter.host = host,
                 }
             }
             Message::SpotPortChanged(net, v) => {
@@ -2764,7 +2765,7 @@ impl App {
                 match net {
                     SpotNet::Rbn => self.spot_rbn_port = digits,
                     SpotNet::DxCluster => self.spot_dx_port = digits,
-                    SpotNet::PskReporter => {}
+                    SpotNet::PskReporter => self.spot_psk_port = digits,
                 }
             }
             Message::SpotLoginChanged(net, v) => {
@@ -2774,9 +2775,6 @@ impl App {
                     SpotNet::DxCluster => self.spot_networks.dx_cluster.login = login,
                     SpotNet::PskReporter => {}
                 }
-            }
-            Message::SpotPskPollChanged(v) => {
-                self.spot_psk_poll = v.chars().filter(char::is_ascii_digit).take(5).collect();
             }
             Message::KpaSetMode(operate) => self.kpa_send(k4_kpa::cat::set_mode(operate)),
             Message::KpaSetAtu(inline) => self.kpa_send(k4_kpa::cat::set_atu_mode(inline)),
@@ -3045,7 +3043,7 @@ impl App {
                 if let Ok(snap) = self.snapshot.lock() {
                     self.ui = snap.clone();
                 }
-                // Keep the telnet spot sources in line with the settings and the VFOs (FR-SPOT-07),
+                // Keep the spot sources in line with the settings and the VFOs (FR-SPOT-05/07),
                 // and show their status. Only a change is sent.
                 self.spot_status_ui = self
                     .spot_status
@@ -3065,11 +3063,20 @@ impl App {
                     };
                     let rbn = want(&nets.rbn, k4_spot::Network::Rbn);
                     let dx = want(&nets.dx_cluster, k4_spot::Network::DxCluster);
-                    if (rbn.clone(), dx.clone()) != self.spot_sent {
-                        self.spot_sent = (rbn.clone(), dx.clone());
+                    let psk = nets
+                        .psk_reporter
+                        .enabled
+                        .then(|| k4_spot::mqtt_source::MqttConfig {
+                            network: k4_spot::Network::PskReporter,
+                            host: nets.psk_reporter.host.clone(),
+                            port: nets.psk_reporter.port,
+                        });
+                    if (rbn.clone(), dx.clone(), psk.clone()) != self.spot_sent {
+                        self.spot_sent = (rbn.clone(), dx.clone(), psk.clone());
                         let _ = self.spot_tx.send(spot_sources::Cmd::Configure {
                             rbn,
                             dx_cluster: dx,
+                            psk_reporter: psk,
                         });
                     }
                     let win = spots::spot_window(self.ui.vfo_a_hz, self.ui.vfo_b_hz);
@@ -6569,7 +6576,8 @@ impl App {
                     "Networks whose spots are drawn as nameplates on the spectrum. \
                      All are off until you turn them on. RBN and DX cluster connect \
                      once a host and your login callsign are set (that callsign is all \
-                     that is sent). PSK Reporter is not connected yet.",
+                     that is sent). PSK Reporter is a live feed of the bands your VFOs \
+                     are on; it needs no login and nothing identifying is sent.",
                 )
                 .size(11)
                 .color(dim),
@@ -6581,12 +6589,31 @@ impl App {
                 "PSK Reporter: OFF",
                 Message::ToggleSpotNetwork(SpotNet::PskReporter),
             ))
+            .push(
+                Text::new(
+                    "PSK Reporter's public live MQTT feed. Only the bands your VFOs are \
+                     on are subscribed to, and only spots near a VFO are kept.",
+                )
+                .size(11)
+                .color(dim),
+            )
             .push(Self::spot_field(
-                "Poll (s)",
-                "300",
-                &self.spot_psk_poll,
+                "Host",
+                "mqtt.pskreporter.info",
+                &nets.psk_reporter.host,
+                230.0,
+                |v| Message::SpotHostChanged(SpotNet::PskReporter, v),
+            ))
+            .push(Self::spot_field(
+                "Port",
+                "1883",
+                &self.spot_psk_port,
                 90.0,
-                Message::SpotPskPollChanged,
+                |v| Message::SpotPortChanged(SpotNet::PskReporter, v),
+            ))
+            .push(Self::spot_status_line(
+                &self.spot_status_ui.psk_reporter,
+                nets.psk_reporter.enabled,
             ))
             .push(Text::new("Reverse Beacon Network").size(13))
             .push(

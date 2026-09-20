@@ -45,6 +45,9 @@ pub struct Timing {
     pub max_bytes_per_poll: usize,
     /// Spots delivered per second at most; the excess is shed and counted.
     pub rate_per_sec: u32,
+    /// MQTT only: the keepalive interval. A ping is sent after half of it in silence, and a
+    /// broker that says nothing for twice it is treated as dead.
+    pub keepalive: Duration,
 }
 
 impl Default for Timing {
@@ -58,6 +61,7 @@ impl Default for Timing {
             read_budget: Duration::from_millis(100),
             max_bytes_per_poll: 256 * 1024,
             rate_per_sec: 300,
+            keepalive: Duration::from_secs(30),
         }
     }
 }
