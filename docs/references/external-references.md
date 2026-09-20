@@ -1,8 +1,8 @@
 ---
 title: "External References"
 status: Draft
-version: "0.4"
-updated: 2026-09-19
+version: "0.5"
+updated: 2026-09-20
 authors:
   - Simon Keimer (DC0SK)
 owns: [R-EXT]
@@ -337,9 +337,61 @@ clean-room per `CON-09` (facts/interoperability, not copied text).
 - **Caution:** its configuration directory holds the operator's account credentials in plain text.
   Only the *structure* of that file was used; nothing from it belongs in this repository.
 
-## R-EXT-05 — Spotting networks (to be read before implementation)
+## R-EXT-05 — Spotting networks
 
-PSK Reporter, the Reverse Beacon Network, DX clusters, WSPRnet, POTA, SOTA and FreeDV Reporter are
-the candidate sources for `FR-SPOT-*`. Their retrieval interfaces, rate guidance and line formats are
-**not yet read** — this entry is a placeholder that `OP-7` requires be filled from each network's own
-published documentation (with URL and date) before any source is implemented.
+The candidate sources for `FR-SPOT-*`. Each is read from its own published documentation before a
+source is built (`OP-7`). **Read so far: the Reverse Beacon Network and the DX-cluster line format.**
+PSK Reporter, WSPRnet, POTA, SOTA and FreeDV Reporter are **not yet read**.
+
+### Reverse Beacon Network and DX-cluster telnet feeds (read 2026-09-19)
+
+**Primary, from RBN itself** — <https://www.reversebeacon.net/pages/Telnet+servers+30>:
+- `telnet.reversebeacon.net` port **7000** carries CW and RTTY spots, port **7001** carries FT8.
+- These are "stripped down relay servers specifically designed for maximum throughput" with **no
+  filtering features**.
+- **Stated intent — this matters:** RBN says "retail" DX clusters should connect to these nodes and
+  that **end-users should connect to the retail nodes**. A desktop client connecting straight to the
+  relay goes against that stated intent, however common the practice (see the SDRoxide cross-check).
+  Whether K4 Remote should is a **decision for DC0SK**, recorded in `OP-7`.
+
+**Line format — third-party, not RBN:** RBN's own pages (the telnet page, "Get Smart About the RBN")
+do **not** give the spot-line format, the login prompt, or any rate guidance. The format below comes
+from a user manual for AR-Cluster software (W9ZRX, "Using AR-Cluster V6",
+<https://www.k3lr.com/w9zrx/Using%20AR-Cluster%20V6.pdf>), which shows three lines:
+a hand-entered spot and two skimmer spots. In our own words: the layout is
+`DX de <spotter>: <frequency> <callsign> <comment> <time>Z`; a skimmer spotter is marked by `-#` on
+its callsign; a skimmer's comment carries mode, signal-to-noise in dB, speed in WPM or BPS, and
+whether the station is calling CQ. The **frequency unit is not stated** — kilohertz is inferred from
+the band plan (7000.7 on 40 m, 3580.9 on 80 m, 18140.0 on 17 m). The time is `HHMMZ`, **a time of
+day with no date**. The short token before the time on those lines (`+KP2`, `OM`) is a per-user
+display option in that software and may not be present on the relay. The parser reads whitespace
+separated tokens, not fixed columns, to be independent of a server's padding.
+
+**Observed directly, once (2026-09-19):** with DC0SK's permission, a single connection to
+`telnet.reversebeacon.net:7000`, about ten seconds, **nothing sent**. The relay answered over IPv6 in
+0.35 s with exactly `Please enter your call: ` — 24 bytes, **no newline, no telnet negotiation** —
+and then waited. It did not close the connection within ten seconds. This is one observation of one
+server, not a specification.
+
+**Not found in any source read (and so not yet known):**
+- the login prompt of a **retail cluster** (the source accepts common wordings, untested),
+- **rate or volume guidance** from RBN,
+- whether RBN's relay accepts filter commands (see below),
+- what the relay sends after login, and its real volume.
+
+**Decision (DC0SK, 2026-09-19):** both routes stay selectable — an RBN entry with the relay prefilled
+but off, and a DX-cluster entry — with a note on the RBN entry that RBN prefers end-users to connect to
+retail clusters.
+
+**Cross-check, SDRoxide** (R-EXT-04, its own shipped manual — documentation, not code): it connects to
+the RBN relay directly by default with only the operator's callsign as the login; says the network
+carries "thousands a minute"; and **keeps RBN spots out of its spot list** on purpose, because they are
+measurements and not invitations to call, using them for a propagation map instead. It also says a
+`set/filter` command narrows the feed — which **conflicts** with RBN's own "no filtering features" for
+the relay, so that is treated as **unverified**.
+
+**Searched and found not to contain the format** (recorded so nobody repeats it): RBN's "Get Smart
+About the RBN" page; N6TV's 2015 CW-skimmer slides (image-only, no text); the HamPost skimmer guide.
+
+### Not yet read
+PSK Reporter, WSPRnet, POTA, SOTA, FreeDV Reporter.

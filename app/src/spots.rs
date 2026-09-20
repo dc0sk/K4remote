@@ -59,3 +59,86 @@ pub fn spawn_demo_spots(store: SpotHandle) {
         thread::sleep(Duration::from_secs(5));
     });
 }
+
+/// How far either side of a VFO the telnet feeds are kept, Hz. A pan is at most 368 kHz wide, so
+/// this covers a whole view centred on the VFO. Dropping everything else before it is stored (and
+/// before it can use up the rate budget) is what makes the unfiltered RBN relay affordable.
+pub const SPOT_WINDOW_HALF_HZ: u64 = 300_000;
+
+/// The frequency range worth keeping spots for, given the two VFOs: from the lower one minus the
+/// half-width to the higher one plus it. With no VFO known there is no view to label, so the range
+/// is empty (`lo > hi`) and nothing is kept.
+pub fn spot_window(vfo_a_hz: Option<u64>, vfo_b_hz: Option<u64>) -> (u64, u64) {
+    let known: Vec<u64> = [vfo_a_hz, vfo_b_hz]
+        .into_iter()
+        .flatten()
+        .filter(|f| *f > 0)
+        .collect();
+    match (known.iter().min(), known.iter().max()) {
+        (Some(&lo), Some(&hi)) => (
+            lo.saturating_sub(SPOT_WINDOW_HALF_HZ),
+            hi + SPOT_WINDOW_HALF_HZ,
+        ),
+        _ => (1, 0),
+    }
+}
+
+/// Whether the worker needs telling about a new window: the first time, when it becomes empty or
+/// stops being empty, or when an edge has moved by at least 20 kHz (so a slow tune does not send
+/// one every tick).
+pub fn window_needs_update(sent: Option<(u64, u64)>, new: (u64, u64)) -> bool {
+    let Some((lo, hi)) = sent else { return true };
+    let (nlo, nhi) = new;
+    if (lo > hi) != (nlo > nhi) {
+        return true;
+    }
+    lo.abs_diff(nlo) >= 20_000 || hi.abs_diff(nhi) >= 20_000
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// FR-SPOT-07: the window kept from the telnet feeds follows the VFOs, is empty when none is
+    /// known, and is only resent when it has moved enough to matter.
+    /// trace: FR-SPOT-07
+    #[test]
+    fn fr_spot_07_window_follows_the_vfos() {
+        let h = SPOT_WINDOW_HALF_HZ;
+        assert_eq!(
+            spot_window(Some(14_074_000), None),
+            (14_074_000 - h, 14_074_000 + h)
+        );
+        assert_eq!(
+            spot_window(None, Some(7_030_000)),
+            (7_030_000 - h, 7_030_000 + h)
+        );
+        // Both VFOs: one window spanning them (split, or A and B on different bands).
+        assert_eq!(
+            spot_window(Some(14_074_000), Some(7_030_000)),
+            (7_030_000 - h, 14_074_000 + h)
+        );
+        // Nothing known: an empty range that admits nothing.
+        let (lo, hi) = spot_window(None, None);
+        assert!(lo > hi);
+        let (lo0, hi0) = spot_window(Some(0), Some(0));
+        assert!(lo0 > hi0, "0 Hz is not a frequency");
+        // Near 0 Hz the lower edge saturates instead of wrapping.
+        assert_eq!(spot_window(Some(100_000), None).0, 0);
+
+        // Resending: first time always; small moves not; a big move yes; emptiness changes yes.
+        let w = spot_window(Some(14_074_000), None);
+        assert!(window_needs_update(None, w));
+        assert!(!window_needs_update(Some(w), w));
+        let nudged = spot_window(Some(14_074_000 + 5_000), None);
+        assert!(
+            !window_needs_update(Some(w), nudged),
+            "5 kHz is not worth a message"
+        );
+        let moved = spot_window(Some(14_074_000 + 25_000), None);
+        assert!(window_needs_update(Some(w), moved));
+        assert!(window_needs_update(Some(w), (1, 0)), "the radio went away");
+        assert!(window_needs_update(Some((1, 0)), w), "the radio came back");
+        assert!(!window_needs_update(Some((1, 0)), (1, 0)));
+    }
+}

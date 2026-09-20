@@ -2,7 +2,7 @@
 title: "K4 Remote — User Manual"
 status: Draft
 version: "0.9.0"
-updated: 2026-09-19
+updated: 2026-09-20
 authors:
   - Simon Keimer (DC0SK)
 ---
@@ -426,8 +426,31 @@ Open **Settings** from the header; press **ESC** (or **Close**) to dismiss it.
 | **Audio** | Speaker/Mic device selection, Volume, Mic gain, mute-radio-monitor, mode-adaptive UI toggle, K-Pod on/off |
 | **K4 settings backup** | Export the radio's settings to a SHA-256-stamped `.cfg`, and import one back |
 | **K-Pod function switches** | The 16-slot F1–F8 tap/hold macro editor |
+| **Spot nameplates** | How old a spot may be before it is hidden, and a **Networks…** window to choose and configure the spotting networks |
 
 The **theme** (dark / light / high-contrast / follow-system) cycles from the header.
+
+### Spot nameplates
+
+Stations reported by spotting networks are drawn on the spectrum as small callsign plates with a tick
+down to the trace at the station's frequency. Plates that would overlap are stacked into up to three
+lanes, and any that do not fit are counted as **+N** in the corner. A spot older than the limit in
+Settings (default 15 minutes), or outside the view, is not shown.
+
+Everything is **off until you turn it on**. Open **Settings → Spot nameplates → Networks…**:
+
+- **RBN** (Reverse Beacon Network) — CW/RTTY skimmer spots. The relay server is prefilled but off.
+  RBN asks that end-users connect to a **DX cluster that carries its spots** rather than to its own
+  relay, so a DX cluster is the route it prefers.
+- **DX cluster** — enter the host and port of a cluster that carries skimmer spots.
+- **PSK Reporter** — not connected yet.
+
+For RBN and DX cluster set the **Login** to **your own callsign**: clusters require one, and it is the
+**only thing the app sends**. Each network shows below its settings whether it is connected, or why it
+is not. Only spots within about 300 kHz of a VFO are kept; the rest are dropped, and a flood is
+rate-limited (shown as "shed").
+
+To see the display without connecting anything, start the app with `--demo`: it shows sample spots.
 
 > 📷 **Screenshot needed — `screenshots/settings-backup.png`:** The **K4 settings backup** section
 > with the Export / Import controls.
