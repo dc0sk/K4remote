@@ -6,9 +6,11 @@
 //! All times are Unix seconds. The caller supplies `now`, so nothing here reads a
 //! clock and every result is deterministic.
 
+pub mod cluster;
 pub mod layout;
 mod model;
 mod store;
+pub mod telnet;
 
 pub use model::{
     normalise_callsign, sanitise_text, Network, SourceError, Spot, SpotSource, MAX_TEXT_LEN,

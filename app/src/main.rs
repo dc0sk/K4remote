@@ -10,6 +10,7 @@
 mod kpa;
 mod meter;
 mod spectrum;
+mod spot_sources;
 mod spots;
 mod tips;
 mod ui;
@@ -164,6 +165,17 @@ struct App {
     pan: worker::PanHandle,
     /// The spots labelled on the spectrum (FR-SPOT-01/02); `--demo` injects some.
     spots: spots::SpotHandle,
+    /// Runs the telnet spot sources (RBN, DX cluster) and reports their status (FR-SPOT-07/09).
+    spot_tx: Sender<spot_sources::Cmd>,
+    spot_status: spot_sources::StatusHandle,
+    /// The sources' status as of the last tick, for the Networks window.
+    spot_status_ui: spot_sources::Statuses,
+    /// What the worker was last told to run and keep, so a tick sends only a change.
+    spot_sent: (
+        Option<k4_spot::telnet::TelnetConfig>,
+        Option<k4_spot::telnet::TelnetConfig>,
+    ),
+    spot_window_sent: Option<(u64, u64)>,
     /// Draw the waterfall on the GPU (false = the CPU rasteriser, when there is no wgpu adapter).
     gpu_waterfall: bool,
     // last snapshot read (what the view renders)
@@ -934,6 +946,9 @@ impl App {
         let pan: worker::PanHandle = Arc::default();
         worker::spawn(cmd_rx, Arc::clone(&snapshot), Arc::clone(&pan));
         let spots: spots::SpotHandle = Arc::default();
+        let spot_status: spot_sources::StatusHandle = Arc::default();
+        let (spot_tx, spot_rx) = mpsc::channel();
+        spot_sources::spawn(spot_rx, Arc::clone(&spots), Arc::clone(&spot_status));
         if demo {
             worker::spawn_demo_pan_feed(Arc::clone(&pan), Arc::clone(&snapshot));
             spots::spawn_demo_spots(Arc::clone(&spots));
@@ -1072,6 +1087,11 @@ impl App {
             snapshot,
             pan,
             spots,
+            spot_tx,
+            spot_status,
+            spot_status_ui: spot_sources::Statuses::default(),
+            spot_sent: (None, None),
+            spot_window_sent: None,
             gpu_waterfall: waterfall_gpu::gpu_available(),
             ui: initial,
             view_mode: ViewMode::default(),
@@ -3024,6 +3044,39 @@ impl App {
             Message::Tick => {
                 if let Ok(snap) = self.snapshot.lock() {
                     self.ui = snap.clone();
+                }
+                // Keep the telnet spot sources in line with the settings and the VFOs (FR-SPOT-07),
+                // and show their status. Only a change is sent.
+                self.spot_status_ui = self
+                    .spot_status
+                    .lock()
+                    .map(|g| g.clone())
+                    .unwrap_or_default();
+                {
+                    use k4_spot::telnet::TelnetConfig;
+                    let nets = self.spot_networks_for_save();
+                    let want = |c: &k4_config::ClusterPrefs, network| {
+                        c.enabled.then(|| TelnetConfig {
+                            network,
+                            host: c.host.clone(),
+                            port: c.port,
+                            login: c.login.clone(),
+                        })
+                    };
+                    let rbn = want(&nets.rbn, k4_spot::Network::Rbn);
+                    let dx = want(&nets.dx_cluster, k4_spot::Network::DxCluster);
+                    if (rbn.clone(), dx.clone()) != self.spot_sent {
+                        self.spot_sent = (rbn.clone(), dx.clone());
+                        let _ = self.spot_tx.send(spot_sources::Cmd::Configure {
+                            rbn,
+                            dx_cluster: dx,
+                        });
+                    }
+                    let win = spots::spot_window(self.ui.vfo_a_hz, self.ui.vfo_b_hz);
+                    if spots::window_needs_update(self.spot_window_sent, win) {
+                        self.spot_window_sent = Some(win);
+                        let _ = self.spot_tx.send(spot_sources::Cmd::Window(Some(win)));
+                    }
                 }
                 // Drop spots past the age limit, so the store never holds ones that can no longer
                 // be shown (FR-SPOT-03).
@@ -6437,6 +6490,28 @@ impl App {
             .into()
     }
 
+    /// One line of status under a telnet source: nothing while it is off, otherwise what it is
+    /// doing, with a problem in the caution colour (FR-SPOT-09).
+    fn spot_status_line(
+        status: &Option<spot_sources::Status>,
+        enabled: bool,
+    ) -> Element<'static, Message> {
+        if !enabled {
+            return iced::widget::Space::with_height(0).into();
+        }
+        let (text, problem) = match status {
+            Some(s) => spot_sources::describe(s),
+            None => ("starting…".to_string(), false),
+        };
+        let mut t = Text::new(text).size(11);
+        t = t.color(role_color(if problem {
+            ui::ColorRole::Caution
+        } else {
+            ui::ColorRole::Inactive
+        }));
+        t.into()
+    }
+
     /// One telnet-source section (RBN or a DX cluster): enable switch, host,
     /// port and login (FR-SPOT-04).
     fn spot_cluster_section<'a>(
@@ -6492,8 +6567,9 @@ impl App {
             .push(
                 Text::new(
                     "Networks whose spots are drawn as nameplates on the spectrum. \
-                     All are off until you turn them on. The sources are not connected \
-                     yet — these settings are saved for when they are.",
+                     All are off until you turn them on. RBN and DX cluster connect \
+                     once a host and your login callsign are set (that callsign is all \
+                     that is sent). PSK Reporter is not connected yet.",
                 )
                 .size(11)
                 .color(dim),
@@ -6513,6 +6589,17 @@ impl App {
                 Message::SpotPskPollChanged,
             ))
             .push(Text::new("Reverse Beacon Network").size(13))
+            .push(
+                Text::new(
+                    "RBN says end-users should connect to a DX cluster that carries its \
+                     spots, not to its own relay servers, which are meant for those \
+                     clusters. The relay is prefilled here but off; a DX cluster (below) \
+                     is the route RBN prefers. The relay is unfiltered, so spots outside \
+                     your view are dropped and the rest are rate-limited.",
+                )
+                .size(11)
+                .color(dim),
+            )
             .push(Self::spot_cluster_section(
                 SpotNet::Rbn,
                 "RBN: ON",
@@ -6521,7 +6608,16 @@ impl App {
                 &self.spot_rbn_port,
                 "7000",
             ))
+            .push(Self::spot_status_line(
+                &self.spot_status_ui.rbn,
+                nets.rbn.enabled,
+            ))
             .push(Text::new("DX cluster").size(13))
+            .push(
+                Text::new("A DX cluster that carries skimmer spots. Enter its host and port.")
+                    .size(11)
+                    .color(dim),
+            )
             .push(Self::spot_cluster_section(
                 SpotNet::DxCluster,
                 "DX cluster: ON",
@@ -6529,6 +6625,10 @@ impl App {
                 &nets.dx_cluster,
                 &self.spot_dx_port,
                 "7300",
+            ))
+            .push(Self::spot_status_line(
+                &self.spot_status_ui.dx_cluster,
+                nets.dx_cluster.enabled,
             ))
             .push(
                 Container::new(

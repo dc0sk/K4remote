@@ -38,8 +38,16 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
   the trace at the station's frequency. Crowded plates stack into up to three
   lanes, and any that do not fit are counted as "+N". A spot older than your age
   limit, or outside the view, is not shown. No network feeds it yet, so the only
-  way to see it is `--demo`, which shows some sample spots; the network sources
-  follow.
+  way to see it is `--demo`, which shows some sample spots.
+- **Live spots from the Reverse Beacon Network and DX clusters.** Turn on **RBN**
+  or **DX cluster** under Settings → Spot nameplates → **Networks…**, set the
+  host and your login callsign, and stations they report near your VFO appear as
+  nameplates on the spectrum. Your callsign is the only thing sent. RBN asks that
+  end-users use a DX cluster that carries its spots rather than its own relay
+  servers, so the relay is prefilled but off and a DX cluster is the route it
+  prefers. Spots outside your view are dropped and a flood is rate-limited. Each
+  network shows whether it is connected, or why not. PSK Reporter is not
+  connected yet.
 
 ### Changed
 
