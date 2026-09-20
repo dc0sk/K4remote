@@ -9,6 +9,9 @@
 pub mod cluster;
 pub mod layout;
 mod model;
+pub mod mqtt;
+pub mod mqtt_source;
+pub mod psk;
 mod store;
 pub mod telnet;
 

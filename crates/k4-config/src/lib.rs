@@ -409,9 +409,9 @@ pub fn parse_spot_max_age_min(input: &str) -> u32 {
         .unwrap_or(SPOT_MAX_AGE_DEFAULT_MIN)
 }
 
-/// Default PSK Reporter poll interval, seconds. The lower bound the service
-/// tolerates is settled with the source itself (FR-SPOT-05, `OP-7`).
-pub const SPOT_PSK_POLL_DEFAULT_SECS: u32 = 300;
+/// PSK Reporter's public MQTT feed (R-EXT-05): host and plain-TCP port.
+pub const SPOT_PSK_DEFAULT_HOST: &str = "mqtt.pskreporter.info";
+pub const SPOT_PSK_DEFAULT_PORT: u16 = 1883;
 
 /// Parse a Settings port field: a non-zero `u16`, else `default` — an empty or
 /// unusable entry never becomes a saved port (FR-SPOT-04).
@@ -424,37 +424,34 @@ pub fn parse_spot_port(input: &str, default: u16) -> u16 {
         .unwrap_or(default)
 }
 
-/// Parse a Settings poll-interval field, seconds: non-zero, else the PSK
-/// Reporter default (FR-SPOT-04).
-pub fn parse_spot_poll_secs(input: &str) -> u32 {
-    input
-        .trim()
-        .parse::<u32>()
-        .ok()
-        .filter(|s| *s != 0)
-        .unwrap_or(SPOT_PSK_POLL_DEFAULT_SECS)
-}
-
-/// PSK Reporter as a spot source (FR-SPOT-04).
+/// PSK Reporter as a spot source (FR-SPOT-04, FR-SPOT-05): a live MQTT feed, so there is no poll
+/// interval. An older config's `poll_secs` is ignored on load.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PskReporterPrefs {
     /// Off until the operator turns it on.
     #[serde(default)]
     pub enabled: bool,
-    /// Poll interval, seconds.
-    #[serde(default = "default_psk_poll_secs")]
-    pub poll_secs: u32,
+    /// The MQTT broker.
+    #[serde(default = "default_psk_host")]
+    pub host: String,
+    #[serde(default = "default_psk_port")]
+    pub port: u16,
 }
 
-fn default_psk_poll_secs() -> u32 {
-    SPOT_PSK_POLL_DEFAULT_SECS
+fn default_psk_host() -> String {
+    SPOT_PSK_DEFAULT_HOST.to_string()
+}
+
+fn default_psk_port() -> u16 {
+    SPOT_PSK_DEFAULT_PORT
 }
 
 impl Default for PskReporterPrefs {
     fn default() -> Self {
         Self {
             enabled: false,
-            poll_secs: SPOT_PSK_POLL_DEFAULT_SECS,
+            host: default_psk_host(),
+            port: SPOT_PSK_DEFAULT_PORT,
         }
     }
 }

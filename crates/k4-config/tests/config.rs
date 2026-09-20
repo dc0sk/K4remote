@@ -64,14 +64,16 @@ fn fr_cfg_03_no_secret_in_serialized_config() {
         },
         ..Default::default()
     };
-    // The spot-network table is named after PSK Reporter (FR-SPOT-04), a spotting
-    // service and not TLS-PSK key material. Exempt exactly that token; any other
-    // "psk" in the file still trips the guard.
+    // The spot-network table is named after PSK Reporter (FR-SPOT-04) and its
+    // default broker host is mqtt.pskreporter.info (FR-SPOT-05): a spotting
+    // service, not TLS-PSK key material. Exempt exactly those two tokens; any
+    // other "psk" in the file still trips the guard.
     let toml = cfg
         .to_toml()
         .unwrap()
         .to_lowercase()
-        .replace("psk_reporter", "");
+        .replace("psk_reporter", "")
+        .replace("pskreporter", "");
     assert!(!toml.contains("password"));
     assert!(!toml.contains("secret"));
     assert!(!toml.contains("psk"));
@@ -358,7 +360,8 @@ fn fr_spot_04_networks_default_off_and_persist() {
     let def = Prefs::default().spot_networks;
     assert!(!def.any_enabled(), "no network is on by default");
     assert!(!def.psk_reporter.enabled && !def.rbn.enabled && !def.dx_cluster.enabled);
-    assert_eq!(def.psk_reporter.poll_secs, 300);
+    assert_eq!(def.psk_reporter.host, "mqtt.pskreporter.info");
+    assert_eq!(def.psk_reporter.port, 1883);
     assert_eq!(def.rbn.host, "telnet.reversebeacon.net");
     assert_eq!(def.rbn.port, 7000);
     assert!(
@@ -369,7 +372,8 @@ fn fr_spot_04_networks_default_off_and_persist() {
     // A configured set round-trips: each network keeps its own enable + settings.
     let mut nets = def.clone();
     nets.psk_reporter.enabled = true;
-    nets.psk_reporter.poll_secs = 600;
+    nets.psk_reporter.host = "broker.example.org".into();
+    nets.psk_reporter.port = 8883;
     nets.rbn.enabled = true;
     nets.rbn.login = "DC0SK".into();
     nets.dx_cluster.host = "cluster.example.org".into();
@@ -386,17 +390,24 @@ fn fr_spot_04_networks_default_off_and_persist() {
         "toggles are independent"
     );
 
-    // The Settings port/poll fields: a usable number is taken, anything else is
-    // the default rather than a saved zero.
-    use k4_config::{parse_spot_poll_secs, parse_spot_port};
+    // The Settings port field: a usable number is taken, anything else is the
+    // default rather than a saved zero.
+    use k4_config::parse_spot_port;
     assert_eq!(parse_spot_port("7373", 7300), 7373);
-    assert_eq!(parse_spot_poll_secs("600"), 600);
     for bad in ["", "0", "abc", "70000", "-1"] {
         assert_eq!(parse_spot_port(bad, 7300), 7300, "port {bad:?}");
     }
-    for bad in ["", "0", "abc", "-1"] {
-        assert_eq!(parse_spot_poll_secs(bad), 300, "poll {bad:?}");
-    }
+
+    // A config from when PSK Reporter was polled still loads: the old interval is ignored.
+    let legacy_psk: Prefs = toml::from_str(
+        "tune_step_hz = 100\n[spot_networks.psk_reporter]\nenabled = true\npoll_secs = 600\n",
+    )
+    .expect("a config with the old poll interval");
+    assert!(legacy_psk.spot_networks.psk_reporter.enabled);
+    assert_eq!(
+        legacy_psk.spot_networks.psk_reporter.host,
+        "mqtt.pskreporter.info"
+    );
 
     // A pre-feature config — and one naming only some networks — loads with the
     // rest off and at their defaults.
@@ -407,7 +418,11 @@ fn fr_spot_04_networks_default_off_and_persist() {
         toml::from_str("tune_step_hz = 100\n[spot_networks.psk_reporter]\nenabled = true\n")
             .expect("partial config");
     assert!(partial.spot_networks.psk_reporter.enabled);
-    assert_eq!(partial.spot_networks.psk_reporter.poll_secs, 300);
+    assert_eq!(
+        partial.spot_networks.psk_reporter.host,
+        "mqtt.pskreporter.info"
+    );
+    assert_eq!(partial.spot_networks.psk_reporter.port, 1883);
     assert_eq!(
         partial.spot_networks.rbn, def.rbn,
         "unnamed network keeps its defaults"

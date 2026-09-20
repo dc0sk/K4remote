@@ -443,7 +443,9 @@ Everything is **off until you turn it on**. Open **Settings → Spot nameplates 
   RBN asks that end-users connect to a **DX cluster that carries its spots** rather than to its own
   relay, so a DX cluster is the route it prefers.
 - **DX cluster** — enter the host and port of a cluster that carries skimmer spots.
-- **PSK Reporter** — not connected yet.
+- **PSK Reporter** — a live feed of who is being heard on the bands your VFOs are on (mostly FT8 and
+  other digital modes). It needs no login and sends nothing identifying, and it asks only for the
+  bands you are on — none at all when no radio is connected. The host and port are prefilled.
 
 For RBN and DX cluster set the **Login** to **your own callsign**: clusters require one, and it is the
 **only thing the app sends**. Each network shows below its settings whether it is connected, or why it
