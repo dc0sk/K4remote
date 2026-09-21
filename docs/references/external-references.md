@@ -529,18 +529,50 @@ and not contacted**, because of the access condition above.
 - **What a FreeDV Reporter entry is:** a station *currently on* a frequency (and whether it is
   transmitting or was heard), a live presence list — not a stream of timestamped spots. It fits the
   nameplate only if a station row is turned into a spot with its own age.
-- **Consequence:** the service is reachable only over a Socket.IO/WebSocket connection, so a source
-  needs a WebSocket client and **TLS** (the service is https); there is nothing here that a plain
-  HTTP poll can do. Both were absent from the tree before this work.
+- **Consequence:** the service is reached over a Socket.IO/WebSocket connection, so a source needs a
+  WebSocket client, which was absent from the tree before this work; a plain HTTP poll cannot do it.
+  **An earlier draft of this note said TLS is also needed. That was an assumption, not something read
+  or observed, and the cross-check below contradicts it.**
+
+### SDRoxide cross-check (read 2026-09-21)
+
+R-EXT-04's rule holds: nothing was copied, and its account configuration was not read. Its public
+source was read for **interface facts only** — addresses, headers, intervals, message names — as was
+done for RBN, at DC0SK's invitation ("how did SDRoxide solve the API issues").
+
+- **POTA:** the same address as observed above, `api.pota.app/spot/activator`, polled on an interval
+  with a floor of 15 s, a 10 s connect and 20 s overall timeout, and a `User-Agent` naming the program
+  and its version. Nothing else is sent. This **confirms the endpoint** independently.
+- **SOTA:** it fetches the last 50 spots from `api-db2.sota.org.uk/api/spots/50/all` — **not** the
+  `api2` host whose terms page was read here. SOTA's own moderator described a separate "database" API
+  as not considered stable and not widely documented (see above), so SDRoxide is using the interface
+  SOTA says not to rely on. The request carries no credential or token of any kind. **SDRoxide does not
+  solve the access condition; it does not appear to address it.** Whether its author is in the
+  "API-consumers" group cannot be told from public information. Frequencies are MHz strings.
+- **WSPRnet:** it talks to wsprnet.org directly. It **uploads** spots (`/post`, the callsign in the query
+  is the identity, no authentication) — which K4 Remote never does (`FR-SPOT-12`) — and it **reads**
+  `/drupal/wsprnet/spots/json` filtered by callsign, for spots *of* the operator's own callsign or
+  *by* it. It has **no general band feed** from WSPRnet, so it does not solve the "spots for the whole
+  view" problem either. Whether that read endpoint is what the custodian's "API" means is unknown.
+- **FreeDV Reporter:** this answers most of the gaps above. A plain **`ws://qso.freedv.org:80/socket.io/?EIO=4&transport=websocket`**
+  connection — **no TLS** — carries a Socket.IO connect frame whose auth object has `protocol_version`
+  2 and a `role`: **`view`** with nothing else (read-only, no callsign), or `report` with callsign,
+  grid, software version, `rx_only` and OS (which makes the station publicly visible; K4 Remote would
+  only ever use `view`). Nothing may be sent before the server's `connection_successful` event. The
+  server pings every 5 s with a 5 s timeout. Events: `new_connection` (a session id with callsign and
+  grid), `remove_connection`, `freq_change` (the frequency in hertz), `tx_report`, `rx_report` (who
+  heard whom, with SNR), `message_update`, `bulk_update` (the table on connect), `qsy_request`. A row
+  becomes a nameplate when it has a callsign and a non-zero frequency. **Not tested here; from source
+  only.**
 
 ### Summary — what is buildable from documentation
 
 | Network | Documented? | Access | Needs |
 |---|---|---|---|
 | POTA | schema observed once, no rules | open, unauthenticated | HTTPS GET + JSON |
-| SOTA | terms yes, schema no | **developer must join API-consumers** | HTTPS GET + JSON, after that |
+| SOTA | terms yes, schema no (SDRoxide uses the unstable `api-db2` host) | **developer must join API-consumers** | HTTPS GET + JSON, after that |
 | WSPRnet | via third parties only | API by contacting the custodian; wspr.live open but third-party | HTTPS GET, or nothing |
-| FreeDV Reporter | none; reverse-engineered by others | open | WebSocket + Socket.IO + TLS |
+| FreeDV Reporter | none; protocol from two other clients | open, read-only `view` role | WebSocket + Socket.IO (plain `ws`, as SDRoxide does; TLS unverified) |
 
 ### Not yet read
 The retail DX-cluster login prompt and volume, and RBN's own guidance on rates — see above.
