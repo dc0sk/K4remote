@@ -13,6 +13,7 @@ pub enum Network {
     PskReporter,
     Rbn,
     DxCluster,
+    Pota,
 }
 
 /// One report of a station on a frequency.
@@ -127,6 +128,15 @@ pub fn sanitise_text(raw: &str) -> Option<String> {
     text.chars()
         .all(|c| (' '..='~').contains(&c))
         .then(|| text.to_string())
+}
+
+/// What one reply of a polled network held (FR-SPOT-08): the spots that were valid and a count of
+/// the records that were not, so a format change shows up as a number instead of silence.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Parsed {
+    pub spots: Vec<Spot>,
+    /// Records that did not make a valid spot.
+    pub rejected: u64,
 }
 
 /// Why a source could not deliver — surfaced per network in Settings, never

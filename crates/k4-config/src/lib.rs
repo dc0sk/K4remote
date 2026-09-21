@@ -456,6 +456,65 @@ impl Default for PskReporterPrefs {
     }
 }
 
+/// Default and bounds for how often a polled spot network is asked, seconds (FR-SPOT-08). They
+/// mirror `k4_spot::polled` (this crate does not depend on it); the app has a test that they agree.
+pub const SPOT_POLL_DEFAULT_SECS: u64 = 60;
+pub const SPOT_POLL_MIN_SECS: u64 = 30;
+pub const SPOT_POLL_MAX_SECS: u64 = 3600;
+
+/// Bring a poll interval into `30 s ..= 1 h`; anything outside — a hand-edited config, a stray `0`
+/// — falls back to the default rather than hammering a network or never asking.
+pub fn sanitise_spot_poll_secs(secs: u64) -> u64 {
+    if (SPOT_POLL_MIN_SECS..=SPOT_POLL_MAX_SECS).contains(&secs) {
+        secs
+    } else {
+        SPOT_POLL_DEFAULT_SECS
+    }
+}
+
+/// Parse the Settings interval field: digits only, in range, else the default (FR-SPOT-08) — an
+/// empty or unusable entry never becomes a saved value.
+pub fn parse_spot_poll_secs(input: &str) -> u64 {
+    input
+        .trim()
+        .parse::<u64>()
+        .map(sanitise_spot_poll_secs)
+        .unwrap_or(SPOT_POLL_DEFAULT_SECS)
+}
+
+fn default_spot_poll_secs() -> u64 {
+    SPOT_POLL_DEFAULT_SECS
+}
+
+/// POTA as a spot source (FR-SPOT-08): a public list asked for now and then, so the only setting
+/// besides the switch is how often.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PotaPrefs {
+    /// Off until the operator turns it on.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Seconds between requests, always within `30 s ..= 1 h` once read through
+    /// [`PotaPrefs::poll_secs`].
+    #[serde(default = "default_spot_poll_secs")]
+    pub poll_secs: u64,
+}
+
+impl Default for PotaPrefs {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            poll_secs: SPOT_POLL_DEFAULT_SECS,
+        }
+    }
+}
+
+impl PotaPrefs {
+    /// The interval to use, in bounds whatever the file says.
+    pub fn poll_secs(&self) -> u64 {
+        sanitise_spot_poll_secs(self.poll_secs)
+    }
+}
+
 /// A telnet spot source — the Reverse Beacon Network or a DX cluster
 /// (FR-SPOT-04, connected by FR-SPOT-07).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -509,6 +568,8 @@ pub struct SpotNetworks {
     pub rbn: ClusterPrefs,
     #[serde(default = "ClusterPrefs::dx_cluster")]
     pub dx_cluster: ClusterPrefs,
+    #[serde(default)]
+    pub pota: PotaPrefs,
 }
 
 impl Default for SpotNetworks {
@@ -517,6 +578,7 @@ impl Default for SpotNetworks {
             psk_reporter: PskReporterPrefs::default(),
             rbn: ClusterPrefs::rbn(),
             dx_cluster: ClusterPrefs::dx_cluster(),
+            pota: PotaPrefs::default(),
         }
     }
 }
@@ -524,7 +586,10 @@ impl Default for SpotNetworks {
 impl SpotNetworks {
     /// Whether any network is switched on.
     pub fn any_enabled(&self) -> bool {
-        self.psk_reporter.enabled || self.rbn.enabled || self.dx_cluster.enabled
+        self.psk_reporter.enabled
+            || self.rbn.enabled
+            || self.dx_cluster.enabled
+            || self.pota.enabled
     }
 }
 

@@ -28,6 +28,7 @@ pub fn network_name(network: Network) -> &'static str {
         Network::Rbn => "RBN",
         Network::DxCluster => "DX cluster",
         Network::PskReporter => "PSK Reporter",
+        Network::Pota => "POTA",
     }
 }
 
@@ -150,6 +151,7 @@ mod tests {
         assert_eq!(network_name(Network::Rbn), "RBN");
         assert_eq!(network_name(Network::DxCluster), "DX cluster");
         assert_eq!(network_name(Network::PskReporter), "PSK Reporter");
+        assert_eq!(network_name(Network::Pota), "POTA");
     }
 
     /// FR-SPOT-10: a tooltip sits beside the pointer and is always fully inside the pane, flipped to

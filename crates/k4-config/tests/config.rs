@@ -398,6 +398,41 @@ fn fr_spot_04_networks_default_off_and_persist() {
         assert_eq!(parse_spot_port(bad, 7300), 7300, "port {bad:?}");
     }
 
+    // POTA: off, asked once a minute by default; its interval and switch round-trip, and a stray
+    // interval in a hand-edited file is brought back into bounds when read.
+    assert!(!def.pota.enabled);
+    assert_eq!(def.pota.poll_secs(), 60);
+    let mut with_pota = def.clone();
+    with_pota.pota.enabled = true;
+    with_pota.pota.poll_secs = 120;
+    let prefs = Prefs {
+        spot_networks: with_pota.clone(),
+        ..Default::default()
+    };
+    let back: Prefs = toml::from_str(&toml::to_string(&prefs).expect("serialize")).expect("parse");
+    assert_eq!(back.spot_networks, with_pota);
+    assert!(back.spot_networks.any_enabled(), "POTA alone counts as on");
+    for (stray, want) in [
+        (0, 60),
+        (1, 60),
+        (29, 60),
+        (30, 30),
+        (3600, 3600),
+        (3601, 60),
+    ] {
+        let p: Prefs = toml::from_str(&format!(
+            "tune_step_hz = 100\n[spot_networks.pota]\nenabled = true\npoll_secs = {stray}\n"
+        ))
+        .expect("a config with an interval");
+        assert_eq!(p.spot_networks.pota.poll_secs(), want, "interval {stray}");
+    }
+    use k4_config::parse_spot_poll_secs;
+    assert_eq!(parse_spot_poll_secs("120"), 120);
+    assert_eq!(parse_spot_poll_secs(" 45 "), 45);
+    for bad in ["", "0", "29", "3601", "abc", "-5", "1.5"] {
+        assert_eq!(parse_spot_poll_secs(bad), 60, "interval {bad:?}");
+    }
+
     // A config from when PSK Reporter was polled still loads: the old interval is ignored.
     let legacy_psk: Prefs = toml::from_str(
         "tune_step_hz = 100\n[spot_networks.psk_reporter]\nenabled = true\npoll_secs = 600\n",

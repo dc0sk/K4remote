@@ -28,6 +28,8 @@ pub fn source_rgb(network: Network) -> (u8, u8, u8) {
         Network::PskReporter => (120, 200, 255),
         // Human spots from a DX cluster: lilac.
         Network::DxCluster => (206, 166, 255),
+        // Activators on a park (POTA): green.
+        Network::Pota => (140, 230, 150),
     }
 }
 
@@ -71,7 +73,12 @@ pub fn contrast(a: (u8, u8, u8), b: (u8, u8, u8)) -> f64 {
 mod tests {
     use super::*;
 
-    const SOURCES: [Network; 3] = [Network::Rbn, Network::PskReporter, Network::DxCluster];
+    const SOURCES: [Network; 4] = [
+        Network::Rbn,
+        Network::PskReporter,
+        Network::DxCluster,
+        Network::Pota,
+    ];
 
     /// FR-SPOT-11: the fade starts at fully opaque, never rises as a spot ages, reaches its floor at
     /// the age limit and stays there, and a zero limit means no fade.
