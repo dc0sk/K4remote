@@ -426,9 +426,20 @@ Open **Settings** from the header; press **ESC** (or **Close**) to dismiss it.
 | **Audio** | Speaker/Mic device selection, Volume, Mic gain, mute-radio-monitor, mode-adaptive UI toggle, K-Pod on/off |
 | **K4 settings backup** | Export the radio's settings to a SHA-256-stamped `.cfg`, and import one back |
 | **K-Pod function switches** | The 16-slot F1–F8 tap/hold macro editor |
+| **Spectrum afterglow** | How long a peak lingers on the spectrum trace, in milliseconds (0 = off) |
 | **Spot nameplates** | How old a spot may be before it is hidden, and a **Networks…** window to choose and configure the spotting networks |
 
 The **theme** (dark / light / high-contrast / follow-system) cycles from the header.
+
+### Spectrum afterglow
+
+By default the spectrum trace shows only the newest row, so a brief signal is gone the moment it stops.
+Set **Settings → Spectrum afterglow** to a number of milliseconds and a peak lingers and fades instead:
+the trail is drawn under the live trace as a faint fill with a dimmer outline. A peak falls **4.3 dB every
+time you enter** (so 500 is a gentle trail, and 3000 holds a signal for several seconds); it rises at once,
+never lags a stronger signal, and is never below the live trace. **0 is off**; otherwise 50 to 5000. It
+takes effect as you type. The trail restarts when the pan moves or changes span, and the waterfall is not
+affected.
 
 ### Spot nameplates
 

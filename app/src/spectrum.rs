@@ -261,6 +261,23 @@ impl<Message> Spectrum<'_, Message> {
     }
 }
 
+/// Where each bin of a trace is drawn in a spectrum band `w` wide and `h` tall. The live trace and
+/// the afterglow both use this, so the ghost can never sit at different frequencies or levels than
+/// the trace it trails.
+pub(crate) fn trace_points(
+    bins: &[f32],
+    w: f32,
+    top_dbm: f32,
+    range_db: f32,
+    h: f32,
+) -> Vec<Point> {
+    let n = bins.len();
+    bins.iter()
+        .enumerate()
+        .map(|(i, &dbm)| Point::new(bin_to_x(i, n, w), dbm_to_y(dbm, top_dbm, range_db, h)))
+        .collect()
+}
+
 impl<Message> canvas::Program<Message> for Spectrum<'_, Message> {
     type State = ();
 
@@ -462,18 +479,50 @@ impl<Message> canvas::Program<Message> for Spectrum<'_, Message> {
             );
         }
 
+        // Afterglow (FR-PAN-14): the ghost under the live trace — a faint fill down to the floor
+        // and a dimmer outline — so a peak that has passed is still seen fading. Only drawn if it is
+        // the same width as the trace. It always is by construction (the ghost restarts whenever a
+        // row's width changes), except for the moment when a row of another width is pushed between
+        // reading the trace and reading the ghost; the check is for that race, which no test can
+        // reach without a renderer.
+        let ghost: Option<Vec<f32>> = self
+            .pan
+            .lock()
+            .ok()
+            .and_then(|p| p.ghost(self.rx).map(<[f32]>::to_vec));
+        if let Some(ghost) = ghost.filter(|g| g.len() == latest.len() && g.len() > 1) {
+            let pts = trace_points(&ghost, w, self.top_dbm, self.range_db, spec_h);
+            let (first, last) = (pts[0], pts[pts.len() - 1]);
+            let area = Path::new(|b| {
+                b.move_to(Point::new(first.x, spec_h));
+                for p in &pts {
+                    b.line_to(*p);
+                }
+                b.line_to(Point::new(last.x, spec_h));
+                b.close();
+            });
+            frame.fill(&area, Color::from_rgba8(0, 230, 120, 0.10));
+            let line = Path::new(|b| {
+                b.move_to(pts[0]);
+                for p in &pts[1..] {
+                    b.line_to(*p);
+                }
+            });
+            frame.stroke(
+                &line,
+                Stroke::default()
+                    .with_width(1.0)
+                    .with_color(Color::from_rgba8(0, 230, 120, 0.40)),
+            );
+        }
+
         // Spectrum trace.
         if latest.len() > 1 {
-            let n = latest.len();
+            let pts = trace_points(latest, w, self.top_dbm, self.range_db, spec_h);
             let trace = Path::new(|b| {
-                for (i, &dbm) in latest.iter().enumerate() {
-                    let x = bin_to_x(i, n, w);
-                    let y = dbm_to_y(dbm, self.top_dbm, self.range_db, spec_h);
-                    if i == 0 {
-                        b.move_to(Point::new(x, y));
-                    } else {
-                        b.line_to(Point::new(x, y));
-                    }
+                b.move_to(pts[0]);
+                for p in &pts[1..] {
+                    b.line_to(*p);
                 }
             });
             frame.stroke(
@@ -887,5 +936,81 @@ mod spot_click_tests {
             on_qsy: sp.on_qsy,
             on_wheel: sp.on_wheel,
         }
+    }
+}
+
+#[cfg(test)]
+mod afterglow_draw_tests {
+    use super::*;
+
+    /// FR-PAN-14: the ghost and the live trace share one mapping from bin to screen point, so a
+    /// peak that has faded sits at the same frequency as the live trace and *above* it (smaller y);
+    /// levels outside the window stay inside the band.
+    /// trace: FR-PAN-14
+    #[test]
+    fn fr_pan_14_ghost_and_trace_share_their_geometry() {
+        let (w, h, top, range) = (400.0, 100.0, -20.0, 100.0);
+        let live = [-120.0, -100.0, -80.0, -100.0];
+        let ghost = [-120.0, -60.0, -80.0, -95.0];
+        let a = trace_points(&live, w, top, range, h);
+        let g = trace_points(&ghost, w, top, range, h);
+        assert_eq!(a.len(), 4);
+        assert_eq!(g.len(), 4);
+        for i in 0..4 {
+            assert_eq!(a[i].x, g[i].x, "bin {i} is at the same frequency");
+            assert_eq!(a[i].x, bin_to_x(i, 4, w));
+            assert_eq!(a[i].y, dbm_to_y(live[i], top, range, h));
+        }
+        assert!(
+            g[1].y < a[1].y,
+            "a ghost above the trace draws higher on screen"
+        );
+        assert_eq!(g[0].y, a[0].y, "and equal where nothing lingers");
+        // Out of the window either way: clamped to the band, never outside it.
+        let wild = trace_points(&[f32::MAX, -1.0e9, top, top - range], w, top, range, h);
+        assert!(wild.iter().all(|p| (0.0..=h).contains(&p.y)), "{wild:?}");
+        assert_eq!(wild[0].y, 0.0);
+        assert_eq!(wild[1].y, h);
+        assert!(trace_points(&[], w, top, range, h).is_empty());
+        assert_eq!(trace_points(&[-90.0], w, top, range, h).len(), 1);
+    }
+
+    /// FR-PAN-14: in `draw` the ghost is laid down **before** the live trace, so the live line is
+    /// never hidden under the glow, and both go through `trace_points`. Structural — nothing else
+    /// sees the order — and reading only the code above this module so the needles cannot match this
+    /// test's own text.
+    /// trace: FR-PAN-14
+    #[test]
+    fn fr_pan_14_the_ghost_is_drawn_under_the_live_trace() {
+        let whole = include_str!("spectrum.rs");
+        let code = &whole[..whole
+            .find(concat!("mod afterglow_draw", "_tests {"))
+            .expect("the test module")];
+        let ghost_at = code
+            .find("trace_points(&ghost,")
+            .expect("the ghost is drawn from trace_points");
+        let live_at = code
+            .find("trace_points(latest,")
+            .expect("the live trace is drawn from trace_points");
+        assert!(
+            ghost_at < live_at,
+            "the ghost must be drawn before the live trace"
+        );
+        assert!(
+            code.contains("p.ghost(self.rx)"),
+            "the ghost is not read from the shared history"
+        );
+        // Neither trace of the spectrum builds its own points any more (the mini-pan, a different
+        // widget, has its own mapping and is not looked at).
+        let start = code
+            .find("for Spectrum<'_, Message> {")
+            .expect("the Spectrum program");
+        let end = code
+            .find("for MiniPan<'_> {")
+            .expect("the MiniPan program follows");
+        assert!(
+            !code[start..end].contains("bin_to_x("),
+            "a trace maps its own bins instead of using trace_points"
+        );
     }
 }

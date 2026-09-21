@@ -7,6 +7,7 @@
 //! ADR-15): a dark layered theme, banded frame, grids of two-line state
 //! buttons, and proportional S-meter bars (FR-UI-08..15).
 
+mod afterglow;
 mod http_fetch;
 mod kpa;
 mod meter;
@@ -330,6 +331,8 @@ struct App {
     // present only while the networks dialog is open.
     spot_config_window: Option<iced::window::Id>,
     spot_max_age: String,
+    /// The spectrum afterglow field as typed (FR-PAN-14); resolved by `parse_afterglow_ms`.
+    afterglow_ms: String,
     spot_networks: k4_config::SpotNetworks,
     spot_psk_port: String,
     spot_rbn_port: String,
@@ -907,6 +910,8 @@ enum Message {
     Kpa1500PollChanged(String),
     // Spot nameplates (FR-SPOT-03/04).
     SpotMaxAgeChanged(String),
+    /// The spectrum afterglow field was edited (FR-PAN-14).
+    AfterglowChanged(String),
     ToggleSpotWindow,
     ToggleSpotNetwork(SpotNet),
     SpotHostChanged(SpotNet, String),
@@ -1071,6 +1076,10 @@ impl App {
         let kpa1500_port = prefs.kpa1500_port.to_string();
         let kpa1500_poll = prefs.kpa1500_poll_ms.to_string();
         let spot_max_age = prefs.spot_max_age_min().to_string();
+        let afterglow_ms = prefs.spectrum_afterglow_ms().to_string();
+        if let Ok(mut p) = pan.lock() {
+            p.set_afterglow_ms(prefs.spectrum_afterglow_ms());
+        }
         let spot_networks = prefs.spot_networks.clone();
         if let Ok(mut p) = spot_pins.lock() {
             *p = tls::pins_from(&spot_networks.trusted());
@@ -1209,6 +1218,7 @@ impl App {
             kpa1500_config_window: None,
             spot_config_window: None,
             spot_max_age,
+            afterglow_ms,
             spot_networks,
             spot_psk_port,
             spot_rbn_port,
@@ -1660,6 +1670,13 @@ impl App {
         col.into()
     }
 
+    /// Give the pan history the afterglow the field resolves to.
+    fn apply_afterglow(&self) {
+        if let Ok(mut p) = self.pan.lock() {
+            p.set_afterglow_ms(k4_config::parse_afterglow_ms(&self.afterglow_ms));
+        }
+    }
+
     /// Hand the worker the approved certificates as they are now in the settings.
     fn sync_spot_pins(&self) {
         if let Ok(mut p) = self.spot_pins.lock() {
@@ -1723,6 +1740,7 @@ impl App {
                         .filter(|ms| *ms >= 50)
                         .unwrap_or(500),
                     spot_max_age_min: k4_config::parse_spot_max_age_min(&self.spot_max_age),
+                    spectrum_afterglow_ms: k4_config::parse_afterglow_ms(&self.afterglow_ms),
                     spot_networks: self.spot_networks_for_save(),
                     kpod_enabled: self.kpod_enabled,
                     kpod_buttons: self.kpod_buttons.clone(),
@@ -2868,6 +2886,12 @@ impl App {
             // Spot nameplates (FR-SPOT-03/04). The age limit is edited in the
             // Settings dialog and saved as it changes (an unusable entry resolves
             // to the default on save); the networks live in their own window.
+            Message::AfterglowChanged(v) => {
+                self.afterglow_ms = v.chars().filter(char::is_ascii_digit).take(4).collect();
+                // Live: the trace shows the new trail at once, and the file is written on the next
+                // save like every other setting.
+                self.apply_afterglow();
+            }
             Message::SpotMaxAgeChanged(v) => {
                 self.spot_max_age = v.chars().filter(char::is_ascii_digit).take(4).collect();
                 self.save_config();
@@ -6616,6 +6640,43 @@ impl App {
             .into()
     }
 
+    /// The Settings-dialog block for the spectrum afterglow (FR-PAN-14): one number, what it
+    /// resolves to shown live so an unusable entry visibly becomes something else.
+    fn afterglow_settings_view(&self) -> Element<'_, Message> {
+        let dim = role_color(ui::ColorRole::Inactive);
+        let ms = k4_config::parse_afterglow_ms(&self.afterglow_ms);
+        let effective = if ms == 0 {
+            "Off: the trace shows only the newest row.".to_string()
+        } else {
+            format!("A peak falls 4.3 dB every {ms} ms, so it fades over a few of those.")
+        };
+        Column::new()
+            .spacing(6)
+            .push(
+                Row::new()
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                    .push(Text::new("Spectrum afterglow").size(12))
+                    .push(
+                        TextInput::new("0", &self.afterglow_ms)
+                            .on_input(Message::AfterglowChanged)
+                            .size(13)
+                            .width(Length::Fixed(60.0)),
+                    )
+                    .push(Text::new("ms").size(12)),
+            )
+            .push(
+                Text::new(format!(
+                    "{effective} 0 is off; otherwise {}–{} ms.",
+                    k4_config::AFTERGLOW_MIN_MS,
+                    k4_config::AFTERGLOW_MAX_MS
+                ))
+                .size(11)
+                .color(dim),
+            )
+            .into()
+    }
+
     /// The Settings-dialog block for spot nameplates (FR-SPOT-03/04): the maximum
     /// spot age, and the entry point to the per-network configuration window.
     fn spot_settings_view(&self) -> Element<'_, Message> {
@@ -6661,7 +6722,7 @@ impl App {
                 Row::new()
                     .spacing(8)
                     .align_y(Alignment::Center)
-                    .push(Text::new(format!("Spotting networks: {on} of 3 on")).size(12))
+                    .push(Text::new(format!("Spotting networks: {on} of 4 on")).size(12))
                     .push(small_btn("Networks…", Message::ToggleSpotWindow)),
             )
             .into()
@@ -8428,6 +8489,7 @@ impl App {
             .push(Text::new("K-Pod function switches").size(12).color(dim))
             .push(self.kpod_buttons_view())
             .push(Text::new("Spot nameplates").size(12).color(dim))
+            .push(self.afterglow_settings_view())
             .push(self.spot_settings_view())
             .push(Text::new("KPA1500 amplifier").size(12).color(dim))
             .push(
@@ -10658,5 +10720,64 @@ mod spot_settings_tests {
         assert_eq!(sanitise_spot_login(""), "");
         // Bounded: a pasted blob cannot grow the field.
         assert_eq!(sanitise_spot_login(&"A".repeat(200)).len(), 16);
+    }
+}
+
+#[cfg(test)]
+mod afterglow_wiring_tests {
+    /// FR-PAN-14: the afterglow setting is carried through every hand-off — typed into the field,
+    /// applied to the pan history live, written to the file on save (which ends in
+    /// `..Default::default()`, so a forgotten field would silently reset to off), applied at start-up
+    /// from the saved value, and shown in the Settings dialog. Structural, reading only the code
+    /// above this module so the needles cannot match this test's own text.
+    /// trace: FR-PAN-14
+    #[test]
+    fn fr_pan_14_the_setting_is_wired_end_to_end() {
+        let whole = include_str!("main.rs");
+        let code = &whole[..whole
+            .find(concat!("mod afterglow_wiring", "_tests {"))
+            .expect("the test module")];
+        let between = |from: &str, to: &str| {
+            let a = code.find(from).unwrap_or_else(|| panic!("no `{from}`"));
+            let b = code[a..]
+                .find(to)
+                .unwrap_or_else(|| panic!("no end for `{from}`"));
+            &code[a..a + b]
+        };
+        let handler = between(
+            "Message::AfterglowChanged(v) => {",
+            "Message::SpotMaxAgeChanged",
+        );
+        assert!(
+            handler.contains("char::is_ascii_digit"),
+            "the field takes more than digits"
+        );
+        assert!(
+            handler.contains("self.apply_afterglow()"),
+            "typing does not reach the pan:\n{handler}"
+        );
+        let apply = between("fn apply_afterglow(&self) {", "/// Hand the worker");
+        assert!(
+            apply.contains("set_afterglow_ms(k4_config::parse_afterglow_ms(&self.afterglow_ms))"),
+            "apply does not parse the field into the pan history:\n{apply}"
+        );
+        assert!(
+            code.contains(
+                "spectrum_afterglow_ms: k4_config::parse_afterglow_ms(&self.afterglow_ms),"
+            ),
+            "the setting is not written on save"
+        );
+        assert!(
+            code.contains("p.set_afterglow_ms(prefs.spectrum_afterglow_ms());"),
+            "the saved setting is not applied at start-up"
+        );
+        assert!(
+            code.contains(".push(self.afterglow_settings_view())"),
+            "the Settings dialog does not show the field"
+        );
+        assert!(
+            code.contains(".on_input(Message::AfterglowChanged)"),
+            "the field does not send its edits"
+        );
     }
 }
