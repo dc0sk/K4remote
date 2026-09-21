@@ -10445,104 +10445,382 @@ mod band_target_tests {
     }
 }
 
+/// Structural guards: tests that read this file's own source to prove something is wired.
+///
+/// Such a test has a hazard no other test has — **its own text is in the haystack.** A needle
+/// written in the test also matches the test, so when the real line drifts (an argument added to a
+/// `match` arm, a call renamed) the search falls through to the test's own literal and every
+/// assertion is satisfied by strings the test itself contains. That is not hypothetical: the
+/// emergency-stop guard below searched for a two-argument `KeyPressed` arm, the arm gained a third
+/// argument in July, and from then on the guard checked nothing — deleting the real dispatch left
+/// it green. So every guard here reads [`production`], which stops above this module, and the
+/// checks are pure functions of a source string, tested on synthetic sources including the one
+/// where the thing being looked for is missing (which must fail loudly, not pass).
 #[cfg(test)]
-mod estop_wiring_tests {
-    /// The emergency-stop hotkey must be dispatched **first** in
-    /// `Message::KeyPressed`, before ESC/modal handling, hotkey capture, and
-    /// text entry.
-    ///
-    /// Structural, like the tap/hold guard below, and for the same reason: the
-    /// pure predicate (`ui::is_estop_hotkey`) is thoroughly unit-tested, but
-    /// nothing in the suite proves it is *wired*. Verified by sabotage —
-    /// disabling the dispatch left all 266 tests green, which for a safety
-    /// control is not an acceptable place to leave it. Anything inserted above
-    /// this check could swallow the stop when focus is in a text field, which
-    /// is exactly the case the requirement exists to cover.
-    ///
-    /// trace: FR-TX-SAFE-05
-    #[test]
-    fn fr_tx_safe_05_estop_is_dispatched_before_all_other_key_handling() {
-        let src = include_str!("main.rs");
-        let handler = src
-            .find("Message::KeyPressed(key, mods) => {")
-            .expect("the KeyPressed handler must exist");
-        let estop = src[handler..]
-            .find("ui::is_estop_press(")
-            .expect("KeyPressed must dispatch the emergency stop (FR-TX-SAFE-05)");
-        let body = &src[handler..handler + estop];
+mod source_guard {
+    /// The production code of this file: everything above this module. Test code — and so every
+    /// needle a test contains — is excluded. The marker is built with `concat!` so this line does
+    /// not itself contain it, and everything from the module header down is left out.
+    pub(super) fn production() -> &'static str {
+        let whole = include_str!("main.rs");
+        &whole[..whole
+            .find(concat!("mod source_", "guard {"))
+            .expect("the source_guard module must be in main.rs")]
+    }
 
-        // Nothing that consumes a key press may precede it.
-        for barrier in [
-            "self.capturing_hotkey",
-            "self.ptt_hotkey",
-            "self.settings_open",
-            "self.about_open",
-            "self.rx_popup",
-            "Named::Escape",
-        ] {
-            assert!(
-                !body.contains(barrier),
-                "`{barrier}` is handled before the emergency stop — it could \
-                 swallow the stop and leave the radio keyed:\n{body}"
+    /// Where the `match` arm for a pattern starting `variant` (e.g. `Message::KeyPressed(`)
+    /// begins. An arm is a line that opens with the pattern and ends in `=> {`, whatever its
+    /// arguments — a construction such as `Some(Message::KeyPressed(..))` is not one. Exactly one
+    /// must exist: none means the arm was renamed or moved, which must be an error and not a pass.
+    pub(super) fn arm_start(src: &str, variant: &str) -> Result<usize, String> {
+        let arms: Vec<usize> = src
+            .match_indices(variant)
+            .map(|(i, _)| i)
+            .filter(|&i| {
+                let line = src[i..].lines().next().unwrap_or("");
+                line.trim_end().ends_with(") => {") && line.starts_with(variant)
+            })
+            .collect();
+        match arms.as_slice() {
+            [one] => Ok(*one),
+            [] => Err(format!(
+                "no `{variant}..) => {{` match arm found: it was renamed, moved or removed"
+            )),
+            many => Err(format!(
+                "{} `{variant}` arms found, expected one",
+                many.len()
+            )),
+        }
+    }
+
+    /// The emergency stop must be the **first thing** the key handler does (FR-TX-SAFE-05): before
+    /// modals, hotkey capture and text entry, none of which may swallow it. Between the arm's
+    /// header and the check there may be only comments and blank lines; then the arm must send the
+    /// stop.
+    pub(super) fn check_estop_arm(src: &str) -> Result<(), String> {
+        let start = arm_start(src, "Message::KeyPressed(")?;
+        let arm = &src[start..];
+        let header_end = arm.find('\n').ok_or("the arm has no body")?;
+        // The arm's indentation is that of its line, which begins before the pattern does.
+        let line_start = src[..start].rfind('\n').map_or(0, |n| n + 1);
+        let indent = &src[line_start..start];
+        let body = &arm[header_end..];
+        // The next arm starts at the same indentation.
+        let arm_end = body
+            .find(&format!("\n{indent}Message::"))
+            .unwrap_or(body.len());
+        let body = &body[..arm_end];
+
+        let check = body
+            .find("ui::is_estop_press(")
+            .ok_or("KeyPressed must dispatch the emergency stop (FR-TX-SAFE-05)")?;
+        for line in body[..check].lines() {
+            let t = line.trim();
+            if !(t.is_empty() || t.starts_with("//") || t == "if") {
+                return Err(format!(
+                    "`{t}` runs before the emergency stop is checked — it could swallow the stop \
+                     and leave the radio keyed"
+                ));
+            }
+        }
+        // The dispatch must be *in the block the check opens* — not merely somewhere later in the
+        // arm — and that block must return, so the key is not then handled as anything else.
+        let block = if_block_after_call(&body[check..])
+            .ok_or("the emergency-stop check does not open a block")?;
+        if !block.contains("WorkerCmd::EmergencyStop") {
+            return Err("the hotkey must dispatch EmergencyStop".into());
+        }
+        if !block.contains("return") {
+            return Err(
+                "the emergency stop must return, not fall through to other handling".into(),
             );
         }
-
-        // And it must actually send the stop, not merely test for the key.
-        // Scoped to the rest of this match arm rather than a fixed byte
-        // window — rustfmt reflows the call across lines as its arguments
-        // grow, and a magic-number window made this guard fail on formatting
-        // alone.
-        let arm_end = src[handler..]
-            .find("\n            Message::")
-            .map_or(src.len(), |n| handler + n);
-        let after = &src[handler + estop..arm_end];
-        assert!(
-            after.contains("WorkerCmd::EmergencyStop"),
-            "the hotkey must dispatch EmergencyStop:\n{after}"
-        );
+        Ok(())
     }
-}
 
-#[cfg(test)]
-mod tap_hold_wiring_tests {
-    /// Every `tap_hold` call must wrap a **non-interactive** visual.
-    ///
-    /// Structural, not logical: an iced `Button` carrying its own `on_press`
-    /// captures both press and release, and `MouseArea` delegates to its
-    /// content first and returns early when the content captured. A wrapped
-    /// interactive button therefore swallows exactly the events the hold
-    /// timing needs — the tap still fires from the button's own handler, so
-    /// the control looks fine and the hold silently never happens. That
-    /// shipped, and only a hardware check caught it.
-    ///
-    /// trace: FR-UI-HOLD-01
-    #[test]
-    fn fr_ui_hold_01_tap_hold_wraps_a_non_interactive_visual() {
-        let src = include_str!("main.rs");
+    /// The `{ .. }` block that follows the call at the start of `text` — `f(args) { block }` — with
+    /// the arguments' parentheses balanced (they may nest and span lines). `None` if no block
+    /// follows the call directly.
+    fn if_block_after_call(text: &str) -> Option<&str> {
+        let open = text.find('(')?;
+        let mut depth = 0usize;
+        let mut close = None;
+        for (k, c) in text[open..].char_indices() {
+            match c {
+                '(' => depth += 1,
+                ')' => {
+                    depth = depth.checked_sub(1)?;
+                    if depth == 0 {
+                        close = Some(open + k + 1);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let rest = &text[close?..];
+        let brace = rest.find('{')?;
+        if !rest[..brace].trim().is_empty() {
+            return None;
+        }
+        let mut depth = 0usize;
+        for (k, c) in rest[brace..].char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth = depth.checked_sub(1)?;
+                    if depth == 0 {
+                        return Some(&rest[brace..brace + k + 1]);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    /// Every `tap_hold` call must wrap a **non-interactive** visual; returns how many calls there
+    /// are. The definition and doc lines are skipped.
+    pub(super) fn check_tap_hold_calls(src: &str) -> Result<usize, String> {
         let mut checked = 0;
         for (i, _) in src.match_indices("tap_hold(") {
-            // Skip the definition and this test's own prose.
             let line_start = src[..i].rfind('\n').map_or(0, |n| n + 1);
             let line = &src[line_start..i];
             if line.contains("fn ") || line.contains("///") {
                 continue;
             }
             let window = &src[i..(i + 500).min(src.len())];
-            assert!(
-                window.contains("two_line_btn_visual"),
-                "tap_hold call #{checked} must wrap two_line_btn_visual, got:\n{window}"
-            );
-            assert!(
-                !window.contains("Some(Message::"),
-                "tap_hold call #{checked} wraps an interactive button — its \
-                 on_press will capture the events the hold needs:\n{window}"
-            );
+            if !window.contains("two_line_btn_visual") {
+                return Err(format!(
+                    "tap_hold call #{checked} must wrap two_line_btn_visual, got:\n{window}"
+                ));
+            }
+            if window.contains("Some(Message::") {
+                return Err(format!(
+                    "tap_hold call #{checked} wraps an interactive button — its on_press will \
+                     capture the events the hold needs:\n{window}"
+                ));
+            }
             checked += 1;
         }
+        Ok(checked)
+    }
+}
+
+#[cfg(test)]
+mod estop_wiring_tests {
+    use super::source_guard::{arm_start, check_estop_arm, production};
+
+    /// The emergency-stop hotkey must be dispatched **first** in `Message::KeyPressed`, before
+    /// ESC/modal handling, hotkey capture, and text entry.
+    ///
+    /// Structural: the pure predicate (`ui::is_estop_hotkey`) is thoroughly unit-tested, but
+    /// nothing else proves it is *wired*. Reads only production code (see `source_guard`).
+    ///
+    /// trace: FR-TX-SAFE-05
+    #[test]
+    fn fr_tx_safe_05_estop_is_dispatched_before_all_other_key_handling() {
+        if let Err(why) = check_estop_arm(production()) {
+            panic!("{why}");
+        }
+    }
+
+    /// The guard itself, on synthetic sources: it accepts the arm whatever its arguments, and
+    /// refuses code before the check, a missing dispatch, a dispatch that belongs to the next arm,
+    /// and — the case that rotted unseen — an arm it cannot find.
+    ///
+    /// trace: FR-TX-SAFE-05
+    #[test]
+    fn fr_tx_safe_05_the_guard_itself_is_not_vacuous() {
+        let arm = |args: &str, before: &str, dispatch: &str, indent: &str| {
+            format!(
+                "{indent}Message::KeyPressed({args}) => {{\n{before}{indent}    if ui::is_estop_press(&key) {{\n{dispatch}{indent}        return Task::none();\n{indent}    }}\n{indent}}}\n{indent}Message::Other => {{\n{indent}    self.send(WorkerCmd::EmergencyStop);\n{indent}}}\n"
+            )
+        };
+        let send = "            self.send(WorkerCmd::EmergencyStop);\n";
+
+        // Accepted whatever the arguments or the indentation — the arm gained a third argument
+        // once; it may gain a fourth.
+        for args in ["key, mods", "key, mods, window", "key, mods, window, extra"] {
+            for indent in ["", "    ", "            "] {
+                let src = arm(args, "", send, indent);
+                assert_eq!(
+                    check_estop_arm(&src),
+                    Ok(()),
+                    "{args:?} at {indent:?}\n{src}"
+                );
+            }
+        }
+        // Comments and blank lines before the check are fine.
+        let src = arm(
+            "key, mods",
+            "        // ESC stops while on air.\n\n",
+            send,
+            "",
+        );
+        assert_eq!(check_estop_arm(&src), Ok(()));
+
+        // Anything else before the check is refused — a named barrier or not — at any indentation
+        // (the indentation is what locates the arm's end, and once hid a bug here).
+        for indent in ["", "    ", "            "] {
+            for before in [
+                "        if self.capturing_hotkey { return Task::none(); }\n",
+                "        if self.settings_open { return Task::none(); }\n",
+                "        let x = 1;\n",
+                "        self.something();\n",
+                "        return Task::none();\n",
+            ] {
+                let src = arm("key, mods", before, send, indent);
+                let err = check_estop_arm(&src).expect_err(before);
+                assert!(err.contains("before the emergency stop"), "{err}");
+            }
+            // No dispatch in the arm — even though the next arm has one.
+            let src = arm("key, mods", "", "", indent);
+            assert_eq!(
+                check_estop_arm(&src),
+                Err("the hotkey must dispatch EmergencyStop".to_string()),
+                "the next arm's dispatch was counted for this one, at {indent:?}\n{src}"
+            );
+        }
+        // An arm with no check of its own, followed by an arm that has one: the neighbour's check
+        // must not be taken for it (this is what the arm's end is for), at any indentation.
+        for indent in ["", "    ", "            "] {
+            let src = format!(
+                "{indent}Message::KeyPressed(key, mods) => {{\n{indent}    foo();\n{indent}}}\n{indent}Message::Other => {{\n{indent}    if ui::is_estop_press(&key) {{\n{indent}        self.send(WorkerCmd::EmergencyStop);\n{indent}        return Task::none();\n{indent}    }}\n{indent}}}\n"
+            );
+            assert!(
+                check_estop_arm(&src)
+                    .unwrap_err()
+                    .contains("must dispatch the emergency stop"),
+                "another arm's check was taken for this one, at {indent:?}"
+            );
+        }
+        // The dispatch after the check's block, still inside the arm, is not the check's dispatch.
+        let outside = "Message::KeyPressed(key, mods) => {\n    if ui::is_estop_press(&key) {\n        return Task::none();\n    }\n    self.send(WorkerCmd::EmergencyStop);\n}\n";
+        assert_eq!(
+            check_estop_arm(outside),
+            Err("the hotkey must dispatch EmergencyStop".to_string())
+        );
+        // A block that stops the radio but then falls through to other key handling.
+        let no_return = "Message::KeyPressed(key, mods) => {\n    if ui::is_estop_press(&key) {\n        self.send(WorkerCmd::EmergencyStop);\n    }\n}\n";
+        assert!(check_estop_arm(no_return)
+            .unwrap_err()
+            .contains("must return"));
+        // A multi-line condition with nested calls, like the real one, still finds its block.
+        let real_shape = "            Message::KeyPressed(key, mods, window) => {\n                // comment\n                if ui::is_estop_press(\n                    &key,\n                    mods,\n                    ui::on_air(a, b, c),\n                ) {\n                    self.send(WorkerCmd::EmergencyStop);\n                    return Task::none();\n                }\n            }\n            Message::Next => {\n            }\n";
+        assert_eq!(check_estop_arm(real_shape), Ok(()));
+        // A condition that goes on past the check: the stop would then depend on more than the key.
+        let extended = "Message::KeyPressed(k) => {\n    if ui::is_estop_press(&k) && other {\n        self.send(WorkerCmd::EmergencyStop);\n        return Task::none();\n    }\n}\n";
+        assert!(check_estop_arm(extended)
+            .unwrap_err()
+            .contains("does not open a block"));
+        // No check at all.
+        assert!(
+            check_estop_arm("Message::KeyPressed(key, mods) => {\n    foo();\n}\n")
+                .unwrap_err()
+                .contains("must dispatch the emergency stop")
+        );
+
+        // The arm is gone, renamed, or only constructed elsewhere: an error, not a pass.
+        for src in [
+            "",
+            "Message::KeyReleased(key) => {\n if ui::is_estop_press(&k) { self.send(WorkerCmd::EmergencyStop); }\n}\n",
+            "let m = Some(Message::KeyPressed(key, modifiers, id));\n",
+        ] {
+            let err = check_estop_arm(src).expect_err(src);
+            assert!(err.contains("match arm found"), "{err}");
+        }
+        // Two arms is ambiguous, and refused.
+        let twice = format!(
+            "{}{}",
+            arm("key, mods", "", send, ""),
+            arm("key, mods", "", send, "")
+        );
+        assert!(check_estop_arm(&twice)
+            .unwrap_err()
+            .contains("2 `Message::KeyPressed(` arms"));
+        assert!(arm_start("Message::KeyPressed(a) => {\n}", "Message::KeyPressed(").is_ok());
+    }
+
+    /// `production()` really is only production code: it stops above the test modules (so no test
+    /// needle can be found in it), and it still holds real code.
+    ///
+    /// trace: FR-TX-SAFE-05
+    #[test]
+    fn fr_tx_safe_05_production_excludes_the_tests() {
+        let prod = production();
+        assert!(
+            prod.contains("fn target_rx("),
+            "the production code is missing"
+        );
+        assert!(
+            prod.contains("Message::KeyPressed(key, mods, window) => {"),
+            "the real key handler is missing from what the guards read"
+        );
+        for test_text in [
+            concat!("fn fr_tx_safe_05", "_estop_is_dispatched"),
+            concat!("mod estop_wiring", "_tests"),
+            concat!("mod tap_hold_wiring", "_tests"),
+        ] {
+            assert!(
+                !prod.contains(test_text),
+                "test code leaked into production(): {test_text}"
+            );
+        }
+        assert!(prod.len() < include_str!("main.rs").len());
+    }
+}
+
+#[cfg(test)]
+mod tap_hold_wiring_tests {
+    use super::source_guard::{check_tap_hold_calls, production};
+
+    /// Every `tap_hold` call must wrap a **non-interactive** visual.
+    ///
+    /// Structural, not logical: an iced `Button` carrying its own `on_press` captures both press and
+    /// release, and `MouseArea` delegates to its content first and returns early when the content
+    /// captured. A wrapped interactive button therefore swallows exactly the events the hold timing
+    /// needs — the tap still fires from the button's own handler, so the control looks fine and the
+    /// hold silently never happens. That shipped, and only a hardware check caught it.
+    ///
+    /// It reads production code only. It used to read the whole file and so counted **its own
+    /// text** as a seventh call, which meant one of the six real ones could disappear and the
+    /// "at least six" check would still pass.
+    ///
+    /// trace: FR-UI-HOLD-01
+    #[test]
+    fn fr_ui_hold_01_tap_hold_wraps_a_non_interactive_visual() {
+        let checked = check_tap_hold_calls(production()).unwrap_or_else(|why| panic!("{why}"));
         assert!(
             checked >= 6,
             "expected all six popup chips (ATT/PRE/AGC/NB/NR/NOTCH), found {checked}"
         );
+    }
+
+    /// The guard itself, on synthetic sources: it counts real calls only, refuses a wrapped
+    /// interactive button and a call that wraps something else, and skips the definition and docs.
+    ///
+    /// trace: FR-UI-HOLD-01
+    #[test]
+    fn fr_ui_hold_01_the_guard_itself_is_not_vacuous() {
+        let good = "fn tap_hold(a: A) -> B {}\n/// tap_hold(x) is documented here\nlet a = tap_hold(two_line_btn_visual(1));\nlet b = tap_hold(two_line_btn_visual(2));\n";
+        assert_eq!(
+            check_tap_hold_calls(good),
+            Ok(2),
+            "the definition and docs are not calls"
+        );
+        assert_eq!(check_tap_hold_calls(""), Ok(0));
+        let interactive = "let a = tap_hold(two_line_btn_visual(1));\nlet b = tap_hold(button(two_line_btn_visual(2)).on_press(Some(Message::X)));\n";
+        assert!(check_tap_hold_calls(interactive)
+            .unwrap_err()
+            .contains("interactive"));
+        let wrong = "let a = tap_hold(some_other_widget(1));\n";
+        assert!(check_tap_hold_calls(wrong)
+            .unwrap_err()
+            .contains("must wrap two_line_btn_visual"));
+        // One call fewer is one fewer: nothing supplies a phantom.
+        let five = "let x = tap_hold(two_line_btn_visual(1));\n".repeat(5);
+        assert_eq!(check_tap_hold_calls(&five), Ok(5));
     }
 }
 
