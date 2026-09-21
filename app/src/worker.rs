@@ -89,13 +89,21 @@ pub struct PanRow {
 pub struct PanShared {
     rows: [VecDeque<PanRow>; 2],
     total: [u64; 2],
+    /// The spectrum afterglow of each receiver (FR-PAN-14), advanced as each row arrives.
+    glow: [crate::afterglow::Afterglow; 2],
 }
 
 impl PanShared {
     /// Add the newest row for receiver `rx` (0 = main/A, 1 = sub/B), dropping the oldest beyond
     /// [`WATERFALL_ROWS`].
     pub fn push(&mut self, rx: usize, row: PanRow) {
+        self.push_at(rx, row, std::time::Instant::now());
+    }
+
+    /// As [`push`](Self::push), with the time the row arrived (so tests can supply their own).
+    pub fn push_at(&mut self, rx: usize, row: PanRow, now: std::time::Instant) {
         let rx = rx.min(1);
+        self.glow[rx].feed(&row, now);
         self.rows[rx].push_front(row);
         while self.rows[rx].len() > WATERFALL_ROWS {
             self.rows[rx].pop_back();
@@ -106,6 +114,20 @@ impl PanShared {
     /// Forget the history (disconnect, or the pan was reset). `total` keeps counting.
     pub fn clear(&mut self, rx: usize) {
         self.rows[rx.min(1)].clear();
+        self.glow[rx.min(1)].clear();
+    }
+
+    /// Set the spectrum afterglow for both receivers, milliseconds (`0` is off; see
+    /// [`crate::afterglow::Afterglow::set_ms`]).
+    pub fn set_afterglow_ms(&mut self, ms: u32) {
+        for g in &mut self.glow {
+            g.set_ms(ms);
+        }
+    }
+
+    /// The afterglow trace for `rx`, dBm per bin like a row; `None` when it is off.
+    pub fn ghost(&self, rx: usize) -> Option<&[f32]> {
+        self.glow[rx.min(1)].ghost()
     }
 
     /// The history for `rx`, newest first.
@@ -1887,6 +1909,56 @@ mod kpod {
 
 #[cfg(test)]
 mod tests {
+    /// FR-PAN-14: the shared pan history feeds each receiver's afterglow as its rows arrive, keeps
+    /// the two apart, drops it when the history is cleared or the trail is switched off, and shows
+    /// nothing while the trail is off.
+    /// trace: FR-PAN-14
+    #[test]
+    fn fr_pan_14_the_history_feeds_the_afterglow_per_receiver() {
+        use std::time::{Duration, Instant};
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        let row = |bin: f32| PanRow {
+            bins: vec![bin, -120.0],
+            center_hz: 14_074_000,
+            span_hz: 48_000,
+        };
+        let mut pan = PanShared::default();
+        // Off by default: rows are kept, no ghost.
+        pan.push_at(0, row(-50.0), at(0));
+        assert!(pan.ghost(0).is_none());
+        assert_eq!(pan.rows(0).len(), 1);
+
+        pan.set_afterglow_ms(1000);
+        pan.push_at(0, row(-50.0), at(100));
+        pan.push_at(1, row(-70.0), at(100));
+        // The peak on receiver 0 falls after it; receiver 1's own ghost is unaffected.
+        pan.push_at(0, row(-120.0), at(1100));
+        let g0 = pan.ghost(0).unwrap()[0];
+        assert!((g0 - (-50.0 - 4.3429)).abs() < 0.02, "receiver 0: {g0}");
+        assert_eq!(
+            pan.ghost(1).unwrap()[0],
+            -70.0,
+            "receiver 1 has had no row since"
+        );
+        // An out-of-range receiver number is the sub receiver, as everywhere in this type.
+        assert_eq!(pan.ghost(7), pan.ghost(1));
+
+        // Clearing one receiver's history drops its ghost only.
+        pan.clear(0);
+        assert!(pan.ghost(0).is_none());
+        assert!(pan.ghost(1).is_some());
+        // The next row starts it again from the live trace.
+        pan.push_at(0, row(-99.0), at(1200));
+        assert_eq!(pan.ghost(0).unwrap()[0], -99.0);
+
+        // Switching it off drops both and stops feeding them.
+        pan.set_afterglow_ms(0);
+        assert!(pan.ghost(0).is_none() && pan.ghost(1).is_none());
+        pan.push_at(0, row(-40.0), at(1300));
+        assert!(pan.ghost(0).is_none());
+    }
+
     use super::*;
 
     /// Build a PAN payload with a known centre frequency and sample rate.

@@ -610,3 +610,59 @@ fn fr_spot_13_trusted_certificates_persist_and_are_validated() {
     let old: Prefs = toml::from_str("tune_step_hz = 100").expect("legacy config");
     assert!(old.spot_networks.trusted().is_empty());
 }
+
+/// FR-PAN-14: the spectrum afterglow is off by default, persists, and a hand-edited or typed value
+/// is brought into range — zero stays off, small non-zero values rise to the minimum, large ones
+/// fall to the maximum, and an unusable entry means off.
+/// trace: FR-PAN-14
+#[test]
+fn fr_pan_14_afterglow_setting_persists_and_is_bounded() {
+    use k4_config::{
+        parse_afterglow_ms, sanitise_afterglow_ms, AFTERGLOW_MAX_MS, AFTERGLOW_MIN_MS,
+    };
+    assert_eq!(
+        Prefs::default().spectrum_afterglow_ms(),
+        0,
+        "off by default"
+    );
+
+    let prefs = Prefs {
+        spectrum_afterglow_ms: 750,
+        ..Default::default()
+    };
+    let back: Prefs = toml::from_str(&toml::to_string(&prefs).expect("serialize")).expect("parse");
+    assert_eq!(back.spectrum_afterglow_ms(), 750);
+
+    // A config from before this feature loads as off.
+    let old: Prefs = toml::from_str("tune_step_hz = 100").expect("legacy config");
+    assert_eq!(old.spectrum_afterglow_ms(), 0);
+
+    // A hand-edited value is brought into range when read.
+    for (stray, want) in [
+        (0, 0),
+        (1, AFTERGLOW_MIN_MS),
+        (AFTERGLOW_MIN_MS - 1, AFTERGLOW_MIN_MS),
+        (AFTERGLOW_MIN_MS, AFTERGLOW_MIN_MS),
+        (2500, 2500),
+        (AFTERGLOW_MAX_MS, AFTERGLOW_MAX_MS),
+        (AFTERGLOW_MAX_MS + 1, AFTERGLOW_MAX_MS),
+        (u32::MAX, AFTERGLOW_MAX_MS),
+    ] {
+        assert_eq!(sanitise_afterglow_ms(stray), want, "value {stray}");
+        let p: Prefs = toml::from_str(&format!(
+            "tune_step_hz = 100\nspectrum_afterglow_ms = {stray}\n"
+        ))
+        .expect("a config with an afterglow");
+        assert_eq!(p.spectrum_afterglow_ms(), want, "file value {stray}");
+    }
+
+    // The Settings field: digits in range are taken, out of range is clamped, anything else is off.
+    assert_eq!(parse_afterglow_ms("500"), 500);
+    assert_eq!(parse_afterglow_ms(" 500 "), 500);
+    assert_eq!(parse_afterglow_ms("0"), 0);
+    assert_eq!(parse_afterglow_ms("10"), AFTERGLOW_MIN_MS);
+    assert_eq!(parse_afterglow_ms("99999"), AFTERGLOW_MAX_MS);
+    for bad in ["", "abc", "-5", "1.5", "5 0", "٣٠٠", "4294967296"] {
+        assert_eq!(parse_afterglow_ms(bad), 0, "entry {bad:?}");
+    }
+}

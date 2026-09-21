@@ -142,6 +142,11 @@ pub struct Prefs {
     /// clamps a hand-edited value back into range.
     #[serde(default = "default_spot_max_age_min")]
     pub spot_max_age_min: u32,
+    /// Spectrum afterglow, milliseconds (FR-PAN-14): how long a peak lingers on the trace. `0` is
+    /// off, the default. Read through [`Prefs::spectrum_afterglow_ms`], which brings a hand-edited
+    /// value back into range.
+    #[serde(default)]
+    pub spectrum_afterglow_ms: u32,
     /// Which spotting networks feed the spectrum nameplates, and each one's
     /// settings (FR-SPOT-04). Every network defaults to off.
     #[serde(default)]
@@ -409,6 +414,34 @@ pub fn parse_spot_max_age_min(input: &str) -> u32 {
         .unwrap_or(SPOT_MAX_AGE_DEFAULT_MIN)
 }
 
+/// Bounds of the spectrum afterglow, milliseconds (FR-PAN-14). `0` is off; anything else is at
+/// least [`AFTERGLOW_MIN_MS`] (a shorter trail is not visible at the display's row rate) and at most
+/// [`AFTERGLOW_MAX_MS`].
+pub const AFTERGLOW_MIN_MS: u32 = 50;
+pub const AFTERGLOW_MAX_MS: u32 = 5000;
+
+/// Bring an afterglow time into range: `0` stays off, a smaller non-zero value is raised to the
+/// minimum and a larger one lowered to the maximum. Unlike the spot age limit this **clamps**
+/// instead of falling back to the default, because the default is *off* and a typed `6000` should
+/// give the longest trail, not none.
+pub fn sanitise_afterglow_ms(ms: u32) -> u32 {
+    if ms == 0 {
+        0
+    } else {
+        ms.clamp(AFTERGLOW_MIN_MS, AFTERGLOW_MAX_MS)
+    }
+}
+
+/// Parse the Settings afterglow field: digits only, else off (FR-PAN-14) — an empty or unusable
+/// entry never becomes a saved trail.
+pub fn parse_afterglow_ms(input: &str) -> u32 {
+    input
+        .trim()
+        .parse::<u32>()
+        .map(sanitise_afterglow_ms)
+        .unwrap_or(0)
+}
+
 /// PSK Reporter's public MQTT feed (R-EXT-05): host and plain-TCP port, and the TLS port.
 pub const SPOT_PSK_DEFAULT_HOST: &str = "mqtt.pskreporter.info";
 pub const SPOT_PSK_DEFAULT_PORT: u16 = 1883;
@@ -672,6 +705,12 @@ impl SpotNetworks {
 }
 
 impl Prefs {
+    /// The spectrum afterglow in milliseconds, `0` (off) or within
+    /// [`AFTERGLOW_MIN_MS`]`..=`[`AFTERGLOW_MAX_MS`] (FR-PAN-14).
+    pub fn spectrum_afterglow_ms(&self) -> u32 {
+        sanitise_afterglow_ms(self.spectrum_afterglow_ms)
+    }
+
     /// The spot age limit in minutes, always within `1 min ..= 24 h`
     /// (FR-SPOT-03).
     pub fn spot_max_age_min(&self) -> u32 {
@@ -706,6 +745,7 @@ impl Default for Prefs {
             kpa1500_port: 1500,
             kpa1500_poll_ms: 500,
             spot_max_age_min: SPOT_MAX_AGE_DEFAULT_MIN,
+            spectrum_afterglow_ms: 0,
             spot_networks: SpotNetworks::default(),
             kpod_enabled: false,
             kpod_buttons: default_kpod_buttons(),
