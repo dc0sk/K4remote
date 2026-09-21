@@ -24,7 +24,10 @@ pub const MAX_BODY: usize = 512 * 1024;
 pub const MAX_SPOTS: usize = 2000;
 
 /// Longest string read as a value. A longer one in a field that is used drops that field; the
-/// strings that are only skipped are bounded by [`MAX_BODY`].
+/// strings that are only skipped are bounded by [`MAX_BODY`]. The same 64 is applied again by
+/// `sanitise_text` to what is kept, so this limit is also enforced downstream: changing it alone
+/// changes nothing a caller can see, and a string here is a borrowed slice, so it is not what
+/// bounds memory.
 const MAX_TOKEN: usize = 64;
 
 /// Lowest and highest frequency accepted, Hz. The floor also catches a reply that has switched to
@@ -464,8 +467,10 @@ mod tests {
             (" 10136", None),
             ("10136 ", None),
             ("0x2f", None),
-            ("1234567890", None),  // too many digits
-            ("300000001.0", None), // above 300 GHz
+            ("1234567890", None),                   // too many digits
+            ("300000000.0", Some(300_000_000_000)), // exactly 300 GHz
+            ("300000000.001", None),                // one hertz above 300 GHz
+            ("300000001.0", None),                  // above 300 GHz
         ] {
             assert_eq!(khz_to_hz(text), want, "{text:?}");
         }
@@ -586,20 +591,38 @@ mod tests {
             parse_spots(&huge, NOW).is_ok(),
             "the unpadded list is valid"
         );
-        huge.resize(MAX_BODY + 1, b' ');
+        // The limits are written as numbers, not taken from the constants: a test built from a
+        // constant moves with it and never notices a change. 512 KiB is read, one byte more is not.
+        huge.resize(524_289, b' ');
         assert!(parse_spots(&huge, NOW).is_err());
-        huge.truncate(MAX_BODY);
+        huge.truncate(524_288);
         assert!(
             parse_spots(&huge, NOW).is_ok(),
             "exactly at the cap is read"
         );
-        let many = format!("[{}]", vec!["{}"; MAX_SPOTS + 1].join(","));
+        let many = format!("[{}]", vec!["{}"; 2001].join(","));
         assert!(parse_spots(many.as_bytes(), NOW).is_err());
-        let ok_many = format!("[{}]", vec!["{}"; MAX_SPOTS].join(","));
-        assert_eq!(
-            parse_spots(ok_many.as_bytes(), NOW).unwrap().rejected,
-            MAX_SPOTS as u64
-        );
+        let ok_many = format!("[{}]", vec!["{}"; 2000].join(","));
+        assert_eq!(parse_spots(ok_many.as_bytes(), NOW).unwrap().rejected, 2000);
+    }
+
+    /// FR-SPOT-08: a text field is used up to 64 characters and skipped beyond — the limit written as
+    /// a number, and checked on a field that is otherwise valid so only its length can matter.
+    /// trace: FR-SPOT-08
+    #[test]
+    fn fr_spot_08_pota_text_field_limit() {
+        let with_mode = |mode: &str| {
+            let rec = record("aa1aaa", "10136.0", "2026-09-21T05:07:00")
+                .replace(r#""mode":"FT8""#, &format!(r#""mode":"{mode}""#));
+            parse_spots(format!("[{rec}]").as_bytes(), NOW)
+                .unwrap()
+                .spots[0]
+                .mode
+                .clone()
+        };
+        assert_eq!(with_mode(&"m".repeat(64)), Some("m".repeat(64)));
+        assert_eq!(with_mode(&"m".repeat(65)), None);
+        assert_eq!(with_mode("FT8"), Some("FT8".to_string()));
     }
 
     /// FR-SPOT-08: text with escapes, over-long text, or non-ASCII loses only that field; a

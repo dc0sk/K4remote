@@ -490,6 +490,11 @@ mod tests {
             clamp_interval(u64::MAX),
             Duration::from_secs(MAX_INTERVAL_SECS)
         );
+        // The bounds and the default, as numbers: 30 s to 1 h, once a minute by default.
+        assert_eq!(
+            (MIN_INTERVAL_SECS, DEFAULT_INTERVAL_SECS, MAX_INTERVAL_SECS),
+            (30, 60, 3600)
+        );
         const { assert!(MIN_INTERVAL_SECS <= DEFAULT_INTERVAL_SECS) };
         const { assert!(DEFAULT_INTERVAL_SECS <= MAX_INTERVAL_SECS) };
     }
