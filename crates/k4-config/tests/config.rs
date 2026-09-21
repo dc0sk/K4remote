@@ -433,6 +433,42 @@ fn fr_spot_04_networks_default_off_and_persist() {
         assert_eq!(parse_spot_poll_secs(bad), 60, "interval {bad:?}");
     }
 
+    // FreeDV Reporter: off, at the service's own host and plain-WebSocket port; its settings
+    // round-trip, it counts as a network being on, and a config without it loads with the defaults.
+    assert!(!def.freedv.enabled);
+    assert_eq!(
+        (def.freedv.host.as_str(), def.freedv.port),
+        ("qso.freedv.org", 80)
+    );
+    let mut with_freedv = def.clone();
+    with_freedv.freedv.enabled = true;
+    with_freedv.freedv.host = "reporter.example.org".into();
+    with_freedv.freedv.port = 8080;
+    let prefs = Prefs {
+        spot_networks: with_freedv.clone(),
+        ..Default::default()
+    };
+    let back: Prefs = toml::from_str(&toml::to_string(&prefs).expect("serialize")).expect("parse");
+    assert_eq!(back.spot_networks, with_freedv);
+    assert!(
+        back.spot_networks.any_enabled(),
+        "FreeDV alone counts as on"
+    );
+    assert!(!back.spot_networks.pota.enabled, "toggles are independent");
+    let partial: Prefs =
+        toml::from_str("tune_step_hz = 100\n[spot_networks.freedv]\nenabled = true\n")
+            .expect("a config naming only the switch");
+    assert!(partial.spot_networks.freedv.enabled);
+    assert_eq!(partial.spot_networks.freedv.host, "qso.freedv.org");
+    assert_eq!(partial.spot_networks.freedv.port, 80); // A section that names the network but not the switch leaves it off: nothing is ever turned on
+                                                       // by a file that does not say so.
+    let silent: Prefs =
+        toml::from_str("tune_step_hz = 100\n[spot_networks.freedv]\nhost = \"h.example\"\n")
+            .expect("a config that omits the switch");
+    assert!(!silent.spot_networks.freedv.enabled);
+    assert!(!silent.spot_networks.any_enabled());
+    assert_eq!(silent.spot_networks.freedv.host, "h.example");
+
     // TLS is off by default and persists; approved certificates start empty.
     assert!(!def.psk_reporter.tls);
     assert!(def.trusted().is_empty());

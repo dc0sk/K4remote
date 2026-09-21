@@ -30,6 +30,8 @@ pub fn source_rgb(network: Network) -> (u8, u8, u8) {
         Network::DxCluster => (206, 166, 255),
         // Activators on a park (POTA): green.
         Network::Pota => (140, 230, 150),
+        // Stations on the air on FreeDV Reporter: coral.
+        Network::FreeDvReporter => (255, 150, 165),
     }
 }
 
@@ -73,11 +75,12 @@ pub fn contrast(a: (u8, u8, u8), b: (u8, u8, u8)) -> f64 {
 mod tests {
     use super::*;
 
-    const SOURCES: [Network; 4] = [
+    const SOURCES: [Network; 5] = [
         Network::Rbn,
         Network::PskReporter,
         Network::DxCluster,
         Network::Pota,
+        Network::FreeDvReporter,
     ];
 
     /// FR-SPOT-11: the fade starts at fully opaque, never rises as a spot ages, reaches its floor at

@@ -1,7 +1,7 @@
 ---
 title: "External References"
 status: Draft
-version: "0.8"
+version: "0.9"
 updated: 2026-09-21
 authors:
   - Simon Keimer (DC0SK)
@@ -563,8 +563,50 @@ done for RBN, at DC0SK's invitation ("how did SDRoxide solve the API issues").
   server pings every 5 s with a 5 s timeout. Events: `new_connection` (a session id with callsign and
   grid), `remove_connection`, `freq_change` (the frequency in hertz), `tx_report`, `rx_report` (who
   heard whom, with SNR), `message_update`, `bulk_update` (the table on connect), `qsy_request`. A row
-  becomes a nameplate when it has a callsign and a non-zero frequency. **Not tested here; from source
-  only.**
+  becomes a nameplate when it has a callsign and a non-zero frequency. **From source only at this
+  point; observed live below.**
+
+### FreeDV Reporter — observed live (2026-09-21)
+
+**Five short sessions** to `ws://qso.freedv.org:80`, each **at most 10 seconds**, in the read-only
+`view` role, sending only the WebSocket upgrade (with a `User-Agent` naming a probe), the `view`
+connect and the pongs the protocol requires. The probe is `crates/k4-spot/tests/freedv_live.rs`
+(`#[ignore]`, run by hand) and **prints counts and shapes only — never a callsign or any text an
+operator wrote**. Nothing here contains one.
+
+- **It works as the other client's source says.** The upgrade, Engine.IO `open`, the `view` connect and
+  the Socket.IO `connect` acknowledgement all went through on plain `ws://`; the session was joined
+  in 0.6–1.2 s; **42–45 stations** were on the roster, on **14–16 distinct frequencies**; no error, no
+  disconnect in the window.
+- **The first build of the parser disagreed with the real service, and was wrong.** 10–12 events in
+  each session were rejected as malformed. The diagnostic (field names and value *kinds*, no values)
+  showed two causes, both cases of my strictness and not the server's fault:
+  1. **`freq_change` with `freq` = 0.** A station with no frequency set (or cleared) sends 0. That is
+     a normal event meaning "no frequency", not a malformed one.
+  2. **`message_update` with non-ASCII text.** Operators write free text with accents and other
+     characters. This client keeps only printable ASCII in a spot's text — a **policy for untrusted
+     text**, not a limit of the display, which renders Unicode — so such a message must read as "no
+     message" and must not cost the station the rest of its data.
+  The rule now: a field of the **wrong type** rejects the event; a well-typed value that cannot be
+  kept **degrades that one field**. After the change the same probe reported **0 rejected**.
+- **But "0 rejected" hid the degrading, and the probe was blind to it.** The degrade path first had no
+  counter, so a probe that printed only `rejected` would have said "0" while every accented message
+  was being cleared. A second counter and value-free shapes for degraded fields were added; the
+  **fifth session** then showed **0 rejected and 3 degraded** — three `message_update`s with
+  non-ASCII text of 51 bytes — which is what had been happening all along. A clean result exonerates
+  the parser only against the shapes the few seconds contained.
+- **Every event also carries `last_update`** (a 32-character timestamp string). It is **not used**: a
+  nameplate's age counts from when the station was last confirmed on the roster (see the design note
+  in `FR-SPOT-08`), and the timestamp's zone and precision were not examined.
+- **Frequencies run from 1 MHz to about 10.49 GHz** on the live roster, so some stations report
+  values far from any amateur HF band (a satellite path is plausible at 10 GHz; the 1 MHz one is
+  probably a placeholder). The window filter is what keeps them off a 14 MHz view.
+- **Not seen in these sessions:** a `tx_report`, `rx_report` or `qsy_request` were not looked for
+  specifically (the probe counts what was rejected, not which events arrived), and `wss://` on 443
+  was **not tried** — plain `ws://` is what the reference client uses.
+
+**Decision (DC0SK, 2026-09-21): WSPRnet is dropped** — not built and not planned. SOTA stays blocked on
+the API-consumers membership.
 
 ### Summary — what is buildable from documentation
 
@@ -572,8 +614,8 @@ done for RBN, at DC0SK's invitation ("how did SDRoxide solve the API issues").
 |---|---|---|---|
 | POTA | schema observed once, no rules | open, unauthenticated | HTTPS GET + JSON |
 | SOTA | terms yes, schema no (SDRoxide uses the unstable `api-db2` host) | **developer must join API-consumers** | HTTPS GET + JSON, after that |
-| WSPRnet | via third parties only | API by contacting the custodian; wspr.live open but third-party | HTTPS GET, or nothing |
-| FreeDV Reporter | none; protocol from two other clients | open, read-only `view` role | WebSocket + Socket.IO (plain `ws`, as SDRoxide does; TLS unverified) |
+| WSPRnet | via third parties only | **dropped by DC0SK, 2026-09-21** | — |
+| FreeDV Reporter | none; protocol from two other clients, **now observed live** | open, read-only `view` role | **built** — WebSocket + Socket.IO over plain `ws` |
 
 ### Not yet read
 The retail DX-cluster login prompt and volume, and RBN's own guidance on rates — see above.

@@ -7,6 +7,9 @@
 //! clock and every result is deterministic.
 
 pub mod cluster;
+pub mod freedv;
+pub mod freedv_source;
+pub mod json;
 pub mod layout;
 mod model;
 pub mod mqtt;
@@ -14,10 +17,12 @@ pub mod mqtt_source;
 pub mod polled;
 pub mod pota;
 pub mod psk;
+pub mod sio;
 mod store;
 pub mod style;
 pub mod telnet;
 pub mod tooltip;
+pub mod ws;
 
 pub use model::{
     normalise_callsign, sanitise_text, Network, Parsed, SourceError, Spot, SpotSource, MAX_TEXT_LEN,

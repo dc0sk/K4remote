@@ -1,5 +1,6 @@
 //! The worker thread that runs the spot sources — the Reverse Beacon Network, a DX cluster (both
-//! telnet), PSK Reporter (MQTT) and POTA (a polled HTTP list) — keeps the spot store fed, and
+//! telnet), PSK Reporter (MQTT), POTA (a polled HTTP list) and FreeDV Reporter (a WebSocket) —
+//! keeps the spot store fed, and
 //! reports what each is doing (FR-SPOT-05/07/08/09).
 //!
 //! Each source is polled independently on this thread, off the UI and the radio-control paths, so
@@ -16,6 +17,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use k4_spot::freedv_source::{FreeDvConfig, FreeDvSource};
 use k4_spot::mqtt_source::{CertInfo, MqttConfig, MqttSource};
 use k4_spot::polled::{PolledConfig, PolledSource};
 use k4_spot::pota;
@@ -48,11 +50,16 @@ pub struct Statuses {
     pub dx_cluster: Option<Status>,
     pub psk_reporter: Option<Status>,
     pub pota: Option<Status>,
+    pub freedv: Option<Status>,
 }
 
 pub type StatusHandle = Arc<Mutex<Statuses>>;
 
 /// Instructions from the UI.
+// `Configure` carries one config per network and the other commands carry almost nothing. A command is
+// sent only when a setting changes — a few times a session — so the size gap costs nothing, and
+// boxing it would only add a deref to every place a configuration is built.
+#[allow(clippy::large_enum_variant)]
 pub enum Cmd {
     /// Run these sources (`None` = off). A source is restarted only when its settings change.
     Configure {
@@ -60,6 +67,7 @@ pub enum Cmd {
         dx_cluster: Option<TelnetConfig>,
         psk_reporter: Option<MqttConfig>,
         pota: Option<PolledConfig>,
+        freedv: Option<FreeDvConfig>,
     },
     /// Keep only spots inside `[lo, hi]` Hz, and (for PSK Reporter) subscribe to the bands that
     /// overlap it. An empty range (`lo > hi`) keeps none and subscribes to none; `None` keeps
@@ -75,12 +83,14 @@ enum FeedConfig {
     Telnet(TelnetConfig),
     Mqtt(MqttConfig),
     Polled(PolledConfig),
+    FreeDv(FreeDvConfig),
 }
 
 enum Feed {
     Telnet(TelnetSource),
     Mqtt(MqttSource),
     Polled(PolledSource),
+    FreeDv(FreeDvSource),
 }
 
 impl Feed {
@@ -105,6 +115,7 @@ impl Feed {
                     parse,
                 ))
             }
+            FeedConfig::FreeDv(c) => Feed::FreeDv(FreeDvSource::new(c.clone())),
         })
     }
 
@@ -113,6 +124,7 @@ impl Feed {
             Feed::Telnet(s) => s.poll(sink),
             Feed::Mqtt(s) => s.poll(sink),
             Feed::Polled(s) => s.poll(sink),
+            Feed::FreeDv(s) => s.poll(sink),
         }
     }
 
@@ -121,6 +133,7 @@ impl Feed {
             Feed::Telnet(s) => s.set_window(w),
             Feed::Mqtt(s) => s.set_window(w),
             Feed::Polled(s) => s.set_window(w),
+            Feed::FreeDv(s) => s.set_window(w),
         }
     }
 
@@ -136,6 +149,7 @@ impl Feed {
             Feed::Telnet(s) => s.state(),
             Feed::Mqtt(s) => s.state(),
             Feed::Polled(s) => s.state(),
+            Feed::FreeDv(s) => s.state(),
         }
     }
 
@@ -158,6 +172,7 @@ impl Feed {
             Feed::Telnet(s) => s.stats(),
             Feed::Mqtt(s) => s.stats(),
             Feed::Polled(s) => s.stats(),
+            Feed::FreeDv(s) => s.stats(),
         }
     }
 }
@@ -207,6 +222,7 @@ fn run(rx: &Receiver<Cmd>, store: &SpotHandle, status: &StatusHandle, pins: &tls
         Slot::default(),
         Slot::default(),
         Slot::default(),
+        Slot::default(),
     ];
     // Until told otherwise, keep nothing and subscribe to nothing: no radio, no view, nothing to
     // label.
@@ -220,12 +236,14 @@ fn run(rx: &Receiver<Cmd>, store: &SpotHandle, status: &StatusHandle, pins: &tls
                     dx_cluster,
                     psk_reporter,
                     pota,
+                    freedv,
                 }) => {
                     let wanted = [
                         rbn.map(FeedConfig::Telnet),
                         dx_cluster.map(FeedConfig::Telnet),
                         psk_reporter.map(FeedConfig::Mqtt),
                         pota.map(FeedConfig::Polled),
+                        freedv.map(FeedConfig::FreeDv),
                     ];
                     for (slot, want) in slots.iter_mut().zip(wanted) {
                         if slot.cfg != want {
@@ -285,6 +303,7 @@ fn run(rx: &Receiver<Cmd>, store: &SpotHandle, status: &StatusHandle, pins: &tls
             dx_cluster: slots[1].status(),
             psk_reporter: slots[2].status(),
             pota: slots[3].status(),
+            freedv: slots[4].status(),
         };
         if now != published {
             if let Ok(mut g) = status.lock() {
@@ -454,6 +473,7 @@ mod tests {
             dx_cluster: Some(cfg(Network::DxCluster, dead)),
             psk_reporter: None,
             pota: None,
+            freedv: None,
         })
         .unwrap();
 
@@ -492,6 +512,7 @@ mod tests {
             dx_cluster: None,
             psk_reporter: None,
             pota: None,
+            freedv: None,
         })
         .unwrap();
         wait("all sources are stopped", || {
@@ -557,6 +578,7 @@ mod tests {
             dx_cluster: None,
             psk_reporter: Some(mqtt_cfg(port)),
             pota: None,
+            freedv: None,
         })
         .unwrap();
         assert_eq!(
@@ -741,6 +763,7 @@ mod tests {
             dx_cluster: None,
             psk_reporter: None,
             pota: Some(pota_cfg(good)),
+            freedv: None,
         })
         .unwrap();
         wait("the POTA spot reaches the store", || {
@@ -780,6 +803,7 @@ mod tests {
             dx_cluster: None,
             psk_reporter: None,
             pota: Some(pota_cfg(bad)),
+            freedv: None,
         })
         .unwrap();
         wait("POTA's failure is reported", || {
@@ -811,6 +835,7 @@ mod tests {
             dx_cluster: None,
             psk_reporter: None,
             pota: None,
+            freedv: None,
         })
         .unwrap();
         wait("every source is stopped", || {
@@ -927,6 +952,7 @@ mod tests {
                 ..mqtt_cfg(port)
             }),
             pota: None,
+            freedv: None,
         })
         .unwrap();
 
@@ -988,5 +1014,182 @@ mod tests {
         assert!(p.cert.is_none(), "the pending certificate is cleared");
         assert_eq!(p.error, None);
         assert_eq!(connects.load(Ordering::SeqCst), 1);
+    }
+
+    /// A mock FreeDV Reporter: upgrade, Engine.IO open, read the client's connect frame, Socket.IO
+    /// acknowledgement, then the given events, then hold the line. Frames are built by hand.
+    fn mock_freedv(events: Vec<String>) -> u16 {
+        fn frame(payload: &[u8]) -> Vec<u8> {
+            let mut f = vec![0x81];
+            match payload.len() {
+                n if n < 126 => f.push(n as u8),
+                n => {
+                    f.push(126);
+                    f.extend_from_slice(&(n as u16).to_be_bytes());
+                }
+            }
+            f.extend_from_slice(payload);
+            f
+        }
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        thread::spawn(move || {
+            let Ok((mut s, _)) = listener.accept() else {
+                return;
+            };
+            let mut req = Vec::new();
+            let mut b = [0u8; 1];
+            while !req.ends_with(b"\r\n\r\n") {
+                if s.read_exact(&mut b).is_err() {
+                    return;
+                }
+                req.push(b[0]);
+            }
+            let req = String::from_utf8_lossy(&req).into_owned();
+            let key = req
+                .lines()
+                .find_map(|l| l.strip_prefix("Sec-WebSocket-Key: "))
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let _ = write!(
+                s,
+                "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {}\r\n\r\n",
+                k4_spot::ws::accept_key(&key)
+            );
+            let _ = s.write_all(&frame(
+                br#"0{"sid":"s","pingInterval":25000,"pingTimeout":20000}"#,
+            ));
+            // The client's connect frame: 2 header bytes, 4 mask bytes, the payload.
+            let mut h = [0u8; 2];
+            if s.read_exact(&mut h).is_err() {
+                return;
+            }
+            let mut rest = vec![0u8; 4 + usize::from(h[1] & 0x7f)];
+            if s.read_exact(&mut rest).is_err() {
+                return;
+            }
+            let _ = s.write_all(&frame(br#"40{"sid":"me"}"#));
+            for e in events {
+                let _ = s.write_all(&frame(e.as_bytes()));
+            }
+            thread::sleep(Duration::from_secs(4));
+        });
+        port
+    }
+
+    fn freedv_cfg(port: u16) -> FreeDvConfig {
+        FreeDvConfig {
+            host: "127.0.0.1".into(),
+            port,
+            user_agent: "K4remote/test".into(),
+        }
+    }
+
+    /// FR-SPOT-08/09: the worker runs FreeDV Reporter into the store (window-filtered), a failing
+    /// FreeDV Reporter is reported against its own network while RBN keeps delivering, and
+    /// switching it off removes its status.
+    /// trace: FR-SPOT-08, FR-SPOT-09
+    #[test]
+    fn fr_spot_08_worker_runs_freedv_and_isolates_its_failure() {
+        let store: SpotHandle = Arc::default();
+        let status: StatusHandle = Arc::default();
+        let (tx, rx) = mpsc::channel();
+        spawn(rx, Arc::clone(&store), Arc::clone(&status), Arc::default());
+        tx.send(Cmd::Window(Some((14_000_000, 14_100_000))))
+            .unwrap();
+
+        let port = mock_freedv(vec![
+            r#"42["freq_change",{"sid":"a","freq":14074000,"callsign":"aa1aaa"}]"#.into(),
+            r#"42["freq_change",{"sid":"b","freq":7177000,"callsign":"bb2bbb"}]"#.into(),
+        ]);
+        tx.send(Cmd::Configure {
+            rbn: None,
+            dx_cluster: None,
+            psk_reporter: None,
+            pota: None,
+            freedv: Some(freedv_cfg(port)),
+        })
+        .unwrap();
+        wait("the FreeDV spot reaches the store", || {
+            store.lock().unwrap().spots().len() == 1
+        });
+        {
+            let st = store.lock().unwrap();
+            let spot = &st.spots()[0];
+            assert_eq!((spot.call.as_str(), spot.freq_hz), ("AA1AAA", 14_074_000));
+            assert_eq!(spot.network, Network::FreeDvReporter);
+        }
+        wait("FreeDV reports it is connected", || {
+            status
+                .lock()
+                .unwrap()
+                .freedv
+                .as_ref()
+                .is_some_and(|f| f.state == ConnState::Connected && f.stats.outside_window == 1)
+        });
+        let f = status.lock().unwrap().freedv.clone().unwrap();
+        assert!(!f.polled, "a live feed, not a polled one");
+        assert_eq!(f.error, None);
+        assert_eq!(f.stats.spots, 1);
+        assert_eq!(describe(&f), ("connected — 1 spots".into(), false));
+
+        // FreeDV fails (nothing listening) while RBN is healthy: the failure is FreeDV's alone.
+        let closed = TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let cluster = mock_cluster("DX de K1TTT-#: 14074.0 W1AW CW 30 dB 20 WPM CQ 1200Z\r\n");
+        tx.send(Cmd::Configure {
+            rbn: Some(cfg(Network::Rbn, cluster)),
+            dx_cluster: None,
+            psk_reporter: None,
+            pota: None,
+            freedv: Some(freedv_cfg(closed)),
+        })
+        .unwrap();
+        wait("FreeDV's failure is reported", || {
+            status
+                .lock()
+                .unwrap()
+                .freedv
+                .as_ref()
+                .is_some_and(|f| f.error.is_some())
+        });
+        wait("RBN delivers meanwhile", || {
+            status
+                .lock()
+                .unwrap()
+                .rbn
+                .as_ref()
+                .is_some_and(|r| r.state == ConnState::Connected && r.stats.spots >= 1)
+        });
+        let s = status.lock().unwrap().clone();
+        let f = s.freedv.unwrap();
+        assert_eq!(f.state, ConnState::Disconnected);
+        assert!(
+            f.error
+                .as_deref()
+                .is_some_and(|e| e.contains("connect to 127.0.0.1")),
+            "{:?}",
+            f.error
+        );
+        assert!(describe(&f).1, "shown as a problem");
+        assert_eq!(s.rbn.unwrap().error, None, "RBN is unaffected");
+
+        // Off means gone.
+        tx.send(Cmd::Configure {
+            rbn: None,
+            dx_cluster: None,
+            psk_reporter: None,
+            pota: None,
+            freedv: None,
+        })
+        .unwrap();
+        wait("every source is stopped", || {
+            let s = status.lock().unwrap();
+            s.freedv.is_none() && s.rbn.is_none()
+        });
     }
 }

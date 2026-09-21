@@ -462,6 +462,10 @@ Everything is **off until you turn it on**. Open **Settings → Spot nameplates 
   **SHA-256 fingerprint** shown and press **Trust this certificate**, which approves that one certificate for
   that host and port only. If it changes later you are asked again, with a warning. Approved certificates are
   listed below and can be withdrawn with **Forget**.
+- **FreeDV Reporter** — the stations on the air right now on FreeDV Reporter, shown at the frequency each
+  one reports. You join **read-only**: you are not listed as a station, and nothing that identifies you is
+  sent. It is a presence list, so a plate stays while its station is connected and fades after it leaves.
+  The host and port are prefilled.
 - **POTA** — Parks on the Air activators currently on the air. POTA's public list is asked for every
   60 seconds by default (set **Every (s)** between 30 and 3600); nothing but that request is sent. The
   park reference is shown in the hover text. Unlike the others this is a list fetched now and then, not a
@@ -477,7 +481,7 @@ tunes to the spot under the pointer). Nothing here transmits. **Hover a plate** 
 frequency and mode, which network reported it and who heard it, the signal report, and how long ago.
 
 Plates are coloured by where the spot came from — **amber** RBN, **blue** PSK Reporter, **lilac** DX
-cluster, **green** POTA — and fade as they age, down to half strength at the age limit, so the freshest stand out.
+cluster, **green** POTA, **coral** FreeDV Reporter — and fade as they age, down to half strength at the age limit, so the freshest stand out.
 
 To see the display without connecting anything, start the app with `--demo`: it shows sample spots.
 

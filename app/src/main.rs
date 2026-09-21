@@ -114,6 +114,18 @@ enum SpotNet {
     Rbn,
     DxCluster,
     Pota,
+    FreeDv,
+}
+
+/// What the spot worker was last told to run (so a tick sends only a change): one entry per network,
+/// `None` while it is off.
+#[derive(Debug, Clone, Default, PartialEq)]
+struct SpotSent {
+    rbn: Option<k4_spot::telnet::TelnetConfig>,
+    dx_cluster: Option<k4_spot::telnet::TelnetConfig>,
+    psk_reporter: Option<k4_spot::mqtt_source::MqttConfig>,
+    pota: Option<k4_spot::polled::PolledConfig>,
+    freedv: Option<k4_spot::freedv_source::FreeDvConfig>,
 }
 
 /// The certificate a click approves (FR-SPOT-13): the one that is on screen, and only if the click
@@ -205,12 +217,7 @@ struct App {
     /// The sources' status as of the last tick, for the Networks window.
     spot_status_ui: spot_sources::Statuses,
     /// What the worker was last told to run and keep, so a tick sends only a change.
-    spot_sent: (
-        Option<k4_spot::telnet::TelnetConfig>,
-        Option<k4_spot::telnet::TelnetConfig>,
-        Option<k4_spot::mqtt_source::MqttConfig>,
-        Option<k4_spot::polled::PolledConfig>,
-    ),
+    spot_sent: SpotSent,
     spot_window_sent: Option<(u64, u64)>,
     /// Draw the waterfall on the GPU (false = the CPU rasteriser, when there is no wgpu adapter).
     gpu_waterfall: bool,
@@ -338,6 +345,7 @@ struct App {
     spot_rbn_port: String,
     spot_dx_port: String,
     spot_pota_secs: String,
+    spot_freedv_port: String,
     /// The certificates approved for encrypted connections, shared with the worker.
     spot_pins: tls::Pins,
     // KPA1500 client worker (FR-AMP-03): a shared snapshot the worker writes
@@ -1088,6 +1096,7 @@ impl App {
         let spot_rbn_port = spot_networks.rbn.port.to_string();
         let spot_dx_port = spot_networks.dx_cluster.port.to_string();
         let spot_pota_secs = spot_networks.pota.poll_secs().to_string();
+        let spot_freedv_port = spot_networks.freedv.port.to_string();
         // The amplifier worker starts idle (disconnected); the tick reconciler
         // connects it once the K4 is up and support is enabled.
         let kpa_shared = Arc::new(Mutex::new(kpa::Shared::default()));
@@ -1156,7 +1165,7 @@ impl App {
             spot_tx,
             spot_status,
             spot_status_ui: spot_sources::Statuses::default(),
-            spot_sent: (None, None, None, None),
+            spot_sent: SpotSent::default(),
             spot_window_sent: None,
             gpu_waterfall: waterfall_gpu::gpu_available(),
             ui: initial,
@@ -1224,6 +1233,7 @@ impl App {
             spot_rbn_port,
             spot_dx_port,
             spot_pota_secs,
+            spot_freedv_port,
             spot_pins,
             kpa1500_enabled,
             kpa1500_host,
@@ -1691,6 +1701,8 @@ impl App {
         nets.rbn.port = k4_config::parse_spot_port(&self.spot_rbn_port, 7000);
         nets.dx_cluster.port = k4_config::parse_spot_port(&self.spot_dx_port, 7300);
         nets.pota.poll_secs = k4_config::parse_spot_poll_secs(&self.spot_pota_secs);
+        nets.freedv.port =
+            k4_config::parse_spot_port(&self.spot_freedv_port, k4_config::SPOT_FREEDV_DEFAULT_PORT);
         nets
     }
 
@@ -2922,6 +2934,10 @@ impl App {
                         let n = &mut self.spot_networks.pota;
                         n.enabled = !n.enabled;
                     }
+                    SpotNet::FreeDv => {
+                        let n = &mut self.spot_networks.freedv;
+                        n.enabled = !n.enabled;
+                    }
                 }
                 self.save_config();
             }
@@ -2931,6 +2947,7 @@ impl App {
                     SpotNet::Rbn => self.spot_networks.rbn.host = host,
                     SpotNet::DxCluster => self.spot_networks.dx_cluster.host = host,
                     SpotNet::PskReporter => self.spot_networks.psk_reporter.host = host,
+                    SpotNet::FreeDv => self.spot_networks.freedv.host = host,
                     SpotNet::Pota => {}
                 }
             }
@@ -2940,6 +2957,7 @@ impl App {
                     SpotNet::Rbn => self.spot_rbn_port = digits,
                     SpotNet::DxCluster => self.spot_dx_port = digits,
                     SpotNet::PskReporter => self.spot_psk_port = digits,
+                    SpotNet::FreeDv => self.spot_freedv_port = digits,
                     SpotNet::Pota => {}
                 }
             }
@@ -2979,7 +2997,7 @@ impl App {
                 match net {
                     SpotNet::Rbn => self.spot_networks.rbn.login = login,
                     SpotNet::DxCluster => self.spot_networks.dx_cluster.login = login,
-                    SpotNet::PskReporter | SpotNet::Pota => {}
+                    SpotNet::PskReporter | SpotNet::Pota | SpotNet::FreeDv => {}
                 }
             }
             Message::KpaSetMode(operate) => self.kpa_send(k4_kpa::cat::set_mode(operate)),
@@ -3284,14 +3302,30 @@ impl App {
                         interval: k4_spot::polled::clamp_interval(nets.pota.poll_secs()),
                         max_body: k4_spot::pota::MAX_BODY,
                     });
-                    if (rbn.clone(), dx.clone(), psk.clone(), pota.clone()) != self.spot_sent {
-                        self.spot_sent = (rbn.clone(), dx.clone(), psk.clone(), pota.clone());
+                    let freedv =
+                        nets.freedv
+                            .enabled
+                            .then(|| k4_spot::freedv_source::FreeDvConfig {
+                                host: nets.freedv.host.clone(),
+                                port: nets.freedv.port,
+                                user_agent: concat!("K4remote/", env!("CARGO_PKG_VERSION")).into(),
+                            });
+                    let sent = SpotSent {
+                        rbn,
+                        dx_cluster: dx,
+                        psk_reporter: psk,
+                        pota,
+                        freedv,
+                    };
+                    if sent != self.spot_sent {
                         let _ = self.spot_tx.send(spot_sources::Cmd::Configure {
-                            rbn,
-                            dx_cluster: dx,
-                            psk_reporter: psk,
-                            pota,
+                            rbn: sent.rbn.clone(),
+                            dx_cluster: sent.dx_cluster.clone(),
+                            psk_reporter: sent.psk_reporter.clone(),
+                            pota: sent.pota.clone(),
+                            freedv: sent.freedv.clone(),
                         });
+                        self.spot_sent = sent;
                     }
                     let win = spots::spot_window(self.ui.vfo_a_hz, self.ui.vfo_b_hz);
                     if spots::window_needs_update(self.spot_window_sent, win) {
@@ -6690,6 +6724,7 @@ impl App {
             nets.rbn.enabled,
             nets.dx_cluster.enabled,
             nets.pota.enabled,
+            nets.freedv.enabled,
         ]
         .iter()
         .filter(|e| **e)
@@ -6722,7 +6757,7 @@ impl App {
                 Row::new()
                     .spacing(8)
                     .align_y(Alignment::Center)
-                    .push(Text::new(format!("Spotting networks: {on} of 4 on")).size(12))
+                    .push(Text::new(format!("Spotting networks: {on} of 5 on")).size(12))
                     .push(small_btn("Networks…", Message::ToggleSpotWindow)),
             )
             .into()
@@ -6951,6 +6986,41 @@ impl App {
             .push(Self::spot_status_line(
                 &self.spot_status_ui.pota,
                 nets.pota.enabled,
+            ))
+            .push(Text::new("FreeDV Reporter").size(13))
+            .push(
+                Text::new(
+                    "Stations on the air right now on FreeDV Reporter, read-only: you join as a \
+                     viewer, nothing identifying is sent and you are not listed as a station. \
+                     It is a presence list, so a station's plate stays while it is connected \
+                     and fades after it leaves.",
+                )
+                .size(11)
+                .color(dim),
+            )
+            .push(small_btn_pair(
+                nets.freedv.enabled,
+                "FreeDV Reporter: ON",
+                "FreeDV Reporter: OFF",
+                Message::ToggleSpotNetwork(SpotNet::FreeDv),
+            ))
+            .push(Self::spot_field(
+                "Host",
+                "qso.freedv.org",
+                &nets.freedv.host,
+                230.0,
+                |v| Message::SpotHostChanged(SpotNet::FreeDv, v),
+            ))
+            .push(Self::spot_field(
+                "Port",
+                "80",
+                &self.spot_freedv_port,
+                90.0,
+                |v| Message::SpotPortChanged(SpotNet::FreeDv, v),
+            ))
+            .push(Self::spot_status_line(
+                &self.spot_status_ui.freedv,
+                nets.freedv.enabled,
             ))
             .push(
                 Container::new(
@@ -10779,5 +10849,88 @@ mod afterglow_wiring_tests {
             code.contains(".on_input(Message::AfterglowChanged)"),
             "the field does not send its edits"
         );
+    }
+}
+
+#[cfg(test)]
+mod freedv_wiring_tests {
+    /// FR-SPOT-08: FreeDV Reporter's settings are carried through every hand-off — the switch, the
+    /// host and port fields, the saved port (the save ends in `..Default::default()`-style
+    /// construction of the networks, so a forgotten field would silently reset), the tick that
+    /// tells the worker, and the window that shows it. Structural, reading only the code above this
+    /// module so the needles cannot match this test's own text.
+    /// trace: FR-SPOT-08
+    #[test]
+    fn fr_spot_08_freedv_settings_are_wired_end_to_end() {
+        let whole = include_str!("main.rs");
+        let code = &whole[..whole
+            .find(concat!("mod freedv_wiring", "_tests {"))
+            .expect("the test module")];
+        // Compared with all whitespace removed, so rustfmt's line breaks cannot make it pass or fail.
+        let squash = |t: &str| t.split_whitespace().collect::<String>();
+        let code = squash(code);
+        for (what, needle) in [
+            (
+                "the switch toggles it",
+                "SpotNet::FreeDv => {\n                        let n = &mut self.spot_networks.freedv;\n                        n.enabled = !n.enabled;",
+            ),
+            (
+                "the host field is stored",
+                "SpotNet::FreeDv => self.spot_networks.freedv.host = host,",
+            ),
+            (
+                "the port field is kept",
+                "SpotNet::FreeDv => self.spot_freedv_port = digits,",
+            ),
+            (
+                "the saved port comes from the field",
+                "nets.freedv.port = k4_config::parse_spot_port(\n            &self.spot_freedv_port,",
+            ),
+            (
+                "the port field starts from the saved port",
+                "let spot_freedv_port = spot_networks.freedv.port.to_string();",
+            ),
+            (
+                "the tick builds the worker's config from the settings",
+                "nets\n                        .freedv\n                        .enabled\n                        .then(|| k4_spot::freedv_source::FreeDvConfig {\n                            host: nets.freedv.host.clone(),\n                            port: nets.freedv.port,",
+            ),
+            (
+                "the request names the program, not the operator",
+                "user_agent: concat!(\"K4remote/\", env!(\"CARGO_PKG_VERSION\")).into(),",
+            ),
+            (
+                "the worker is told",
+                "freedv: sent.freedv.clone(),",
+            ),
+            (
+                "the sent state includes it (so a change is sent)",
+                "        pota,\n                        freedv,\n                    };",
+            ),
+            (
+                "the summary counts it",
+                "nets.pota.enabled,\n            nets.freedv.enabled,",
+            ),
+            (
+                "the window has its switch",
+                "Message::ToggleSpotNetwork(SpotNet::FreeDv),",
+            ),
+            (
+                "the window has its host field",
+                "Message::SpotHostChanged(SpotNet::FreeDv, v)",
+            ),
+            (
+                "the window has its port field",
+                "Message::SpotPortChanged(SpotNet::FreeDv, v)",
+            ),
+            (
+                "the window shows its status",
+                "&self.spot_status_ui.freedv,",
+            ),
+        ] {
+            assert!(
+                code.contains(&squash(needle)),
+                "FreeDV wiring missing — {what}"
+            );
+        }
     }
 }
