@@ -1,8 +1,8 @@
 ---
 title: "External References"
 status: Draft
-version: "0.7"
-updated: 2026-09-20
+version: "0.8"
+updated: 2026-09-21
 authors:
   - Simon Keimer (DC0SK)
 owns: [R-EXT]
@@ -340,8 +340,9 @@ clean-room per `CON-09` (facts/interoperability, not copied text).
 ## R-EXT-05 — Spotting networks
 
 The candidate sources for `FR-SPOT-*`. Each is read from its own published documentation before a
-source is built (`OP-7`). **Read so far: the Reverse Beacon Network, the DX-cluster line format and PSK
-Reporter.** WSPRnet, POTA, SOTA and FreeDV Reporter are **not yet read**.
+source is built (`OP-7`). **Read: the Reverse Beacon Network, the DX-cluster line format, PSK Reporter,
+POTA, SOTA, WSPRnet and FreeDV Reporter** — POTA, SOTA, WSPRnet and FreeDV Reporter on 2026-09-21, with
+the gaps recorded under each.
 
 ### Reverse Beacon Network and DX-cluster telnet feeds (read 2026-09-19)
 
@@ -450,5 +451,96 @@ the query API, with a hand-written client. It subscribes to `pskr/filter/v2/<ban
 VFOs are on and to nothing when there is no radio; TLS (port 1884) is a later step. PSK Reporter
 documents no rate or fair-use rules for the MQTT feed.
 
+### POTA (read and observed 2026-09-21)
+
+**Documentation:** the official API pages, <https://docs.pota.app/api/index.html>, are a placeholder
+that says the content is under construction — **there is no published schema, rate limit or usage
+rule.** The spot format below therefore comes from one observation, not from POTA's documents.
+
+**Observed directly, once (2026-09-21):** one unauthenticated `GET https://api.pota.app/spot/activator`
+with a plain `User-Agent` naming this project and nothing else. HTTP/2 200, `application/json`, 5 150
+bytes, an `age: 8` header (so it is served through a cache), **no rate-limit headers**. The body is a
+JSON **array** (12 spots at that moment) of flat objects with these fields: `spotId` (integer),
+`activator` (string), `frequency` (**a string, in kHz** — `"10136.0"` for a 30 m FT8 spot),
+`mode`, `reference` (park, e.g. `CA-0040`), `parkName` (null here), `spotTime` (`2026-09-21T05:07:00`,
+**no zone designator — UTC is assumed, not stated**), `spotter`, `comments`, `source`, `invalid` (null
+here), `name`, `locationDesc`, `grid4`, `grid6`, `latitude`, `longitude`, `count` and `expire`
+(integer, 1796 here — read as seconds until the spot lapses, **unconfirmed**). The endpoint path came
+from memory of other clients, not from a POTA document; the search hit for the bare `/spot` path was a
+third-party proxy. This is one observation of one response, not a specification.
+
+**A POTA spot is an invitation to call**, made by a person or a skimmer (`source`), not a reception
+measurement: it is the same kind of thing as a DX-cluster spot and belongs with that group.
+
+**Not found:** a polling interval POTA wants, whether the endpoint is meant for third-party clients,
+what `expire` counts, whether `spotTime` is UTC, and what `invalid` and `source` can hold.
+
+### SOTA (read 2026-09-21)
+
+**Documentation, primary:** the API's terms page, <https://api2.sota.org.uk/docs>. In its words the
+API is for "reasonable public usage", carries "reasonable usage limits" with **no number**, and users
+who cause "undue load", use deprecated endpoints or "excessively" consume it may be blocked from SOTA
+infrastructure. Commercial applications need a licence agreement. **Access condition:** "any
+application developer (including developers of libraries that connect to the SOTA API)" must be a
+member of the SOTA Reflector **and of its "API-consumers" group** before using the API. That is a
+condition on the **developer**, is not something this project can satisfy on DC0SK's behalf, and was
+**not** checked or attempted. A moderator's post in the API-consumers discussion says a separate
+"database" API exists, is not considered stable and is not widely documented — it is not a candidate.
+
+**Not found in any page read:** the spots endpoint path and response schema. The terms page names
+spot fetching as the usage most often done badly, and a search snippet suggests
+`https://api2.sota.org.uk/api/spots/<hours>` (with a hours limit of 72) — **third-party, unverified,
+and not contacted**, because of the access condition above.
+
+### WSPRnet (read 2026-09-21)
+
+- **WSPRnet itself:** the downloads page (<https://www.wsprnet.org/drupal/downloads>) could not be
+  read here (HTTP 403 to this tool). Search summaries say the whole database is published as monthly
+  CSV files, and that its **API is available only by contacting the WSPRnet custodian**, with a stated
+  rule not to repeat the same query more often than every 2 minutes and to avoid the 2-minute
+  boundaries when uploads land. Both are **third-party summaries**, not read from WSPRnet.
+- **wspr.live** (<https://wspr.live/>), a separate, third-party service that mirrors the spots: a
+  read-only SQL-over-HTTP interface at `db1.wspr.live` (http port 80, https port 443), database `wspr`,
+  table `rx`, with columns among them `time`, `band`, `frequency` (Hz), `rx_sign`, `tx_sign`, `rx_loc`,
+  `tx_loc`, `snr`. Its stated terms: free for your own projects **as long as the results are accessible
+  free of charge to everyone**; **no commercial or profit-oriented use**; **20 requests a minute**; and
+  queries should be limited by time and band. It is not WSPRnet, and depending on it makes K4 Remote
+  depend on someone else's volunteer service.
+- **WSPR spots are reception reports** (a station heard a beacon), like PSK Reporter's, and in
+  two-minute cycles. The PSK Reporter MQTT sample above already carried mode `WSPR`; **how much of
+  WSPRnet that covers is not known**, so a separate source may add little. Not measured.
+
+### FreeDV Reporter (read 2026-09-21)
+
+- **Documentation: none found.** `qso.freedv.org` serves a web page; no protocol document was found.
+  The wire protocol is defined only by the FreeDV project's own client, and the project's repository
+  (`drowe67/freedv-gui`, default branch `master`) **does not contain the reporter client source at the
+  path its build and dialog refer to** (`src/reporting/`) — that directory is absent from the tree, so
+  the source itself was **not read**.
+- **Secondary, from a third-party client that says it mirrors freedv-gui 2.1.0** (a pull request
+  description for the Zeus project, one implementer's account, not FreeDV's): Socket.IO v4 over
+  Engine.IO 4 on a WebSocket, one namespace, text frames only, no acknowledgements; after the open
+  packet the client sends `40` plus an auth object; ping/pong with a watchdog; events are `42` frames;
+  the protocol is called "protocol_version 2". Two roles: a **view** role that sends no personal data
+  and is dropped after 60 s without a poll, and a **report** role for operators who opt in with
+  callsign and grid. Events named there: `new_connection`, `remove_connection`, `freq_change`,
+  `tx_report`, `rx_report`, `message_update`, `bulk_update`, `qsy_request`. The implementer tested live
+  against the service. **Field names, frequency units and the auth object were not recorded.**
+- **What a FreeDV Reporter entry is:** a station *currently on* a frequency (and whether it is
+  transmitting or was heard), a live presence list — not a stream of timestamped spots. It fits the
+  nameplate only if a station row is turned into a spot with its own age.
+- **Consequence:** the service is reachable only over a Socket.IO/WebSocket connection, so a source
+  needs a WebSocket client and **TLS** (the service is https); there is nothing here that a plain
+  HTTP poll can do. Both were absent from the tree before this work.
+
+### Summary — what is buildable from documentation
+
+| Network | Documented? | Access | Needs |
+|---|---|---|---|
+| POTA | schema observed once, no rules | open, unauthenticated | HTTPS GET + JSON |
+| SOTA | terms yes, schema no | **developer must join API-consumers** | HTTPS GET + JSON, after that |
+| WSPRnet | via third parties only | API by contacting the custodian; wspr.live open but third-party | HTTPS GET, or nothing |
+| FreeDV Reporter | none; reverse-engineered by others | open | WebSocket + Socket.IO + TLS |
+
 ### Not yet read
-WSPRnet, POTA, SOTA, FreeDV Reporter.
+The retail DX-cluster login prompt and volume, and RBN's own guidance on rates — see above.

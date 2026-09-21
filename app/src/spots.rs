@@ -37,6 +37,8 @@ const DEMO: &[(&str, i64, Network, u64)] = &[
     ("VE3CCC", 1_620, Network::PskReporter, 200),
     ("VK2DDD", 1_700, Network::Rbn, 400),
     ("SM5DDD", 9_500, Network::DxCluster, 400),
+    ("W4POT", 6_000, Network::Pota, 40),
+    ("K9ACT", -6_500, Network::Pota, 250),
     ("PY2EEE", 15_000, Network::PskReporter, 600),
     ("ZL1FFF", 23_900, Network::Rbn, 800), // just inside the right edge
     ("VK9GGG", 40_000, Network::Rbn, 15),  // outside a 48 kHz view
@@ -58,6 +60,24 @@ pub fn spawn_demo_spots(store: SpotHandle) {
         }
         thread::sleep(Duration::from_secs(5));
     });
+}
+
+/// Where the POTA list is fetched from: POTA's own address, unless `K4_POTA_URL` names an
+/// `http://` or `https://` address instead. That override is a test and diagnostic hook — it lets
+/// the whole path from settings to nameplates be run against a local stand-in — and anything else
+/// in it is ignored rather than trusted.
+pub fn pota_url() -> String {
+    pick_pota_url(std::env::var("K4_POTA_URL").ok())
+}
+
+fn pick_pota_url(over: Option<String>) -> String {
+    over.map(|u| u.trim().to_string())
+        .filter(|u| {
+            (u.starts_with("http://") || u.starts_with("https://"))
+                && u.len() <= 512
+                && u.bytes().all(|b| (b'!'..=b'~').contains(&b))
+        })
+        .unwrap_or_else(|| k4_spot::pota::URL.to_string())
 }
 
 /// How far either side of a VFO the telnet feeds are kept, Hz. A pan is at most 368 kHz wide, so
@@ -98,6 +118,38 @@ pub fn window_needs_update(sent: Option<(u64, u64)>, new: (u64, u64)) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// FR-SPOT-08: POTA is fetched from its own address unless an `http(s)://` override is given;
+    /// anything else in the override is ignored.
+    /// trace: FR-SPOT-08
+    #[test]
+    fn fr_spot_08_pota_url_override() {
+        let real = k4_spot::pota::URL;
+        assert_eq!(pick_pota_url(None), real);
+        assert_eq!(
+            pick_pota_url(Some("http://127.0.0.1:8080/spot".into())),
+            "http://127.0.0.1:8080/spot"
+        );
+        assert_eq!(
+            pick_pota_url(Some("  https://example.org/x  ".into())),
+            "https://example.org/x"
+        );
+        let long = format!("http://example.org/{}", "a".repeat(600));
+        for bad in [
+            "",
+            "ftp://example.org/x",
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "example.org/x",
+            "http://exa mple.org",
+            "http://example.org/\u{e9}",
+            "http://example.org/\nHost: evil",
+            long.as_str(),
+        ] {
+            assert_eq!(pick_pota_url(Some(bad.into())), real, "{bad:?}");
+        }
+        assert!(real.starts_with("https://"), "the default is encrypted");
+    }
 
     /// FR-SPOT-07: the window kept from the telnet feeds follows the VFOs, is empty when none is
     /// known, and is only resent when it has moved enough to matter.

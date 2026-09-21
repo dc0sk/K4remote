@@ -2,7 +2,7 @@
 title: "K4 Remote — User Manual"
 status: Draft
 version: "0.9.0"
-updated: 2026-09-20
+updated: 2026-09-21
 authors:
   - Simon Keimer (DC0SK)
 ---
@@ -446,6 +446,10 @@ Everything is **off until you turn it on**. Open **Settings → Spot nameplates 
 - **PSK Reporter** — a live feed of who is being heard on the bands your VFOs are on (mostly FT8 and
   other digital modes). It needs no login and sends nothing identifying, and it asks only for the
   bands you are on — none at all when no radio is connected. The host and port are prefilled.
+- **POTA** — Parks on the Air activators currently on the air. POTA's public list is asked for every
+  60 seconds by default (set **Every (s)** between 30 and 3600); nothing but that request is sent. The
+  park reference is shown in the hover text. Unlike the others this is a list fetched now and then, not a
+  live feed, so its status reads "last request succeeded" rather than "connected".
 
 For RBN and DX cluster set the **Login** to **your own callsign**: clusters require one, and it is the
 **only thing the app sends**. Each network shows below its settings whether it is connected, or why it
@@ -457,7 +461,7 @@ tunes to the spot under the pointer). Nothing here transmits. **Hover a plate** 
 frequency and mode, which network reported it and who heard it, the signal report, and how long ago.
 
 Plates are coloured by where the spot came from — **amber** RBN, **blue** PSK Reporter, **lilac** DX
-cluster — and fade as they age, down to half strength at the age limit, so the freshest stand out.
+cluster, **green** POTA — and fade as they age, down to half strength at the age limit, so the freshest stand out.
 
 To see the display without connecting anything, start the app with `--demo`: it shows sample spots.
 

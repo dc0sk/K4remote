@@ -11,6 +11,8 @@ pub mod layout;
 mod model;
 pub mod mqtt;
 pub mod mqtt_source;
+pub mod polled;
+pub mod pota;
 pub mod psk;
 mod store;
 pub mod style;
@@ -18,7 +20,7 @@ pub mod telnet;
 pub mod tooltip;
 
 pub use model::{
-    normalise_callsign, sanitise_text, Network, SourceError, Spot, SpotSource, MAX_TEXT_LEN,
+    normalise_callsign, sanitise_text, Network, Parsed, SourceError, Spot, SpotSource, MAX_TEXT_LEN,
 };
 pub use store::{Insert, SpotStore, DEDUPE_TOLERANCE_HZ, DEFAULT_CAPACITY};
 

@@ -1,6 +1,6 @@
 //! The worker thread that runs the spot sources — the Reverse Beacon Network, a DX cluster (both
-//! telnet) and PSK Reporter (MQTT) — keeps the spot store fed, and reports what each is doing
-//! (FR-SPOT-05/07/09).
+//! telnet), PSK Reporter (MQTT) and POTA (a polled HTTP list) — keeps the spot store fed, and
+//! reports what each is doing (FR-SPOT-05/07/08/09).
 //!
 //! Each source is polled independently on this thread, off the UI and the radio-control paths, so
 //! a slow, blocked or failing network can never delay the UI, CAT or audio, and one network's
@@ -14,12 +14,14 @@
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use k4_spot::mqtt_source::{MqttConfig, MqttSource};
+use k4_spot::polled::{PolledConfig, PolledSource};
+use k4_spot::pota;
 use k4_spot::psk::{bands_overlapping, topic_for_band};
 use k4_spot::telnet::{ConnState, Stats, TelnetConfig, TelnetSource};
-use k4_spot::{SourceError, Spot, SpotSource};
+use k4_spot::{Network, SourceError, Spot, SpotSource};
 
 use crate::spots::SpotHandle;
 
@@ -30,6 +32,9 @@ pub struct Status {
     /// The most recent failure, kept until the source is connected again.
     pub error: Option<String>,
     pub stats: Stats,
+    /// A source that is asked now and then (POTA) rather than held open, so "connected" would be
+    /// the wrong word for it.
+    pub polled: bool,
 }
 
 /// Each source's status; `None` = not enabled.
@@ -38,6 +43,7 @@ pub struct Statuses {
     pub rbn: Option<Status>,
     pub dx_cluster: Option<Status>,
     pub psk_reporter: Option<Status>,
+    pub pota: Option<Status>,
 }
 
 pub type StatusHandle = Arc<Mutex<Statuses>>;
@@ -49,6 +55,7 @@ pub enum Cmd {
         rbn: Option<TelnetConfig>,
         dx_cluster: Option<TelnetConfig>,
         psk_reporter: Option<MqttConfig>,
+        pota: Option<PolledConfig>,
     },
     /// Keep only spots inside `[lo, hi]` Hz, and (for PSK Reporter) subscribe to the bands that
     /// overlap it. An empty range (`lo > hi`) keeps none and subscribes to none; `None` keeps
@@ -60,25 +67,41 @@ pub enum Cmd {
 enum FeedConfig {
     Telnet(TelnetConfig),
     Mqtt(MqttConfig),
+    Polled(PolledConfig),
 }
 
 enum Feed {
     Telnet(TelnetSource),
     Mqtt(MqttSource),
+    Polled(PolledSource),
 }
 
 impl Feed {
-    fn new(cfg: &FeedConfig) -> Self {
-        match cfg {
+    /// `None` for a polled network no reply parser exists for — nothing is run rather than
+    /// something that could only fail.
+    fn new(cfg: &FeedConfig) -> Option<Self> {
+        Some(match cfg {
             FeedConfig::Telnet(c) => Feed::Telnet(TelnetSource::new(c.clone())),
             FeedConfig::Mqtt(c) => Feed::Mqtt(MqttSource::new(c.clone())),
-        }
+            FeedConfig::Polled(c) => {
+                let parse = match c.network {
+                    Network::Pota => pota::parse_spots,
+                    _ => return None,
+                };
+                Feed::Polled(PolledSource::new(
+                    c.clone(),
+                    crate::http_fetch::fetcher(),
+                    parse,
+                ))
+            }
+        })
     }
 
     fn poll(&mut self, sink: &mut dyn FnMut(Spot)) -> Result<(), SourceError> {
         match self {
             Feed::Telnet(s) => s.poll(sink),
             Feed::Mqtt(s) => s.poll(sink),
+            Feed::Polled(s) => s.poll(sink),
         }
     }
 
@@ -86,6 +109,7 @@ impl Feed {
         match self {
             Feed::Telnet(s) => s.set_window(w),
             Feed::Mqtt(s) => s.set_window(w),
+            Feed::Polled(s) => s.set_window(w),
         }
     }
 
@@ -100,6 +124,7 @@ impl Feed {
         match self {
             Feed::Telnet(s) => s.state(),
             Feed::Mqtt(s) => s.state(),
+            Feed::Polled(s) => s.state(),
         }
     }
 
@@ -107,6 +132,7 @@ impl Feed {
         match self {
             Feed::Telnet(s) => s.stats(),
             Feed::Mqtt(s) => s.stats(),
+            Feed::Polled(s) => s.stats(),
         }
     }
 }
@@ -125,6 +151,7 @@ impl Slot {
             state: src.state(),
             error: self.error.clone(),
             stats: src.stats(),
+            polled: matches!(src, Feed::Polled(_)),
         })
     }
 }
@@ -149,7 +176,12 @@ pub fn spawn(rx: Receiver<Cmd>, store: SpotHandle, status: StatusHandle) {
 }
 
 fn run(rx: &Receiver<Cmd>, store: &SpotHandle, status: &StatusHandle) {
-    let mut slots = [Slot::default(), Slot::default(), Slot::default()];
+    let mut slots = [
+        Slot::default(),
+        Slot::default(),
+        Slot::default(),
+        Slot::default(),
+    ];
     // Until told otherwise, keep nothing and subscribe to nothing: no radio, no view, nothing to
     // label.
     let mut window: Option<(u64, u64)> = Some((1, 0));
@@ -161,17 +193,18 @@ fn run(rx: &Receiver<Cmd>, store: &SpotHandle, status: &StatusHandle) {
                     rbn,
                     dx_cluster,
                     psk_reporter,
+                    pota,
                 }) => {
                     let wanted = [
                         rbn.map(FeedConfig::Telnet),
                         dx_cluster.map(FeedConfig::Telnet),
                         psk_reporter.map(FeedConfig::Mqtt),
+                        pota.map(FeedConfig::Polled),
                     ];
                     for (slot, want) in slots.iter_mut().zip(wanted) {
                         if slot.cfg != want {
                             slot.error = None;
-                            slot.src = want.as_ref().map(|cfg| {
-                                let mut s = Feed::new(cfg);
+                            slot.src = want.as_ref().and_then(Feed::new).map(|mut s| {
                                 s.set_window(window);
                                 s.set_topics(topics_for(window));
                                 s
@@ -193,6 +226,7 @@ fn run(rx: &Receiver<Cmd>, store: &SpotHandle, status: &StatusHandle) {
             }
         }
 
+        let started = Instant::now();
         let mut active = false;
         for slot in &mut slots {
             let Some(src) = slot.src.as_mut() else {
@@ -218,6 +252,7 @@ fn run(rx: &Receiver<Cmd>, store: &SpotHandle, status: &StatusHandle) {
             rbn: slots[0].status(),
             dx_cluster: slots[1].status(),
             psk_reporter: slots[2].status(),
+            pota: slots[3].status(),
         };
         if now != published {
             if let Ok(mut g) = status.lock() {
@@ -225,15 +260,37 @@ fn run(rx: &Receiver<Cmd>, store: &SpotHandle, status: &StatusHandle) {
             }
             published = now;
         }
-        if !active {
-            thread::sleep(Duration::from_millis(100));
-        }
+        thread::sleep(pace(active, started.elapsed()));
     }
 }
+
+/// How long the worker rests at the end of a pass. With nothing to run, a long rest. With sources
+/// running, only enough to make a pass last [`MIN_PASS`]: a telnet or MQTT source already spends
+/// its 20 ms socket read inside `poll`, but a polled source returns at once, and without a rest a
+/// worker running only POTA would spin a whole core.
+fn pace(active: bool, spent: Duration) -> Duration {
+    if active {
+        MIN_PASS.saturating_sub(spent)
+    } else {
+        IDLE_REST
+    }
+}
+
+/// The least one pass over the running sources takes.
+const MIN_PASS: Duration = Duration::from_millis(10);
+/// The rest when no source is running.
+const IDLE_REST: Duration = Duration::from_millis(100);
 
 /// One line describing a source, and whether it is a problem worth colouring.
 pub fn describe(status: &Status) -> (String, bool) {
     match (status.state, &status.error) {
+        (ConnState::Connected, _) if status.polled => (
+            format!("last request succeeded — {} spots", status.stats.spots),
+            false,
+        ),
+        (ConnState::Disconnected, None) if status.polled => {
+            ("waiting for the first reply…".into(), false)
+        }
         (ConnState::Connected, _) => {
             let st = &status.stats;
             let shed = if st.shed > 0 {
@@ -363,6 +420,7 @@ mod tests {
             rbn: Some(cfg(Network::Rbn, good)),
             dx_cluster: Some(cfg(Network::DxCluster, dead)),
             psk_reporter: None,
+            pota: None,
         })
         .unwrap();
 
@@ -400,6 +458,7 @@ mod tests {
             rbn: None,
             dx_cluster: None,
             psk_reporter: None,
+            pota: None,
         })
         .unwrap();
         wait("all sources are stopped", || {
@@ -464,6 +523,7 @@ mod tests {
             rbn: None,
             dx_cluster: None,
             psk_reporter: Some(mqtt_cfg(port)),
+            pota: None,
         })
         .unwrap();
         assert_eq!(
@@ -545,6 +605,7 @@ mod tests {
                 shed,
                 ..Stats::default()
             },
+            polled: false,
         };
         assert_eq!(
             describe(&mk(ConnState::Connected, None, 42, 0)),
@@ -574,5 +635,211 @@ mod tests {
         );
         // A stale error does not hide a working connection.
         assert!(!describe(&mk(ConnState::Connected, Some("old"), 1, 0)).1);
+    }
+
+    /// A mock HTTP server: answers every request with `status` and `body`, then closes.
+    fn mock_http(status: &'static str, body: String) -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        thread::spawn(move || {
+            for conn in listener.incoming() {
+                let Ok(mut s) = conn else { return };
+                let mut buf = [0u8; 2048];
+                let mut req = Vec::new();
+                while !req.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match s.read(&mut buf) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => req.extend_from_slice(&buf[..n]),
+                    }
+                }
+                let reply = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = s.write_all(reply.as_bytes());
+                let _ = s.flush();
+                thread::sleep(Duration::from_millis(50));
+            }
+        });
+        port
+    }
+
+    fn pota_cfg(port: u16) -> PolledConfig {
+        PolledConfig {
+            network: Network::Pota,
+            url: format!("http://127.0.0.1:{port}/spot/activator"),
+            interval: Duration::from_secs(60),
+            max_body: pota::MAX_BODY,
+        }
+    }
+
+    fn pota_body() -> String {
+        let rec = |call: &str, khz: &str| {
+            format!(
+                r#"{{"activator":"{call}","frequency":"{khz}","mode":"FT8","reference":"CA-0040","spotTime":"2026-09-21T05:07:00","spotter":"BB2BBB","comments":"CQ POTA","invalid":null}}"#
+            )
+        };
+        format!(
+            "[{},{},{}]",
+            rec("aa1aaa", "14074.0"), // inside the window
+            rec("cc3ccc", "7030.0"),  // outside it
+            rec("CQ", "14075.0")      // not a callsign
+        )
+    }
+
+    /// FR-SPOT-08/09: the worker runs POTA from an HTTP list into the store (window-filtered, bad
+    /// records counted), a failing POTA is reported against its own network while another source
+    /// keeps delivering, and switching POTA off removes its status.
+    /// trace: FR-SPOT-08, FR-SPOT-09
+    #[test]
+    fn fr_spot_08_worker_runs_pota_and_isolates_its_failure() {
+        let store: SpotHandle = Arc::default();
+        let status: StatusHandle = Arc::default();
+        let (tx, rx) = mpsc::channel();
+        spawn(rx, Arc::clone(&store), Arc::clone(&status));
+        tx.send(Cmd::Window(Some((14_000_000, 14_100_000))))
+            .unwrap();
+
+        // A healthy POTA feed.
+        let good = mock_http("200 OK", pota_body());
+        tx.send(Cmd::Configure {
+            rbn: None,
+            dx_cluster: None,
+            psk_reporter: None,
+            pota: Some(pota_cfg(good)),
+        })
+        .unwrap();
+        wait("the POTA spot reaches the store", || {
+            store.lock().unwrap().spots().len() == 1
+        });
+        {
+            let st = store.lock().unwrap();
+            let spot = &st.spots()[0];
+            assert_eq!((spot.call.as_str(), spot.freq_hz), ("AA1AAA", 14_074_000));
+            assert_eq!(spot.network, Network::Pota);
+            assert_eq!(spot.comment.as_deref(), Some("CA-0040 CQ POTA"));
+        }
+        wait("POTA reports success", || {
+            status
+                .lock()
+                .unwrap()
+                .pota
+                .as_ref()
+                .is_some_and(|p| p.state == ConnState::Connected && p.stats.connects == 1)
+        });
+        let p = status.lock().unwrap().pota.clone().unwrap();
+        assert!(p.polled);
+        assert_eq!(p.error, None);
+        assert_eq!(p.stats.spots, 1);
+        assert_eq!(p.stats.outside_window, 1);
+        assert_eq!(p.stats.rejected, 1);
+        assert_eq!(
+            describe(&p),
+            ("last request succeeded — 1 spots".into(), false)
+        );
+
+        // POTA fails while RBN is healthy: the failure is POTA's alone.
+        let bad = mock_http("503 Service Unavailable", String::new());
+        let cluster = mock_cluster("DX de K1TTT-#: 14074.0 W1AW CW 30 dB 20 WPM CQ 1200Z\r\n");
+        tx.send(Cmd::Configure {
+            rbn: Some(cfg(Network::Rbn, cluster)),
+            dx_cluster: None,
+            psk_reporter: None,
+            pota: Some(pota_cfg(bad)),
+        })
+        .unwrap();
+        wait("POTA's failure is reported", || {
+            status
+                .lock()
+                .unwrap()
+                .pota
+                .as_ref()
+                .is_some_and(|p| p.error.is_some())
+        });
+        wait("RBN delivers meanwhile", || {
+            status
+                .lock()
+                .unwrap()
+                .rbn
+                .as_ref()
+                .is_some_and(|r| r.state == ConnState::Connected && r.stats.spots >= 1)
+        });
+        let s = status.lock().unwrap().clone();
+        let p = s.pota.unwrap();
+        assert_eq!(p.error.as_deref(), Some("the server returned HTTP 503"));
+        assert_eq!(p.state, ConnState::Disconnected);
+        assert_eq!(describe(&p), ("the server returned HTTP 503".into(), true));
+        assert_eq!(s.rbn.unwrap().error, None, "RBN is unaffected");
+
+        // Off means gone.
+        tx.send(Cmd::Configure {
+            rbn: None,
+            dx_cluster: None,
+            psk_reporter: None,
+            pota: None,
+        })
+        .unwrap();
+        wait("every source is stopped", || {
+            let s = status.lock().unwrap();
+            s.pota.is_none() && s.rbn.is_none()
+        });
+    }
+
+    /// FR-SPOT-08: the worker rests between passes when only a source that returns at once is
+    /// running (otherwise it would spin a core), and rests longer when nothing runs.
+    /// trace: FR-SPOT-08
+    #[test]
+    fn fr_spot_08_worker_pacing() {
+        let ms = Duration::from_millis;
+        assert_eq!(pace(false, ms(0)), ms(100), "nothing running: a long rest");
+        assert_eq!(pace(false, ms(500)), ms(100));
+        assert_eq!(pace(true, ms(0)), ms(10), "an instant pass still rests");
+        assert_eq!(pace(true, ms(4)), ms(6), "a pass tops up to the minimum");
+        assert_eq!(pace(true, ms(10)), ms(0));
+        assert_eq!(pace(true, ms(25)), ms(0), "a slow pass adds no rest");
+    }
+
+    /// FR-SPOT-08: a polled source is described as requests, not as a connection.
+    /// trace: FR-SPOT-08
+    #[test]
+    fn fr_spot_08_polled_status_wording() {
+        let mk = |state, error: Option<&str>, spots| Status {
+            state,
+            error: error.map(str::to_string),
+            stats: Stats {
+                spots,
+                ..Stats::default()
+            },
+            polled: true,
+        };
+        assert_eq!(
+            describe(&mk(ConnState::Disconnected, None, 0)),
+            ("waiting for the first reply…".into(), false)
+        );
+        assert_eq!(
+            describe(&mk(ConnState::Connected, None, 12)).0,
+            "last request succeeded — 12 spots"
+        );
+        assert_eq!(
+            describe(&mk(
+                ConnState::Disconnected,
+                Some("no reply within 30 s"),
+                0
+            )),
+            ("no reply within 30 s".into(), true)
+        );
+        // The interval bounds here and in the settings file are the same.
+        assert_eq!(
+            k4_config::SPOT_POLL_MIN_SECS,
+            k4_spot::polled::MIN_INTERVAL_SECS
+        );
+        assert_eq!(
+            k4_config::SPOT_POLL_MAX_SECS,
+            k4_spot::polled::MAX_INTERVAL_SECS
+        );
+        assert_eq!(
+            k4_config::SPOT_POLL_DEFAULT_SECS,
+            k4_spot::polled::DEFAULT_INTERVAL_SECS
+        );
     }
 }

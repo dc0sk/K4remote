@@ -53,6 +53,7 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
   nothing identifying; only the bands you are on are requested, and nothing is
   requested when no radio is connected. (This replaces the poll interval the
   setting used to have.)
+- **POTA spots.** Turn on **POTA** in the Networks window and activators currently on the air (Parks on the Air) appear as **green** nameplates, with the park in the hover text. POTA is asked for its public spot list every 60 seconds by default (you can set 30 seconds to 1 hour), and nothing but that request is sent. A slow or failing POTA does not affect the other networks; its status line says why. POTA publishes no description of its list, so the format is from one look at the live service — please report anything that does not draw.
 - **Nameplates you can click, and that show where they came from.** Click a
   nameplate on the spectrum to tune to that station's frequency, and hover one
   to see its callsign, frequency, mode, where it was reported, who heard it, the

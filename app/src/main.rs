@@ -7,6 +7,7 @@
 //! ADR-15): a dark layered theme, banded frame, grids of two-line state
 //! buttons, and proportional S-meter bars (FR-UI-08..15).
 
+mod http_fetch;
 mod kpa;
 mod meter;
 mod spectrum;
@@ -110,6 +111,7 @@ enum SpotNet {
     PskReporter,
     Rbn,
     DxCluster,
+    Pota,
 }
 
 /// Keep only the characters a callsign login can hold — letters, digits and `/`
@@ -175,6 +177,7 @@ struct App {
         Option<k4_spot::telnet::TelnetConfig>,
         Option<k4_spot::telnet::TelnetConfig>,
         Option<k4_spot::mqtt_source::MqttConfig>,
+        Option<k4_spot::polled::PolledConfig>,
     ),
     spot_window_sent: Option<(u64, u64)>,
     /// Draw the waterfall on the GPU (false = the CPU rasteriser, when there is no wgpu adapter).
@@ -300,6 +303,7 @@ struct App {
     spot_psk_port: String,
     spot_rbn_port: String,
     spot_dx_port: String,
+    spot_pota_secs: String,
     // KPA1500 client worker (FR-AMP-03): a shared snapshot the worker writes
     // and the UI copies on tick, a command channel, and the desired-connected
     // state so the connection can be reconciled against K4 connectivity.
@@ -875,6 +879,7 @@ enum Message {
     SpotHostChanged(SpotNet, String),
     SpotPortChanged(SpotNet, String),
     SpotLoginChanged(SpotNet, String),
+    SpotPollChanged(String),
     // KPA1500 amplifier controls (FR-AMP-03).
     KpaSetMode(bool),
     KpaSetAtu(bool),
@@ -1022,6 +1027,7 @@ impl App {
         let spot_psk_port = spot_networks.psk_reporter.port.to_string();
         let spot_rbn_port = spot_networks.rbn.port.to_string();
         let spot_dx_port = spot_networks.dx_cluster.port.to_string();
+        let spot_pota_secs = spot_networks.pota.poll_secs().to_string();
         // The amplifier worker starts idle (disconnected); the tick reconciler
         // connects it once the K4 is up and support is enabled.
         let kpa_shared = Arc::new(Mutex::new(kpa::Shared::default()));
@@ -1090,7 +1096,7 @@ impl App {
             spot_tx,
             spot_status,
             spot_status_ui: spot_sources::Statuses::default(),
-            spot_sent: (None, None, None),
+            spot_sent: (None, None, None, None),
             spot_window_sent: None,
             gpu_waterfall: waterfall_gpu::gpu_available(),
             ui: initial,
@@ -1156,6 +1162,7 @@ impl App {
             spot_psk_port,
             spot_rbn_port,
             spot_dx_port,
+            spot_pota_secs,
             kpa1500_enabled,
             kpa1500_host,
             kpa1500_port,
@@ -1529,6 +1536,7 @@ impl App {
             k4_config::parse_spot_port(&self.spot_psk_port, k4_config::SPOT_PSK_DEFAULT_PORT);
         nets.rbn.port = k4_config::parse_spot_port(&self.spot_rbn_port, 7000);
         nets.dx_cluster.port = k4_config::parse_spot_port(&self.spot_dx_port, 7300);
+        nets.pota.poll_secs = k4_config::parse_spot_poll_secs(&self.spot_pota_secs);
         nets
     }
 
@@ -2749,6 +2757,10 @@ impl App {
                         let n = &mut self.spot_networks.dx_cluster;
                         n.enabled = !n.enabled;
                     }
+                    SpotNet::Pota => {
+                        let n = &mut self.spot_networks.pota;
+                        n.enabled = !n.enabled;
+                    }
                 }
                 self.save_config();
             }
@@ -2758,6 +2770,7 @@ impl App {
                     SpotNet::Rbn => self.spot_networks.rbn.host = host,
                     SpotNet::DxCluster => self.spot_networks.dx_cluster.host = host,
                     SpotNet::PskReporter => self.spot_networks.psk_reporter.host = host,
+                    SpotNet::Pota => {}
                 }
             }
             Message::SpotPortChanged(net, v) => {
@@ -2766,14 +2779,18 @@ impl App {
                     SpotNet::Rbn => self.spot_rbn_port = digits,
                     SpotNet::DxCluster => self.spot_dx_port = digits,
                     SpotNet::PskReporter => self.spot_psk_port = digits,
+                    SpotNet::Pota => {}
                 }
+            }
+            Message::SpotPollChanged(v) => {
+                self.spot_pota_secs = v.chars().filter(char::is_ascii_digit).take(4).collect();
             }
             Message::SpotLoginChanged(net, v) => {
                 let login = sanitise_spot_login(&v);
                 match net {
                     SpotNet::Rbn => self.spot_networks.rbn.login = login,
                     SpotNet::DxCluster => self.spot_networks.dx_cluster.login = login,
-                    SpotNet::PskReporter => {}
+                    SpotNet::PskReporter | SpotNet::Pota => {}
                 }
             }
             Message::KpaSetMode(operate) => self.kpa_send(k4_kpa::cat::set_mode(operate)),
@@ -3071,12 +3088,19 @@ impl App {
                             host: nets.psk_reporter.host.clone(),
                             port: nets.psk_reporter.port,
                         });
-                    if (rbn.clone(), dx.clone(), psk.clone()) != self.spot_sent {
-                        self.spot_sent = (rbn.clone(), dx.clone(), psk.clone());
+                    let pota = nets.pota.enabled.then(|| k4_spot::polled::PolledConfig {
+                        network: k4_spot::Network::Pota,
+                        url: spots::pota_url(),
+                        interval: k4_spot::polled::clamp_interval(nets.pota.poll_secs()),
+                        max_body: k4_spot::pota::MAX_BODY,
+                    });
+                    if (rbn.clone(), dx.clone(), psk.clone(), pota.clone()) != self.spot_sent {
+                        self.spot_sent = (rbn.clone(), dx.clone(), psk.clone(), pota.clone());
                         let _ = self.spot_tx.send(spot_sources::Cmd::Configure {
                             rbn,
                             dx_cluster: dx,
                             psk_reporter: psk,
+                            pota,
                         });
                     }
                     let win = spots::spot_window(self.ui.vfo_a_hz, self.ui.vfo_b_hz);
@@ -6438,6 +6462,7 @@ impl App {
             nets.psk_reporter.enabled,
             nets.rbn.enabled,
             nets.dx_cluster.enabled,
+            nets.pota.enabled,
         ]
         .iter()
         .filter(|e| **e)
@@ -6656,6 +6681,33 @@ impl App {
             .push(Self::spot_status_line(
                 &self.spot_status_ui.dx_cluster,
                 nets.dx_cluster.enabled,
+            ))
+            .push(Text::new("POTA").size(13))
+            .push(
+                Text::new(
+                    "Parks on the Air activators currently on the air, from POTA's public \
+                     spot list. The list is asked for at the interval below (30 s to 1 h); \
+                     nothing but the request is sent. Spots are invitations to call.",
+                )
+                .size(11)
+                .color(dim),
+            )
+            .push(small_btn_pair(
+                nets.pota.enabled,
+                "POTA: ON",
+                "POTA: OFF",
+                Message::ToggleSpotNetwork(SpotNet::Pota),
+            ))
+            .push(Self::spot_field(
+                "Every (s)",
+                "60",
+                &self.spot_pota_secs,
+                90.0,
+                Message::SpotPollChanged,
+            ))
+            .push(Self::spot_status_line(
+                &self.spot_status_ui.pota,
+                nets.pota.enabled,
             ))
             .push(
                 Container::new(
