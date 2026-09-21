@@ -586,6 +586,40 @@ impl PotaPrefs {
     }
 }
 
+/// FreeDV Reporter (R-EXT-05): the service's host and its plain-WebSocket port.
+pub const SPOT_FREEDV_DEFAULT_HOST: &str = "qso.freedv.org";
+pub const SPOT_FREEDV_DEFAULT_PORT: u16 = 80;
+
+fn default_freedv_host() -> String {
+    SPOT_FREEDV_DEFAULT_HOST.to_string()
+}
+
+fn default_freedv_port() -> u16 {
+    SPOT_FREEDV_DEFAULT_PORT
+}
+
+/// FreeDV Reporter as a spot source (FR-SPOT-08): a live WebSocket feed of the stations on the air,
+/// joined read-only. Off until the operator turns it on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FreeDvPrefs {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_freedv_host")]
+    pub host: String,
+    #[serde(default = "default_freedv_port")]
+    pub port: u16,
+}
+
+impl Default for FreeDvPrefs {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            host: default_freedv_host(),
+            port: default_freedv_port(),
+        }
+    }
+}
+
 /// A telnet spot source — the Reverse Beacon Network or a DX cluster
 /// (FR-SPOT-04, connected by FR-SPOT-07).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -641,6 +675,8 @@ pub struct SpotNetworks {
     pub dx_cluster: ClusterPrefs,
     #[serde(default)]
     pub pota: PotaPrefs,
+    #[serde(default)]
+    pub freedv: FreeDvPrefs,
     /// Certificates approved by hand for encrypted connections. Read through
     /// [`SpotNetworks::trusted`], which drops anything malformed.
     #[serde(default)]
@@ -654,6 +690,7 @@ impl Default for SpotNetworks {
             rbn: ClusterPrefs::rbn(),
             dx_cluster: ClusterPrefs::dx_cluster(),
             pota: PotaPrefs::default(),
+            freedv: FreeDvPrefs::default(),
             trusted_certs: Vec::new(),
         }
     }
@@ -701,6 +738,7 @@ impl SpotNetworks {
             || self.rbn.enabled
             || self.dx_cluster.enabled
             || self.pota.enabled
+            || self.freedv.enabled
     }
 }
 

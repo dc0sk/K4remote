@@ -39,6 +39,8 @@ const DEMO: &[(&str, i64, Network, u64)] = &[
     ("SM5DDD", 9_500, Network::DxCluster, 400),
     ("W4POT", 6_000, Network::Pota, 40),
     ("K9ACT", -6_500, Network::Pota, 250),
+    ("F5FDV", -9_000, Network::FreeDvReporter, 30),
+    ("VK3RAD", 12_500, Network::FreeDvReporter, 120),
     ("PY2EEE", 15_000, Network::PskReporter, 600),
     ("ZL1FFF", 23_900, Network::Rbn, 800), // just inside the right edge
     ("VK9GGG", 40_000, Network::Rbn, 15),  // outside a 48 kHz view

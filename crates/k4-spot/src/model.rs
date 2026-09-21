@@ -14,6 +14,7 @@ pub enum Network {
     Rbn,
     DxCluster,
     Pota,
+    FreeDvReporter,
 }
 
 /// One report of a station on a frequency.
