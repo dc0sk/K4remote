@@ -13,10 +13,18 @@
 //! Nothing identifying is sent: no username, no password, and a client id made only from the
 //! process id and a clock reading.
 //!
+//! **How the wire is made is not this file's business.** A [`Connector`] turns a host and port into
+//! a byte stream; the default is plain TCP and the app supplies an encrypted one (TLS, port 1884),
+//! which keeps this crate free of a TLS dependency. A connector can refuse with
+//! [`ConnectError::Untrusted`], carrying what the operator needs to decide whether to trust the
+//! server's certificate; the source keeps it for [`MqttSource::pending_cert`] and does not retry
+//! faster than its backoff until told to with [`MqttSource::retry_now`].
+//!
 //! [`poll`]: SpotSource::poll
 
 use std::io::{ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::cluster::RateGate;
@@ -32,6 +40,71 @@ pub struct MqttConfig {
     pub network: Network,
     pub host: String,
     pub port: u16,
+    /// Connect through the encrypted connector (see [`MqttSource::set_tls_connector`]).
+    pub tls: bool,
+}
+
+/// A byte stream to a broker. Reads must time out (return `WouldBlock` or `TimedOut`) after a short
+/// while instead of blocking, so one poll stays bounded.
+pub trait Wire: Read + Write + Send {}
+impl<T: Read + Write + Send> Wire for T {}
+
+/// What an operator needs to decide whether to trust a server's certificate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CertInfo {
+    pub host: String,
+    pub port: u16,
+    /// SHA-256 of the certificate as sent, 64 lower-case hex digits.
+    pub sha256: String,
+    /// Why it was not trusted, in words (`unknown issuer`, `expired`, …).
+    pub reason: String,
+    /// The operator had approved a **different** certificate for this host and port: the server's
+    /// certificate has changed since, which deserves more suspicion than a first sight.
+    pub changed: bool,
+}
+
+/// Why a connector did not produce a stream.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConnectError {
+    /// Could not connect, resolve or handshake; worded for the operator.
+    Failed(String),
+    /// The server's certificate is not trusted (yet).
+    Untrusted(CertInfo),
+}
+
+/// Open a stream to `host:port`, giving up on each attempt after the timeout.
+pub type Connector =
+    Arc<dyn Fn(&str, u16, Duration) -> Result<Box<dyn Wire>, ConnectError> + Send + Sync>;
+
+/// Plain TCP: every resolved address is tried in turn.
+pub fn plain_connector() -> Connector {
+    Arc::new(|host, port, timeout| {
+        let addrs: Vec<SocketAddr> = (host, port)
+            .to_socket_addrs()
+            .map_err(|e| ConnectError::Failed(format!("cannot resolve {host}: {e}")))?
+            .collect();
+        let mut last = None;
+        for addr in addrs {
+            match TcpStream::connect_timeout(&addr, timeout) {
+                Ok(stream) => {
+                    let _ = stream.set_nodelay(true);
+                    let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
+                    if stream
+                        .set_read_timeout(Some(Duration::from_millis(20)))
+                        .is_err()
+                    {
+                        continue;
+                    }
+                    return Ok(Box::new(stream) as Box<dyn Wire>);
+                }
+                Err(e) => last = Some(e),
+            }
+        }
+        Err(ConnectError::Failed(format!(
+            "connect to {host}:{port} failed: {}",
+            last.map_or_else(|| "no address to connect to".to_string(), |e| e.to_string())
+        )))
+    })
 }
 
 enum Phase {
@@ -40,7 +113,7 @@ enum Phase {
 }
 
 struct Conn {
-    stream: TcpStream,
+    stream: Box<dyn Wire>,
     reader: PacketReader,
     gate: RateGate,
     phase: Phase,
@@ -82,6 +155,10 @@ pub struct MqttSource {
     attempts: u64,
     epoch: Instant,
     client_id: String,
+    plain: Connector,
+    tls: Option<Connector>,
+    /// The certificate the last attempt was refused for, until a connection succeeds.
+    pending_cert: Option<CertInfo>,
 }
 
 impl MqttSource {
@@ -106,7 +183,33 @@ impl MqttSource {
             stats: Stats::default(),
             attempts: 0,
             epoch: now,
+            plain: plain_connector(),
+            tls: None,
+            pending_cert: None,
         }
+    }
+
+    /// The connector used when the configuration asks for TLS. Without one, asking for TLS is an
+    /// error, never a silent fall back to plain text.
+    pub fn set_tls_connector(&mut self, connector: Connector) {
+        self.tls = Some(connector);
+    }
+
+    /// Replace the plain connector (tests).
+    pub fn set_plain_connector(&mut self, connector: Connector) {
+        self.plain = connector;
+    }
+
+    /// The certificate the last attempt was refused for, if that is why it is not connected.
+    pub fn pending_cert(&self) -> Option<&CertInfo> {
+        self.pending_cert.as_ref()
+    }
+
+    /// Try again at the next poll instead of waiting out the backoff — for when the operator has
+    /// just approved a certificate.
+    pub fn retry_now(&mut self) {
+        self.next_attempt = Instant::now();
+        self.backoff = self.timing.initial_backoff;
     }
 
     /// The topics to subscribe to (empty = none). Applied to a live connection on the next poll.
@@ -153,53 +256,59 @@ impl MqttSource {
             return Err(SourceError("no host is set".into()));
         }
         self.attempts += 1;
-        let addrs: Vec<SocketAddr> = match (self.cfg.host.trim(), self.cfg.port).to_socket_addrs() {
-            Ok(a) => a.collect(),
-            Err(e) => return Err(self.fail(now, format!("cannot resolve {}: {e}", self.cfg.host))),
-        };
-        let mut last = None;
-        for addr in addrs {
-            match TcpStream::connect_timeout(&addr, self.timing.connect_timeout) {
-                Ok(stream) => {
-                    let _ = stream.set_nodelay(true);
-                    let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
-                    if stream
-                        .set_read_timeout(Some(Duration::from_millis(20)))
-                        .is_err()
-                    {
-                        continue;
-                    }
-                    let mut conn = Conn {
-                        stream,
-                        reader: PacketReader::new(),
-                        gate: RateGate::new(self.timing.rate_per_sec),
-                        phase: Phase::AwaitConnAck,
-                        since: now,
-                        last_rx: now,
-                        last_tx: now,
-                        subscribed: Vec::new(),
-                        next_id: 0,
-                    };
-                    let keepalive = self.timing.keepalive.as_secs().clamp(1, 65_535) as u16;
-                    if let Err(e) = conn.send(&mqtt::connect(&self.client_id, keepalive)) {
-                        last = Some(std::io::Error::other(e.0));
-                        continue;
-                    }
-                    self.stats.connects += 1;
-                    self.conn = Some(conn);
-                    return Ok(());
+        let connector = if self.cfg.tls {
+            match self.tls.clone() {
+                Some(c) => c,
+                None => {
+                    self.next_attempt = now + self.timing.max_backoff;
+                    return Err(SourceError(
+                        "encrypted connections are not available".into(),
+                    ));
                 }
-                Err(e) => last = Some(e),
             }
+        } else {
+            self.plain.clone()
+        };
+        let host = self.cfg.host.trim().to_string();
+        let stream = match connector(&host, self.cfg.port, self.timing.connect_timeout) {
+            Ok(s) => s,
+            Err(ConnectError::Failed(why)) => return Err(self.fail(now, why)),
+            Err(ConnectError::Untrusted(info)) => {
+                let msg = format!(
+                    "the server's certificate is not trusted ({}){}",
+                    info.reason,
+                    if info.changed {
+                        " — and it is not the one you approved"
+                    } else {
+                        ""
+                    }
+                );
+                self.pending_cert = Some(info);
+                return Err(self.fail(now, msg));
+            }
+        };
+        let mut conn = Conn {
+            stream,
+            reader: PacketReader::new(),
+            gate: RateGate::new(self.timing.rate_per_sec),
+            phase: Phase::AwaitConnAck,
+            since: now,
+            last_rx: now,
+            last_tx: now,
+            subscribed: Vec::new(),
+            next_id: 0,
+        };
+        let keepalive = self.timing.keepalive.as_secs().clamp(1, 65_535) as u16;
+        if let Err(e) = conn.send(&mqtt::connect(&self.client_id, keepalive)) {
+            return Err(self.fail(
+                now,
+                format!("connect to {host}:{} failed: {}", self.cfg.port, e.0),
+            ));
         }
-        let why = last.map_or_else(|| "no address to connect to".to_string(), |e| e.to_string());
-        Err(self.fail(
-            now,
-            format!(
-                "connect to {}:{} failed: {why}",
-                self.cfg.host, self.cfg.port
-            ),
-        ))
+        self.pending_cert = None;
+        self.stats.connects += 1;
+        self.conn = Some(conn);
+        Ok(())
     }
 
     fn service(&mut self, now: Instant, sink: &mut dyn FnMut(Spot)) -> Result<(), SourceError> {

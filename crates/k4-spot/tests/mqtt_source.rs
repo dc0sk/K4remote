@@ -11,7 +11,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use k4_spot::mqtt_source::{MqttConfig, MqttSource};
+use k4_spot::mqtt_source::{CertInfo, ConnectError, Connector, MqttConfig, MqttSource, Wire};
 use k4_spot::telnet::{ConnState, Timing};
 use k4_spot::{Network, Spot, SpotSource};
 
@@ -32,6 +32,7 @@ fn cfg(port: u16) -> MqttConfig {
         network: Network::PskReporter,
         host: "127.0.0.1".into(),
         port,
+        tls: false,
     }
 }
 
@@ -543,4 +544,158 @@ fn fr_spot_05_source_reports_failure_and_backs_off() {
         "attempts: {}",
         src.attempts()
     );
+}
+
+/// A connector that counts its calls and hands out the scripted results in turn.
+fn scripted(
+    results: Vec<Result<u16, ConnectError>>,
+) -> (Connector, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+    let calls = Arc::new(AtomicUsize::new(0));
+    let (c, queue) = (Arc::clone(&calls), Mutex::new(results.into_iter()));
+    let connector: Connector = Arc::new(move |_host, _port, _timeout| {
+        c.fetch_add(1, Ordering::SeqCst);
+        match queue.lock().unwrap().next() {
+            Some(Ok(port)) => {
+                let s = TcpStream::connect(("127.0.0.1", port)).unwrap();
+                s.set_read_timeout(Some(Duration::from_millis(20))).unwrap();
+                Ok(Box::new(s) as Box<dyn Wire>)
+            }
+            Some(Err(e)) => Err(e),
+            None => Err(ConnectError::Failed("script ran out".into())),
+        }
+    });
+    (connector, calls)
+}
+
+fn cert_info(changed: bool) -> CertInfo {
+    CertInfo {
+        host: "127.0.0.1".into(),
+        port: 1884,
+        sha256: "ab".repeat(32),
+        reason: "unknown issuer".into(),
+        changed,
+    }
+}
+
+/// Asking for TLS with no TLS connector is an error, never a quiet fall back to plain text; and
+/// each configuration uses only its own connector.
+#[test]
+fn fr_spot_05_tls_never_falls_back_to_plain_text() {
+    use std::sync::atomic::Ordering;
+    let (plain, plain_calls) = scripted(vec![Err(ConnectError::Failed("plain was used".into()))]);
+    let mut src = MqttSource::with_timing(
+        MqttConfig {
+            tls: true,
+            ..cfg(1884)
+        },
+        fast(),
+    );
+    src.set_plain_connector(plain.clone());
+    let run = pump(&mut src, LONG, |_, r| !r.errors.is_empty());
+    assert_eq!(run.errors[0], "encrypted connections are not available");
+    assert_eq!(
+        plain_calls.load(Ordering::SeqCst),
+        0,
+        "plain text was tried"
+    );
+
+    // With a TLS connector, TLS is what is used and plain is not.
+    let (tls, tls_calls) = scripted(vec![Err(ConnectError::Failed("tls was used".into()))]);
+    let mut src = MqttSource::with_timing(
+        MqttConfig {
+            tls: true,
+            ..cfg(1884)
+        },
+        fast(),
+    );
+    src.set_plain_connector(plain.clone());
+    src.set_tls_connector(tls.clone());
+    let run = pump(&mut src, LONG, |_, r| !r.errors.is_empty());
+    assert_eq!(run.errors[0], "tls was used");
+    assert_eq!(tls_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(plain_calls.load(Ordering::SeqCst), 0);
+
+    // A plain configuration never touches the TLS connector.
+    let (tls2, tls2_calls) = scripted(vec![Err(ConnectError::Failed("tls was used".into()))]);
+    let (plain2, plain2_calls) = scripted(vec![Err(ConnectError::Failed("plain was used".into()))]);
+    let mut src = MqttSource::with_timing(cfg(1883), fast());
+    src.set_plain_connector(plain2);
+    src.set_tls_connector(tls2);
+    let run = pump(&mut src, LONG, |_, r| !r.errors.is_empty());
+    assert_eq!(run.errors[0], "plain was used");
+    assert_eq!(plain2_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(tls2_calls.load(Ordering::SeqCst), 0);
+}
+
+/// An untrusted certificate is reported with its reason and kept for the operator to decide on,
+/// the source does not hammer the server while waiting, `retry_now` tries again at once, and a
+/// good connection clears the pending certificate.
+#[test]
+fn fr_spot_05_untrusted_certificate_is_kept_until_decided() {
+    use std::sync::atomic::Ordering;
+    let port = serve(vec![Box::new(|mut s| {
+        let _ = read_packet(&mut s, Duration::from_secs(3));
+        s.write_all(&[0x20, 0x02, 0x00, 0x00]).unwrap();
+        thread::sleep(Duration::from_millis(600));
+    })]);
+    let (tls, calls) = scripted(vec![
+        Err(ConnectError::Untrusted(cert_info(false))),
+        Err(ConnectError::Untrusted(cert_info(true))),
+        Ok(port),
+    ]);
+    let timing = Timing {
+        initial_backoff: Duration::from_millis(150),
+        max_backoff: Duration::from_secs(60),
+        ..fast()
+    };
+    let mut src = MqttSource::with_timing(
+        MqttConfig {
+            tls: true,
+            ..cfg(1884)
+        },
+        timing,
+    );
+    src.set_tls_connector(tls);
+    assert!(src.pending_cert().is_none(), "nothing pending at the start");
+
+    let run = pump(&mut src, LONG, |_, r| !r.errors.is_empty());
+    assert_eq!(
+        run.errors[0],
+        "the server's certificate is not trusted (unknown issuer)"
+    );
+    assert_eq!(src.pending_cert(), Some(&cert_info(false)));
+    assert_eq!(src.state(), ConnState::Disconnected);
+
+    // Inside the backoff, polling does not reconnect.
+    let t0 = Instant::now();
+    while t0.elapsed() < Duration::from_millis(80) {
+        assert!(src.poll(&mut |_| {}).is_ok());
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "retried during the backoff"
+    );
+
+    // Approved: retry at once. The second attempt shows the certificate has changed.
+    src.retry_now();
+    let run = pump(&mut src, LONG, |_, r| !r.errors.is_empty());
+    assert_eq!(
+        run.errors[0],
+        "the server's certificate is not trusted (unknown issuer) — and it is not the one you approved"
+    );
+    assert_eq!(src.pending_cert(), Some(&cert_info(true)));
+
+    // Then it is trusted. `retry_now` restarted the backoff, so the next attempt comes after the
+    // initial 150 ms, not the doubled 300 ms it would be otherwise: connect within 250 ms.
+    let run = pump(&mut src, Duration::from_millis(250), |s, _| {
+        s.state() == ConnState::Connected
+    });
+    assert!(run.errors.is_empty(), "{:?}", run.errors);
+    assert_eq!(src.state(), ConnState::Connected);
+    assert!(src.pending_cert().is_none(), "cleared by a good connection");
+    assert_eq!(calls.load(Ordering::SeqCst), 3);
 }

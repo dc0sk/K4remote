@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use k4_spot::mqtt_source::{MqttConfig, MqttSource};
+use k4_spot::mqtt_source::{CertInfo, MqttConfig, MqttSource};
 use k4_spot::polled::{PolledConfig, PolledSource};
 use k4_spot::pota;
 use k4_spot::psk::{bands_overlapping, topic_for_band};
@@ -24,6 +24,7 @@ use k4_spot::telnet::{ConnState, Stats, TelnetConfig, TelnetSource};
 use k4_spot::{Network, SourceError, Spot, SpotSource};
 
 use crate::spots::SpotHandle;
+use crate::tls;
 
 /// What one source is doing.
 #[derive(Debug, Clone, PartialEq)]
@@ -35,6 +36,9 @@ pub struct Status {
     /// A source that is asked now and then (POTA) rather than held open, so "connected" would be
     /// the wrong word for it.
     pub polled: bool,
+    /// The server's certificate, when that is why it is not connected: the operator is asked
+    /// whether to trust it (FR-SPOT-13).
+    pub cert: Option<CertInfo>,
 }
 
 /// Each source's status; `None` = not enabled.
@@ -61,6 +65,9 @@ pub enum Cmd {
     /// overlap it. An empty range (`lo > hi`) keeps none and subscribes to none; `None` keeps
     /// every telnet spot but subscribes to no PSK Reporter band.
     Window(Option<(u64, u64)>),
+    /// Try again now instead of waiting out the backoff — sent after the operator approves a
+    /// certificate.
+    RetryNow,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -79,10 +86,14 @@ enum Feed {
 impl Feed {
     /// `None` for a polled network no reply parser exists for — nothing is run rather than
     /// something that could only fail.
-    fn new(cfg: &FeedConfig) -> Option<Self> {
+    fn new(cfg: &FeedConfig, pins: &tls::Pins) -> Option<Self> {
         Some(match cfg {
             FeedConfig::Telnet(c) => Feed::Telnet(TelnetSource::new(c.clone())),
-            FeedConfig::Mqtt(c) => Feed::Mqtt(MqttSource::new(c.clone())),
+            FeedConfig::Mqtt(c) => {
+                let mut source = MqttSource::new(c.clone());
+                source.set_tls_connector(tls::connector(std::sync::Arc::clone(pins)));
+                Feed::Mqtt(source)
+            }
             FeedConfig::Polled(c) => {
                 let parse = match c.network {
                     Network::Pota => pota::parse_spots,
@@ -128,6 +139,20 @@ impl Feed {
         }
     }
 
+    /// The certificate the last attempt was refused for, if that is why it is down.
+    fn pending_cert(&self) -> Option<CertInfo> {
+        match self {
+            Feed::Mqtt(s) => s.pending_cert().cloned(),
+            _ => None,
+        }
+    }
+
+    fn retry_now(&mut self) {
+        if let Feed::Mqtt(s) = self {
+            s.retry_now();
+        }
+    }
+
     fn stats(&self) -> Stats {
         match self {
             Feed::Telnet(s) => s.stats(),
@@ -152,6 +177,7 @@ impl Slot {
             error: self.error.clone(),
             stats: src.stats(),
             polled: matches!(src, Feed::Polled(_)),
+            cert: src.pending_cert(),
         })
     }
 }
@@ -169,13 +195,13 @@ fn topics_for(window: Option<(u64, u64)>) -> Vec<String> {
 }
 
 /// Start the worker. It ends when the UI drops its end of the command channel.
-pub fn spawn(rx: Receiver<Cmd>, store: SpotHandle, status: StatusHandle) {
+pub fn spawn(rx: Receiver<Cmd>, store: SpotHandle, status: StatusHandle, pins: tls::Pins) {
     let _ = thread::Builder::new()
         .name("spot-sources".into())
-        .spawn(move || run(&rx, &store, &status));
+        .spawn(move || run(&rx, &store, &status, &pins));
 }
 
-fn run(rx: &Receiver<Cmd>, store: &SpotHandle, status: &StatusHandle) {
+fn run(rx: &Receiver<Cmd>, store: &SpotHandle, status: &StatusHandle, pins: &tls::Pins) {
     let mut slots = [
         Slot::default(),
         Slot::default(),
@@ -204,11 +230,12 @@ fn run(rx: &Receiver<Cmd>, store: &SpotHandle, status: &StatusHandle) {
                     for (slot, want) in slots.iter_mut().zip(wanted) {
                         if slot.cfg != want {
                             slot.error = None;
-                            slot.src = want.as_ref().and_then(Feed::new).map(|mut s| {
-                                s.set_window(window);
-                                s.set_topics(topics_for(window));
-                                s
-                            });
+                            slot.src =
+                                want.as_ref().and_then(|c| Feed::new(c, pins)).map(|mut s| {
+                                    s.set_window(window);
+                                    s.set_topics(topics_for(window));
+                                    s
+                                });
                             slot.cfg = want;
                         }
                     }
@@ -219,6 +246,11 @@ fn run(rx: &Receiver<Cmd>, store: &SpotHandle, status: &StatusHandle) {
                     for src in slots.iter_mut().filter_map(|s| s.src.as_mut()) {
                         src.set_window(w);
                         src.set_topics(topics.clone());
+                    }
+                }
+                Ok(Cmd::RetryNow) => {
+                    for src in slots.iter_mut().filter_map(|s| s.src.as_mut()) {
+                        src.retry_now();
                     }
                 }
                 Err(TryRecvError::Empty) => break,
@@ -352,6 +384,7 @@ mod tests {
             network: Network::PskReporter,
             host: "127.0.0.1".into(),
             port,
+            tls: false,
         }
     }
 
@@ -406,7 +439,7 @@ mod tests {
         let store: SpotHandle = Arc::default();
         let status: StatusHandle = Arc::default();
         let (tx, rx) = mpsc::channel();
-        spawn(rx, Arc::clone(&store), Arc::clone(&status));
+        spawn(rx, Arc::clone(&store), Arc::clone(&status), Arc::default());
 
         let good = mock_cluster("DX de K1TTT-#: 14074.0 W1AW CW 30 dB 20 WPM CQ 1200Z\r\n");
         let dead = TcpListener::bind("127.0.0.1:0")
@@ -475,7 +508,7 @@ mod tests {
         let store: SpotHandle = Arc::default();
         let status: StatusHandle = Arc::default();
         let (tx, rx) = mpsc::channel();
-        spawn(rx, Arc::clone(&store), Arc::clone(&status));
+        spawn(rx, Arc::clone(&store), Arc::clone(&status), Arc::default());
 
         let (seen_tx, seen_rx) = mpsc::channel();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -606,6 +639,7 @@ mod tests {
                 ..Stats::default()
             },
             polled: false,
+            cert: None,
         };
         assert_eq!(
             describe(&mk(ConnState::Connected, None, 42, 0)),
@@ -696,7 +730,7 @@ mod tests {
         let store: SpotHandle = Arc::default();
         let status: StatusHandle = Arc::default();
         let (tx, rx) = mpsc::channel();
-        spawn(rx, Arc::clone(&store), Arc::clone(&status));
+        spawn(rx, Arc::clone(&store), Arc::clone(&status), Arc::default());
         tx.send(Cmd::Window(Some((14_000_000, 14_100_000))))
             .unwrap();
 
@@ -811,6 +845,7 @@ mod tests {
                 ..Stats::default()
             },
             polled: true,
+            cert: None,
         };
         assert_eq!(
             describe(&mk(ConnState::Disconnected, None, 0)),
@@ -841,5 +876,117 @@ mod tests {
             k4_config::SPOT_POLL_DEFAULT_SECS,
             k4_spot::polled::DEFAULT_INTERVAL_SECS
         );
+    }
+
+    /// FR-SPOT-13: over TLS the worker refuses a certificate no authority signed, reports it with
+    /// its fingerprint, and sends **nothing** to the server; once the operator approves it and the
+    /// worker is told to retry, it connects and the pending certificate is gone.
+    /// trace: FR-SPOT-13
+    #[test]
+    fn fr_spot_13_worker_asks_before_trusting_and_connects_once_approved() {
+        use crate::tls::test_certs::{A_CERT, A_KEY, A_SHA256};
+        use crate::tls::{testkit, Pin};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        // A TLS broker: answer the first packet (CONNECT) with a CONNACK and hold the line.
+        let connects = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&connects);
+        let port = testkit::serve_tls(
+            A_CERT,
+            A_KEY,
+            rustls::DEFAULT_VERSIONS,
+            4,
+            Arc::new(move |mut tls| {
+                let mut buf = [0u8; 256];
+                if tls.read(&mut buf).is_ok_and(|n| n > 0) {
+                    seen.fetch_add(1, Ordering::SeqCst);
+                    let _ = tls.write_all(&[0x20, 0x02, 0x00, 0x00]);
+                    let _ = tls.flush();
+                }
+                thread::sleep(Duration::from_secs(3));
+            }),
+        );
+
+        let store: SpotHandle = Arc::default();
+        let status: StatusHandle = Arc::default();
+        let pins: tls::Pins = Arc::default();
+        let (tx, rx) = mpsc::channel();
+        spawn(
+            rx,
+            Arc::clone(&store),
+            Arc::clone(&status),
+            Arc::clone(&pins),
+        );
+        tx.send(Cmd::Window(Some((14_000_000, 14_100_000))))
+            .unwrap();
+        tx.send(Cmd::Configure {
+            rbn: None,
+            dx_cluster: None,
+            psk_reporter: Some(MqttConfig {
+                tls: true,
+                ..mqtt_cfg(port)
+            }),
+            pota: None,
+        })
+        .unwrap();
+
+        wait("the untrusted certificate is reported", || {
+            status
+                .lock()
+                .unwrap()
+                .psk_reporter
+                .as_ref()
+                .is_some_and(|p| p.cert.is_some())
+        });
+        let p = status.lock().unwrap().psk_reporter.clone().unwrap();
+        let cert = p.cert.clone().expect("a pending certificate");
+        assert_eq!(
+            cert.sha256, A_SHA256,
+            "the fingerprint shown is the server's"
+        );
+        assert_eq!((cert.host.as_str(), cert.port), ("127.0.0.1", port));
+        assert!(!cert.changed);
+        assert_eq!(p.state, ConnState::Disconnected);
+        assert!(
+            p.error
+                .as_deref()
+                .is_some_and(|e| e.contains("not trusted")),
+            "{:?}",
+            p.error
+        );
+        assert!(describe(&p).1, "shown as a problem");
+        assert_eq!(
+            connects.load(Ordering::SeqCst),
+            0,
+            "the broker was sent an MQTT packet before the certificate was approved"
+        );
+
+        // The operator approves that certificate; the worker is told to try again.
+        pins.lock().unwrap().push(Pin {
+            host: cert.host.clone(),
+            port: cert.port,
+            sha256: cert.sha256.clone(),
+        });
+        tx.send(Cmd::RetryNow).unwrap();
+        // Well inside the 1 s the source would otherwise wait before trying again: the retry is
+        // what makes an approval take effect at once.
+        let t0 = Instant::now();
+        while status
+            .lock()
+            .unwrap()
+            .psk_reporter
+            .as_ref()
+            .is_none_or(|p| p.state != ConnState::Connected)
+        {
+            assert!(
+                t0.elapsed() < Duration::from_millis(700),
+                "not connected within 700 ms of the approval"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        let p = status.lock().unwrap().psk_reporter.clone().unwrap();
+        assert!(p.cert.is_none(), "the pending certificate is cleared");
+        assert_eq!(p.error, None);
+        assert_eq!(connects.load(Ordering::SeqCst), 1);
     }
 }

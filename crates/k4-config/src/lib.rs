@@ -409,9 +409,43 @@ pub fn parse_spot_max_age_min(input: &str) -> u32 {
         .unwrap_or(SPOT_MAX_AGE_DEFAULT_MIN)
 }
 
-/// PSK Reporter's public MQTT feed (R-EXT-05): host and plain-TCP port.
+/// PSK Reporter's public MQTT feed (R-EXT-05): host and plain-TCP port, and the TLS port.
 pub const SPOT_PSK_DEFAULT_HOST: &str = "mqtt.pskreporter.info";
 pub const SPOT_PSK_DEFAULT_PORT: u16 = 1883;
+pub const SPOT_PSK_TLS_PORT: u16 = 1884;
+
+/// The most approved certificates kept. Far more than anyone needs; the cap is what stops a
+/// corrupted or hostile file from growing the list without end.
+pub const MAX_TRUSTED_CERTS: usize = 32;
+
+/// A server certificate the operator approved by hand (FR-SPOT-13): one host, one port, one
+/// certificate. It is public information, not a secret.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrustedCert {
+    pub host: String,
+    pub port: u16,
+    /// SHA-256 of the certificate, 64 lower-case hex digits.
+    pub sha256: String,
+}
+
+impl TrustedCert {
+    /// Whether the entry is usable: a plain host name, a non-zero port and a well-formed
+    /// fingerprint. Anything else is dropped when read, never repaired.
+    pub fn is_valid(&self) -> bool {
+        let host_ok = !self.host.is_empty()
+            && self.host.len() <= 253
+            && self
+                .host
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b':' | b'_'));
+        let fp_ok = self.sha256.len() == 64
+            && self
+                .sha256
+                .bytes()
+                .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+        host_ok && fp_ok && self.port != 0
+    }
+}
 
 /// Parse a Settings port field: a non-zero `u16`, else `default` — an empty or
 /// unusable entry never becomes a saved port (FR-SPOT-04).
@@ -436,6 +470,9 @@ pub struct PskReporterPrefs {
     pub host: String,
     #[serde(default = "default_psk_port")]
     pub port: u16,
+    /// Connect encrypted (TLS, normally port 1884) instead of plain (FR-SPOT-13).
+    #[serde(default)]
+    pub tls: bool,
 }
 
 fn default_psk_host() -> String {
@@ -452,6 +489,7 @@ impl Default for PskReporterPrefs {
             enabled: false,
             host: default_psk_host(),
             port: SPOT_PSK_DEFAULT_PORT,
+            tls: false,
         }
     }
 }
@@ -570,6 +608,10 @@ pub struct SpotNetworks {
     pub dx_cluster: ClusterPrefs,
     #[serde(default)]
     pub pota: PotaPrefs,
+    /// Certificates approved by hand for encrypted connections. Read through
+    /// [`SpotNetworks::trusted`], which drops anything malformed.
+    #[serde(default)]
+    pub trusted_certs: Vec<TrustedCert>,
 }
 
 impl Default for SpotNetworks {
@@ -579,11 +621,47 @@ impl Default for SpotNetworks {
             rbn: ClusterPrefs::rbn(),
             dx_cluster: ClusterPrefs::dx_cluster(),
             pota: PotaPrefs::default(),
+            trusted_certs: Vec::new(),
         }
     }
 }
 
 impl SpotNetworks {
+    /// The approved certificates that are usable: malformed entries and duplicates dropped, at most
+    /// [`MAX_TRUSTED_CERTS`] kept (the first ones).
+    pub fn trusted(&self) -> Vec<TrustedCert> {
+        let mut out: Vec<TrustedCert> = Vec::new();
+        for c in &self.trusted_certs {
+            if c.is_valid() && !out.contains(c) && out.len() < MAX_TRUSTED_CERTS {
+                out.push(c.clone());
+            }
+        }
+        out
+    }
+
+    /// Approve a certificate. `false` (and nothing changes) if it is malformed, already approved,
+    /// or the list is full.
+    pub fn trust(&mut self, cert: TrustedCert) -> bool {
+        let mut now = self.trusted();
+        if !cert.is_valid() || now.contains(&cert) || now.len() >= MAX_TRUSTED_CERTS {
+            return false;
+        }
+        now.push(cert);
+        self.trusted_certs = now;
+        true
+    }
+
+    /// Withdraw the approval at `index` of [`SpotNetworks::trusted`]. `false` if there is none.
+    pub fn forget(&mut self, index: usize) -> bool {
+        let mut now = self.trusted();
+        if index >= now.len() {
+            return false;
+        }
+        now.remove(index);
+        self.trusted_certs = now;
+        true
+    }
+
     /// Whether any network is switched on.
     pub fn any_enabled(&self) -> bool {
         self.psk_reporter.enabled

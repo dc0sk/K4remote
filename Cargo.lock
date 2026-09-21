@@ -2236,8 +2236,11 @@ dependencies = [
  "k4-spot",
  "k4-stream",
  "k4-transport",
+ "rustls",
+ "sha2",
  "tokio",
  "ureq",
+ "webpki-roots",
  "winresource",
 ]
 
