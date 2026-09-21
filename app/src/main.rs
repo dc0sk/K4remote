@@ -994,6 +994,7 @@ impl App {
         let (spot_tx, spot_rx) = mpsc::channel();
         // The certificates the operator has approved; filled from the config just below, before the
         // first tick can start a connection that needs them.
+        waterfall_gpu::spawn_fps_report();
         let spot_pins: tls::Pins = Arc::default();
         spot_sources::spawn(
             spot_rx,

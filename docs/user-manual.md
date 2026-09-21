@@ -503,7 +503,7 @@ To see the display without connecting anything, start the app with `--demo`: it 
 **The waterfall is blank, garbled or stutters.**
 The waterfall is drawn by your graphics card. The app falls back to drawing it on the CPU by
 itself when it finds no graphics adapter, but a driver that reports one and then misbehaves can
-still give a blank or wrong picture. Start the app with `K4_WATERFALL=cpu` (for example
+still give a blank or wrong picture. (`K4_FPS=1` prints how many frames the window draws each second, to check the load; it follows the rate spectrum rows arrive.) Start the app with `K4_WATERFALL=cpu` (for example
 `K4_WATERFALL=cpu k4remote`) to force the CPU drawing, and `K4_WATERFALL=gpu` to force the graphics
 card. If `cpu` fixes it, please report your graphics card and driver.
 

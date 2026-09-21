@@ -435,24 +435,83 @@ pub struct WaterfallProgram {
     pub view: View,
 }
 
+/// Frames the waterfall has been asked to draw, for the opt-in `K4_FPS=1` frame-rate line. The
+/// window is redrawn as a whole, so this is the window's frame count.
+pub static FRAMES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// With `K4_FPS=1` in the environment, print `FPS <frames in the last second>` once a second to
+/// stderr. A measurement aid: how often the window really redraws is what GPU load follows.
+pub fn spawn_fps_report() {
+    if std::env::var_os("K4_FPS").is_none() {
+        return;
+    }
+    let _ = std::thread::Builder::new().name("fps".into()).spawn(|| {
+        let mut last = 0;
+        loop {
+            std::thread::sleep(Duration::from_secs(1));
+            let now = FRAMES.load(std::sync::atomic::Ordering::Relaxed);
+            eprintln!("FPS {}", now - last);
+            last = now;
+        }
+    });
+}
+
+/// The fastest the chain redraws, however fast rows arrive: about 125 frames a second.
+pub const MIN_PERIOD: Duration = Duration::from_millis(8);
+/// The slowest the chain redraws while rows are arriving: the UI tick's own 10 Hz.
+pub const MAX_PERIOD: Duration = Duration::from_millis(100);
+/// The row interval assumed until one has been measured.
+const INITIAL_PERIOD: Duration = Duration::from_millis(33);
+/// How much of each new measurement of the row interval is taken in (the rest is the old estimate).
+const SMOOTHING: f64 = 0.25;
+
 /// Redraw-chain bookkeeping (FR-PAN-13).
+///
+/// The window is redrawn as a whole, so what GPU load follows is how *often* it is redrawn. Rows
+/// arrive at 20–30 a second; a frame between two rows shows nothing new. The chain therefore asks
+/// for its next frame one row interval ahead, not for the next vsync.
 #[derive(Default)]
 pub struct RedrawState {
     seen_total: u64,
     last_change: Option<Instant>,
+    /// Estimated time between rows, from how many arrived between frames.
+    period: Option<Duration>,
 }
 
 impl RedrawState {
-    /// Called on every redraw with the pane's current row count: should the *next* frame be
-    /// requested? Yes while rows are still arriving, and for [`KEEP_ALIVE`] after the last one;
-    /// no once the stream has been quiet longer than that (or never started).
-    pub fn wants_next_frame(&mut self, total: u64, now: Instant) -> bool {
+    /// Called on every redraw with the pane's current row count: when should the *next* frame be
+    /// drawn? `None` ends the chain — nothing has ever arrived, or the stream has been quiet for
+    /// longer than [`KEEP_ALIVE`] — and the UI tick's own redraw restarts it when rows resume.
+    /// Otherwise one estimated row interval from `now`, kept between [`MIN_PERIOD`] and
+    /// [`MAX_PERIOD`].
+    pub fn next_frame_at(&mut self, total: u64, now: Instant) -> Option<Instant> {
         if total != self.seen_total {
+            // Rows since the last frame. A total that went *down* (a cleared history) counts as one.
+            let rows = total
+                .checked_sub(self.seen_total)
+                .filter(|r| *r > 0)
+                .unwrap_or(1);
+            if let Some(prev) = self.last_change {
+                let gap = now.saturating_duration_since(prev);
+                // A gap longer than the grace is a stream that stopped and restarted, not a row
+                // interval.
+                if gap < KEEP_ALIVE {
+                    let sample = gap.as_secs_f64() / rows as f64;
+                    let old = self.period.unwrap_or(INITIAL_PERIOD).as_secs_f64();
+                    let blended = old * (1.0 - SMOOTHING) + sample * SMOOTHING;
+                    self.period = Some(
+                        Duration::from_secs_f64(blended.max(0.0)).clamp(MIN_PERIOD, MAX_PERIOD),
+                    );
+                }
+            }
             self.seen_total = total;
             self.last_change = Some(now);
         }
-        self.last_change
-            .is_some_and(|t| now.saturating_duration_since(t) < KEEP_ALIVE)
+        let active = self
+            .last_change
+            .is_some_and(|t| now.saturating_duration_since(t) < KEEP_ALIVE);
+        // The stored estimate is always inside [MIN_PERIOD, MAX_PERIOD], so it needs no clamp here.
+        active.then(|| now + self.period.unwrap_or(INITIAL_PERIOD))
     }
 }
 
@@ -460,10 +519,10 @@ impl<Message> shader::Program<Message> for WaterfallProgram {
     type State = RedrawState;
     type Primitive = WaterfallPrimitive;
 
-    /// Keep frames coming for as long as rows keep arriving, independent of the 100 ms UI tick
-    /// (FR-PAN-13). Each redraw asks for the next one while the row count is still moving; once
-    /// the stream has been quiet for [`KEEP_ALIVE`] the chain stops, so an idle or disconnected
-    /// pan costs nothing. The tick's own redraw restarts it when rows resume.
+    /// Keep frames coming at the rate rows arrive, independent of the 100 ms UI tick (FR-PAN-13).
+    /// Each redraw asks for the next one a row interval ahead while the row count is still moving;
+    /// once the stream has been quiet for [`KEEP_ALIVE`] the chain stops, so an idle or
+    /// disconnected pan costs nothing. The tick's own redraw restarts it when rows resume.
     fn update(
         &self,
         state: &mut RedrawState,
@@ -473,9 +532,10 @@ impl<Message> shader::Program<Message> for WaterfallProgram {
         shell: &mut Shell<'_, Message>,
     ) -> (iced::event::Status, Option<Message>) {
         if let shader::Event::RedrawRequested(now) = event {
+            FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let total = self.pan.lock().map(|p| p.total(self.rx)).unwrap_or(0);
-            if state.wants_next_frame(total, now) {
-                shell.request_redraw(RedrawRequest::NextFrame);
+            if let Some(at) = state.next_frame_at(total, now) {
+                shell.request_redraw(RedrawRequest::At(at));
             }
         }
         (iced::event::Status::Ignored, None)
@@ -1050,9 +1110,29 @@ mod golden {
 mod redraw_tests {
     use super::*;
 
-    /// FR-PAN-13: frames are requested for as long as rows keep arriving, keep coming for a short
-    /// grace after the last one, and stop once the stream has been quiet — so an idle or
-    /// disconnected pan costs nothing — then restart the moment rows resume.
+    /// The redraw chain against a simulated display: rows arrive at a steady rate, each redraw
+    /// asks for the next one as the state says, and every frame is counted. Returns the frames
+    /// drawn in `seconds` of a stream that runs the whole time.
+    fn simulate(row_interval: Duration, seconds: u64) -> u64 {
+        let t0 = Instant::now();
+        let end = Duration::from_secs(seconds);
+        let mut st = RedrawState::default();
+        // The UI tick's first redraw after rows begin is the chain's start.
+        let mut at = row_interval;
+        let mut frames = 0;
+        while at < end {
+            let total = (at.as_nanos() / row_interval.as_nanos()) as u64;
+            frames += 1;
+            match st.next_frame_at(total, t0 + at) {
+                Some(next) => at = next - t0,
+                None => break,
+            }
+        }
+        frames
+    }
+
+    /// FR-PAN-13: the chain stops when nothing arrives, runs while rows do, ends a grace after the
+    /// last, restarts when rows resume, and a cleared history counts as activity.
     /// trace: FR-PAN-13
     #[test]
     fn fr_pan_13_redraw_chain_follows_the_row_stream() {
@@ -1061,39 +1141,188 @@ mod redraw_tests {
         let mut st = RedrawState::default();
 
         // Nothing has ever arrived: never spend a frame on it.
-        assert!(!st.wants_next_frame(0, ms(0)));
-        assert!(!st.wants_next_frame(0, ms(5_000)));
+        assert_eq!(st.next_frame_at(0, ms(0)), None);
+        assert_eq!(st.next_frame_at(0, ms(5_000)), None);
 
         // Rows arriving: the chain runs, frame after frame, even on frames with no new row.
-        assert!(st.wants_next_frame(1, ms(10_000)));
+        assert!(st.next_frame_at(1, ms(10_000)).is_some());
         assert!(
-            st.wants_next_frame(1, ms(10_016)),
+            st.next_frame_at(1, ms(10_016)).is_some(),
             "no new row yet, still in the grace"
         );
-        assert!(st.wants_next_frame(2, ms(10_033)));
-        assert!(st.wants_next_frame(2, ms(10_049)));
+        assert!(st.next_frame_at(2, ms(10_033)).is_some());
+        assert!(st.next_frame_at(2, ms(10_049)).is_some());
 
         // The stream stops. The chain outlives the last row by the grace, then ends.
         assert!(
-            st.wants_next_frame(2, ms(10_033 + 299)),
+            st.next_frame_at(2, ms(10_033 + 299)).is_some(),
             "just inside the grace"
         );
-        assert!(
-            !st.wants_next_frame(2, ms(10_033 + 301)),
+        assert_eq!(
+            st.next_frame_at(2, ms(10_033 + 301)),
+            None,
             "quiet for longer than the grace"
         );
-        assert!(!st.wants_next_frame(2, ms(60_000)), "and it stays stopped");
+        assert_eq!(
+            st.next_frame_at(2, ms(60_000)),
+            None,
+            "and it stays stopped"
+        );
 
         // Rows resume (the UI tick's own redraw notices): the chain restarts.
-        assert!(st.wants_next_frame(3, ms(60_100)));
+        assert!(st.next_frame_at(3, ms(60_100)).is_some());
 
         // A cleared history that starts counting again from a *lower* total also counts as change.
         let mut st = RedrawState::default();
-        assert!(st.wants_next_frame(500, ms(0)));
-        assert!(!st.wants_next_frame(500, ms(1_000)));
+        assert!(st.next_frame_at(500, ms(0)).is_some());
+        assert_eq!(st.next_frame_at(500, ms(1_000)), None);
         assert!(
-            st.wants_next_frame(3, ms(2_000)),
+            st.next_frame_at(3, ms(2_000)).is_some(),
             "a changed total, even downwards, is activity"
         );
+    }
+
+    /// FR-PAN-13: frames follow the *row* rate, not the display's. A stream of 30 rows a second
+    /// is drawn at about 30 frames a second — every row shown, and half the frames of a 60 Hz
+    /// chain — a faster stream never exceeds the cap, and a slower one never drops below the UI
+    /// tick's 10 Hz.
+    /// trace: FR-PAN-13
+    #[test]
+    fn fr_pan_13_frames_follow_the_row_rate_not_the_display() {
+        let ms = Duration::from_millis;
+        // 30 rows/s (a 33 ms interval, as the K4 sends): 30 frames/s ± 20 %, over a minute.
+        let frames = simulate(ms(33), 60);
+        let per_sec = frames as f64 / 60.0;
+        assert!(
+            (24.0..=36.0).contains(&per_sec),
+            "{per_sec:.1} frames/s for 30 rows/s (a 60 Hz chain draws 60)"
+        );
+        // 20 rows/s and 25 rows/s: the same.
+        for (interval, rows) in [(50u64, 20.0), (40, 25.0)] {
+            let per_sec = simulate(ms(interval), 60) as f64 / 60.0;
+            assert!(
+                (rows * 0.8..=rows * 1.2).contains(&per_sec),
+                "{per_sec:.1} frames/s for {rows} rows/s"
+            );
+        }
+        // 500 rows/s: capped at one frame per MIN_PERIOD (125/s), not one per row.
+        let per_sec = simulate(ms(2), 20) as f64 / 20.0;
+        assert!(per_sec <= 126.0, "{per_sec:.1} frames/s exceeds the cap");
+        assert!(
+            per_sec >= 100.0,
+            "{per_sec:.1} frames/s is far below the cap"
+        );
+        // 4 rows/s: the grace (300 ms) is longer than the gap (250 ms), so the chain runs on at no
+        // slower than 10 frames/s — never slower than the UI tick.
+        let per_sec = simulate(ms(250), 20) as f64 / 20.0;
+        assert!(
+            (9.0..=11.0).contains(&per_sec),
+            "{per_sec:.1} frames/s for 4 rows/s"
+        );
+    }
+
+    /// FR-PAN-13: the widget asks for its next frame *at* the time the state gives, not for the
+    /// next vsync — the whole gain rests on this line, which no pure test can see. Structural, like
+    /// the emergency-stop guard, and reading only the code above this module so the needles below do
+    /// not match this test's own text.
+    /// trace: FR-PAN-13
+    #[test]
+    fn fr_pan_13_the_widget_requests_the_time_the_state_gives() {
+        let whole = include_str!("waterfall_gpu.rs");
+        let code = &whole[..whole
+            .find(concat!("mod redraw", "_tests {"))
+            .expect("the test module")];
+        let start = code
+            .find("fn update(")
+            .expect("the shader program's update");
+        let update = &code[start..start + code[start..].find("fn draw(").expect("draw follows")];
+        assert!(
+            update.contains("state.next_frame_at(total, now)"),
+            "update does not ask the state:\n{update}"
+        );
+        assert!(
+            update.contains("RedrawRequest::At(at)"),
+            "update does not request the time it was given:\n{update}"
+        );
+        assert!(
+            !update.contains("RedrawRequest::NextFrame"),
+            "update asks for the next vsync, which is the display's rate, not the rows':\n{update}"
+        );
+        assert!(
+            !code.contains("RedrawRequest::NextFrame"),
+            "something else in the widget asks for every frame"
+        );
+    }
+
+    /// FR-PAN-13: the estimate settles on the rate the stream changes to, ignores the gap when a
+    /// stream restarts after silence, and stays inside its bounds whatever it is fed.
+    /// trace: FR-PAN-13
+    #[test]
+    fn fr_pan_13_the_row_interval_is_learned_and_bounded() {
+        let t0 = Instant::now();
+        let ms = |n: u64| t0 + Duration::from_millis(n);
+        let mut st = RedrawState::default();
+        // A steady 20 ms stream, one row per frame: the next frame is asked for ~20 ms ahead.
+        let mut next = Duration::ZERO;
+        for i in 1..=60u64 {
+            let at = ms(i * 20);
+            next = st.next_frame_at(i, at).unwrap() - at;
+        }
+        assert!(
+            (17..=23).contains(&(next.as_millis() as u64)),
+            "learned {next:?}, wanted ~20 ms"
+        );
+        // It then slows to 50 ms and the estimate follows.
+        let base = 60 * 20;
+        for i in 1..=60u64 {
+            let at = ms(base + i * 50);
+            next = st.next_frame_at(60 + i, at).unwrap() - at;
+        }
+        assert!(
+            (44..=56).contains(&(next.as_millis() as u64)),
+            "learned {next:?}, wanted ~50 ms"
+        );
+        // One odd frame — three rows in a single gap — nudges the estimate, it does not swing it:
+        // the smoothing takes in a quarter of a measurement, not all of it.
+        let mut smooth = RedrawState::default();
+        for i in 1..=40u64 {
+            smooth.next_frame_at(i, ms(i * 33));
+        }
+        let steady = smooth.next_frame_at(41, ms(41 * 33)).unwrap() - ms(41 * 33);
+        let burst = smooth.next_frame_at(44, ms(42 * 33)).unwrap() - ms(42 * 33);
+        assert!(
+            burst.as_secs_f64() > steady.as_secs_f64() * 0.7,
+            "one burst moved {steady:?} to {burst:?}"
+        );
+        assert!(
+            burst < steady,
+            "a burst still shortens the estimate a little"
+        );
+        // A long silence, then rows again: the silence is not taken as a row interval.
+        let resume = base + 60 * 50 + 30_000;
+        let after = st.next_frame_at(121, ms(resume)).unwrap() - ms(resume);
+        assert!(
+            (44..=56).contains(&(after.as_millis() as u64)),
+            "a restart after silence moved the estimate to {after:?}"
+        );
+        // Bounds: an absurdly fast burst (10 000 rows in one frame) and a slow crawl both stay in
+        // [MIN_PERIOD, MAX_PERIOD]; a total that jumps backwards does not panic.
+        let mut st = RedrawState::default();
+        st.next_frame_at(1, ms(0));
+        for i in 1..=100u64 {
+            let at = ms(i * 10);
+            let d = st.next_frame_at(1 + i * 10_000, at).unwrap() - at;
+            assert!((MIN_PERIOD..=MAX_PERIOD).contains(&d), "{d:?}");
+        }
+        let mut st = RedrawState::default();
+        st.next_frame_at(1, ms(0));
+        for i in 1..=100u64 {
+            let at = ms(i * 250);
+            let d = st.next_frame_at(1 + i, at).unwrap() - at;
+            assert!((MIN_PERIOD..=MAX_PERIOD).contains(&d), "{d:?}");
+        }
+        st.next_frame_at(u64::MAX, ms(100_000));
+        st.next_frame_at(0, ms(100_010));
+        st.next_frame_at(u64::MAX, ms(100_020));
     }
 }
