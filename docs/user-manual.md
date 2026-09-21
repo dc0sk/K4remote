@@ -445,7 +445,12 @@ Everything is **off until you turn it on**. Open **Settings → Spot nameplates 
 - **DX cluster** — enter the host and port of a cluster that carries skimmer spots.
 - **PSK Reporter** — a live feed of who is being heard on the bands your VFOs are on (mostly FT8 and
   other digital modes). It needs no login and sends nothing identifying, and it asks only for the
-  bands you are on — none at all when no radio is connected. The host and port are prefilled.
+  bands you are on — none at all when no radio is connected. The host and port are prefilled. **TLS** encrypts
+  the connection (the port switches to 1884); PSK Reporter's certificate is trusted automatically. If you use
+  another broker whose certificate is not trusted, nothing is sent until you look at the reason and the
+  **SHA-256 fingerprint** shown and press **Trust this certificate**, which approves that one certificate for
+  that host and port only. If it changes later you are asked again, with a warning. Approved certificates are
+  listed below and can be withdrawn with **Forget**.
 - **POTA** — Parks on the Air activators currently on the air. POTA's public list is asked for every
   60 seconds by default (set **Every (s)** between 30 and 3600); nothing but that request is sent. The
   park reference is shown in the hover text. Unlike the others this is a list fetched now and then, not a

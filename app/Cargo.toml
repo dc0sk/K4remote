@@ -82,6 +82,12 @@ iced = { version = "0.13", features = ["tokio", "canvas", "image", "advanced"] }
 # Casting the f32 bin rows to bytes for the GPU waterfall upload (FR-PAN-12).
 bytemuck = "1"
 ureq = { version = "3.3.0", default-features = false, features = ["rustls"] }
+# Encrypted connections for the spot networks (FR-SPOT-13). The same rustls / webpki-roots the
+# update check already pulls in through ureq, used directly so that an untrusted certificate can be
+# approved by hand instead of refused.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "1"
+sha2 = { workspace = true }
 tokio = { version = "1.53.0", default-features = false, features = ["rt"] }
 
 # Embed the app icon into the Windows .exe (NFR-PKG-01); no-op elsewhere.

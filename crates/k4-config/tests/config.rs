@@ -433,6 +433,19 @@ fn fr_spot_04_networks_default_off_and_persist() {
         assert_eq!(parse_spot_poll_secs(bad), 60, "interval {bad:?}");
     }
 
+    // TLS is off by default and persists; approved certificates start empty.
+    assert!(!def.psk_reporter.tls);
+    assert!(def.trusted().is_empty());
+    let mut enc = def.clone();
+    enc.psk_reporter.tls = true;
+    enc.psk_reporter.port = 1884;
+    let prefs = Prefs {
+        spot_networks: enc.clone(),
+        ..Default::default()
+    };
+    let back: Prefs = toml::from_str(&toml::to_string(&prefs).expect("serialize")).expect("parse");
+    assert_eq!(back.spot_networks, enc);
+
     // A config from when PSK Reporter was polled still loads: the old interval is ignored.
     let legacy_psk: Prefs = toml::from_str(
         "tune_step_hz = 100\n[spot_networks.psk_reporter]\nenabled = true\npoll_secs = 600\n",
@@ -462,4 +475,138 @@ fn fr_spot_04_networks_default_off_and_persist() {
         partial.spot_networks.rbn, def.rbn,
         "unnamed network keeps its defaults"
     );
+}
+
+/// FR-SPOT-13: approved certificates round-trip, adding and withdrawing works on exactly the entry
+/// named, and a malformed, duplicated or excess entry in a hand-edited file is dropped when read.
+/// trace: FR-SPOT-13
+#[test]
+fn fr_spot_13_trusted_certificates_persist_and_are_validated() {
+    use k4_config::{TrustedCert, MAX_TRUSTED_CERTS};
+    let fp = |c: char| c.to_string().repeat(64);
+    let cert = |host: &str, port: u16, c: char| TrustedCert {
+        host: host.into(),
+        port,
+        sha256: fp(c),
+    };
+    let mut nets = Prefs::default().spot_networks;
+    assert!(nets.trust(cert("mqtt.example.org", 1884, 'a')));
+    assert!(
+        nets.trust(cert("mqtt.example.org", 1884, 'b')),
+        "a second certificate for one host"
+    );
+    assert!(
+        nets.trust(cert("mqtt.example.org", 8883, 'a')),
+        "the same certificate on another port"
+    );
+    assert!(
+        !nets.trust(cert("mqtt.example.org", 1884, 'a')),
+        "a duplicate"
+    );
+    assert_eq!(nets.trusted().len(), 3);
+
+    // Round trip.
+    let prefs = Prefs {
+        spot_networks: nets.clone(),
+        ..Default::default()
+    };
+    let text = toml::to_string(&prefs).expect("serialize");
+    let back: Prefs = toml::from_str(&text).expect("parse");
+    assert_eq!(back.spot_networks.trusted(), nets.trusted());
+
+    // Withdrawing removes exactly the one named.
+    assert!(nets.forget(1));
+    assert_eq!(
+        nets.trusted(),
+        vec![
+            cert("mqtt.example.org", 1884, 'a'),
+            cert("mqtt.example.org", 8883, 'a')
+        ]
+    );
+    assert!(!nets.forget(2), "no such entry");
+    assert!(!nets.forget(usize::MAX));
+
+    // Malformed entries are refused when adding...
+    for bad in [
+        cert("", 1884, 'a'),
+        cert("host name", 1884, 'a'),
+        cert("host\n", 1884, 'a'),
+        cert("h\u{e9}st", 1884, 'a'),
+        cert("mqtt.example.org", 0, 'a'),
+        // Printable, but not a host name: none of these may reach a connection or a file.
+        cert("a/b", 1884, 'a'),
+        cert("h@st", 1884, 'a'),
+        cert("h'st", 1884, 'a'),
+        cert("h;st", 1884, 'a'),
+        cert("h\"st", 1884, 'a'),
+        TrustedCert {
+            host: "h.example".into(),
+            port: 1,
+            sha256: format!("{}a", fp('a')),
+        },
+        TrustedCert {
+            host: "h.example".into(),
+            port: 1,
+            sha256: fp('a')[..63].into(),
+        },
+        TrustedCert {
+            host: "h.example".into(),
+            port: 1,
+            sha256: fp('A'),
+        },
+        TrustedCert {
+            host: "h.example".into(),
+            port: 1,
+            sha256: fp('g'),
+        },
+        TrustedCert {
+            host: "h.example".into(),
+            port: 1,
+            sha256: String::new(),
+        },
+        cert(&"h".repeat(254), 1, 'a'),
+    ] {
+        assert!(!bad.is_valid(), "{bad:?}");
+        assert!(
+            !Prefs::default().spot_networks.trust(bad.clone()),
+            "{bad:?}"
+        );
+    }
+    assert!(cert(&"h".repeat(253), 1, 'a').is_valid());
+
+    // ...and dropped when a file already holds them, along with duplicates and the excess.
+    let mut file = Prefs::default().spot_networks;
+    file.trusted_certs = vec![
+        cert("ok.example", 1884, 'a'),
+        cert("", 1, 'a'),
+        cert("ok.example", 1884, 'a'),
+        cert("ok.example", 0, 'b'),
+        cert("also.example", 1884, 'c'),
+    ];
+    assert_eq!(
+        file.trusted(),
+        vec![
+            cert("ok.example", 1884, 'a'),
+            cert("also.example", 1884, 'c')
+        ]
+    );
+    let mut full = Prefs::default().spot_networks;
+    for i in 0..MAX_TRUSTED_CERTS + 10 {
+        full.trusted_certs
+            .push(cert(&format!("h{i}.example"), 1884, 'a'));
+    }
+    assert_eq!(full.trusted().len(), MAX_TRUSTED_CERTS);
+    assert_eq!(
+        full.trusted()[0].host,
+        "h0.example",
+        "the first ones are kept"
+    );
+    assert!(
+        !full.trust(cert("new.example", 1884, 'b')),
+        "the list is full"
+    );
+
+    // A config from before this feature loads with none.
+    let old: Prefs = toml::from_str("tune_step_hz = 100").expect("legacy config");
+    assert!(old.spot_networks.trusted().is_empty());
 }

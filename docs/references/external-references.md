@@ -444,11 +444,12 @@ account; a random MQTT client id):
   follow the same `<n>m` pattern — unverified. Modes seen: FT8, FT4, WSPR, FT2, CW.
 - **A band-scoped subscription works:** `pskr/filter/v2/20m/#` (5.3 s) delivered **only** 20 m
   (277 of 277 messages, ~53 a second, ~12 KB/s) against 130–290 a second for the whole tree.
+- **TLS, observed once (2026-09-21):** one TLS handshake with port 1884, then hang up — nothing sent after it, no MQTT, no login. **The certificate is trusted by the public authorities** (it verified against `webpki-roots`), so TLS needs no manual approval on the real service.
 - These are single observations of a live service, not a specification.
 
 **Decision (DC0SK, 2026-09-20):** K4 Remote uses the **live MQTT feed over plain TCP** (port 1883), not
 the query API, with a hand-written client. It subscribes to `pskr/filter/v2/<band>/#` for the bands the
-VFOs are on and to nothing when there is no radio; TLS (port 1884) is a later step. PSK Reporter
+VFOs are on and to nothing when there is no radio; TLS (port 1884) followed (`FR-SPOT-13`). PSK Reporter
 documents no rate or fair-use rules for the MQTT feed.
 
 ### POTA (read and observed 2026-09-21)

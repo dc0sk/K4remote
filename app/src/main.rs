@@ -14,6 +14,7 @@ mod spectrum;
 mod spot_sources;
 mod spots;
 mod tips;
+mod tls;
 mod ui;
 mod update;
 mod waterfall_gpu;
@@ -112,6 +113,36 @@ enum SpotNet {
     Rbn,
     DxCluster,
     Pota,
+}
+
+/// The certificate a click approves (FR-SPOT-13): the one that is on screen, and only if the click
+/// names it. If the server presented another certificate since the prompt was drawn, or nothing is
+/// pending, nothing is approved — the operator never approves something they were not shown.
+fn cert_to_trust(
+    shown: Option<&k4_spot::mqtt_source::CertInfo>,
+    clicked_sha256: &str,
+) -> Option<k4_config::TrustedCert> {
+    let c = shown.filter(|c| c.sha256 == clicked_sha256)?;
+    Some(k4_config::TrustedCert {
+        host: c.host.clone(),
+        port: c.port,
+        sha256: c.sha256.clone(),
+    })
+}
+
+/// The port buffer after the TLS switch is flipped: a default port follows the switch, so turning
+/// TLS on does not leave the plain-text port behind, and turning it off does not leave the TLS one.
+/// A port the operator chose is left alone.
+fn port_after_tls_switch(tls_on: bool, port: &str) -> String {
+    let (plain, encrypted) = (
+        k4_config::SPOT_PSK_DEFAULT_PORT.to_string(),
+        k4_config::SPOT_PSK_TLS_PORT.to_string(),
+    );
+    match (tls_on, port) {
+        (true, p) if p == plain => encrypted,
+        (false, p) if p == encrypted => plain,
+        (_, p) => p.to_string(),
+    }
 }
 
 /// Keep only the characters a callsign login can hold — letters, digits and `/`
@@ -304,6 +335,8 @@ struct App {
     spot_rbn_port: String,
     spot_dx_port: String,
     spot_pota_secs: String,
+    /// The certificates approved for encrypted connections, shared with the worker.
+    spot_pins: tls::Pins,
     // KPA1500 client worker (FR-AMP-03): a shared snapshot the worker writes
     // and the UI copies on tick, a command channel, and the desired-connected
     // state so the connection can be reconciled against K4 connectivity.
@@ -880,6 +913,12 @@ enum Message {
     SpotPortChanged(SpotNet, String),
     SpotLoginChanged(SpotNet, String),
     SpotPollChanged(String),
+    /// Switch PSK Reporter between plain and encrypted (FR-SPOT-13).
+    ToggleSpotTls,
+    /// Approve the certificate with this SHA-256 — the one the operator was shown.
+    TrustSpotCert(String),
+    /// Withdraw the approval at this position in the list.
+    ForgetSpotCert(usize),
     // KPA1500 amplifier controls (FR-AMP-03).
     KpaSetMode(bool),
     KpaSetAtu(bool),
@@ -953,7 +992,15 @@ impl App {
         let spots: spots::SpotHandle = Arc::default();
         let spot_status: spot_sources::StatusHandle = Arc::default();
         let (spot_tx, spot_rx) = mpsc::channel();
-        spot_sources::spawn(spot_rx, Arc::clone(&spots), Arc::clone(&spot_status));
+        // The certificates the operator has approved; filled from the config just below, before the
+        // first tick can start a connection that needs them.
+        let spot_pins: tls::Pins = Arc::default();
+        spot_sources::spawn(
+            spot_rx,
+            Arc::clone(&spots),
+            Arc::clone(&spot_status),
+            Arc::clone(&spot_pins),
+        );
         if demo {
             worker::spawn_demo_pan_feed(Arc::clone(&pan), Arc::clone(&snapshot));
             spots::spawn_demo_spots(Arc::clone(&spots));
@@ -1024,6 +1071,9 @@ impl App {
         let kpa1500_poll = prefs.kpa1500_poll_ms.to_string();
         let spot_max_age = prefs.spot_max_age_min().to_string();
         let spot_networks = prefs.spot_networks.clone();
+        if let Ok(mut p) = spot_pins.lock() {
+            *p = tls::pins_from(&spot_networks.trusted());
+        }
         let spot_psk_port = spot_networks.psk_reporter.port.to_string();
         let spot_rbn_port = spot_networks.rbn.port.to_string();
         let spot_dx_port = spot_networks.dx_cluster.port.to_string();
@@ -1163,6 +1213,7 @@ impl App {
             spot_rbn_port,
             spot_dx_port,
             spot_pota_secs,
+            spot_pins,
             kpa1500_enabled,
             kpa1500_host,
             kpa1500_port,
@@ -1530,6 +1581,91 @@ impl App {
     /// numeric text buffer resolved, so an empty or unusable entry falls back to
     /// its default rather than persisting a value the source cannot use
     /// (FR-SPOT-04).
+    /// The question shown when the server's certificate is not trusted: what it is, why it was
+    /// refused and its fingerprint, and one button to approve exactly that certificate.
+    fn spot_cert_prompt(&self) -> Element<'_, Message> {
+        let Some(cert) = self
+            .spot_status_ui
+            .psk_reporter
+            .as_ref()
+            .and_then(|s| s.cert.as_ref())
+            .filter(|_| self.spot_networks.psk_reporter.enabled)
+        else {
+            return iced::widget::Space::with_height(0).into();
+        };
+        let dim = role_color(ui::ColorRole::Inactive);
+        let caution = role_color(ui::ColorRole::Caution);
+        let shown = tls::display_fingerprint(&cert.sha256);
+        let (first, second) = shown.split_at(shown.len() / 2 + 1);
+        let mut col = Column::new().spacing(6).push(
+            Text::new(format!(
+                "The certificate of {}:{} is not trusted: {}.",
+                cert.host, cert.port, cert.reason
+            ))
+            .size(12)
+            .color(caution),
+        );
+        if cert.changed {
+            col = col.push(
+                Text::new(
+                    "This is NOT the certificate you approved for this server before. Something \
+                     may be intercepting the connection; approve it only if you know why it changed.",
+                )
+                .size(12)
+                .color(caution),
+            );
+        }
+        col.push(Text::new("SHA-256 fingerprint").size(11).color(dim))
+            .push(Text::new(first.to_string()).size(11))
+            .push(Text::new(second.to_string()).size(11))
+            .push(
+                Text::new(
+                    "Compare it with the fingerprint from the server's operator. Approving it lets \
+                     this program use that one certificate for this host and port, and no other.",
+                )
+                .size(11)
+                .color(dim),
+            )
+            .push(small_btn(
+                "Trust this certificate",
+                Message::TrustSpotCert(cert.sha256.clone()),
+            ))
+            .into()
+    }
+
+    /// The approved certificates, each with a button to withdraw it.
+    fn spot_trusted_list(&self) -> Element<'_, Message> {
+        let trusted = self.spot_networks.trusted();
+        if trusted.is_empty() {
+            return iced::widget::Space::with_height(0).into();
+        }
+        let dim = role_color(ui::ColorRole::Inactive);
+        let mut col = Column::new()
+            .spacing(4)
+            .push(Text::new("Approved certificates").size(11).color(dim));
+        for (i, c) in trusted.iter().enumerate() {
+            let short: String = tls::display_fingerprint(&c.sha256)
+                .chars()
+                .take(23)
+                .collect();
+            col = col.push(
+                Row::new()
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                    .push(Text::new(format!("{}:{}  {short}…", c.host, c.port)).size(11))
+                    .push(small_btn("Forget", Message::ForgetSpotCert(i))),
+            );
+        }
+        col.into()
+    }
+
+    /// Hand the worker the approved certificates as they are now in the settings.
+    fn sync_spot_pins(&self) {
+        if let Ok(mut p) = self.spot_pins.lock() {
+            *p = tls::pins_from(&self.spot_networks.trusted());
+        }
+    }
+
     fn spot_networks_for_save(&self) -> k4_config::SpotNetworks {
         let mut nets = self.spot_networks.clone();
         nets.psk_reporter.port =
@@ -2782,6 +2918,34 @@ impl App {
                     SpotNet::Pota => {}
                 }
             }
+            Message::ToggleSpotTls => {
+                let n = &mut self.spot_networks.psk_reporter;
+                n.tls = !n.tls;
+                self.spot_psk_port = port_after_tls_switch(n.tls, &self.spot_psk_port);
+                self.save_config();
+            }
+            Message::TrustSpotCert(sha256) => {
+                // Only the certificate that is on screen: if the server presented another one since
+                // it was drawn, the click does not approve it.
+                let shown = self
+                    .spot_status_ui
+                    .psk_reporter
+                    .as_ref()
+                    .and_then(|s| s.cert.as_ref());
+                if let Some(cert) = cert_to_trust(shown, &sha256) {
+                    if self.spot_networks.trust(cert) {
+                        self.sync_spot_pins();
+                        self.save_config();
+                        let _ = self.spot_tx.send(spot_sources::Cmd::RetryNow);
+                    }
+                }
+            }
+            Message::ForgetSpotCert(index) => {
+                if self.spot_networks.forget(index) {
+                    self.sync_spot_pins();
+                    self.save_config();
+                }
+            }
             Message::SpotPollChanged(v) => {
                 self.spot_pota_secs = v.chars().filter(char::is_ascii_digit).take(4).collect();
             }
@@ -3087,6 +3251,7 @@ impl App {
                             network: k4_spot::Network::PskReporter,
                             host: nets.psk_reporter.host.clone(),
                             port: nets.psk_reporter.port,
+                            tls: nets.psk_reporter.tls,
                         });
                     let pota = nets.pota.enabled.then(|| k4_spot::polled::PolledConfig {
                         network: k4_spot::Network::Pota,
@@ -6636,10 +6801,26 @@ impl App {
                 90.0,
                 |v| Message::SpotPortChanged(SpotNet::PskReporter, v),
             ))
+            .push(small_btn_pair(
+                nets.psk_reporter.tls,
+                "TLS: ON",
+                "TLS: OFF",
+                Message::ToggleSpotTls,
+            ))
+            .push(
+                Text::new(
+                    "TLS encrypts the connection (port 1884). A server certificate that no \
+                     public authority signed is not trusted until you approve it below.",
+                )
+                .size(11)
+                .color(dim),
+            )
             .push(Self::spot_status_line(
                 &self.spot_status_ui.psk_reporter,
                 nets.psk_reporter.enabled,
             ))
+            .push(self.spot_cert_prompt())
+            .push(self.spot_trusted_list())
             .push(Text::new("Reverse Beacon Network").size(13))
             .push(
                 Text::new(
@@ -10338,7 +10519,128 @@ mod stable_width_tests {
 
 #[cfg(test)]
 mod spot_settings_tests {
-    use super::sanitise_spot_login;
+    use super::{cert_to_trust, port_after_tls_switch, sanitise_spot_login};
+    use k4_spot::mqtt_source::CertInfo;
+
+    fn info(sha: &str) -> CertInfo {
+        CertInfo {
+            host: "mqtt.example.org".into(),
+            port: 8884,
+            sha256: sha.into(),
+            reason: "unknown issuer".into(),
+            changed: false,
+        }
+    }
+
+    /// FR-SPOT-13: a click approves the certificate on screen and only that one; if the server has
+    /// presented another since the prompt was drawn, or nothing is pending, nothing is approved.
+    /// trace: FR-SPOT-13
+    #[test]
+    fn fr_spot_13_a_click_approves_only_the_certificate_shown() {
+        let a = "a".repeat(64);
+        let b = "b".repeat(64);
+        let shown = info(&a);
+        let got = cert_to_trust(Some(&shown), &a).expect("the shown certificate");
+        assert_eq!(
+            (got.host.as_str(), got.port, got.sha256.as_str()),
+            ("mqtt.example.org", 8884, a.as_str())
+        );
+        assert!(got.is_valid());
+        assert_eq!(
+            cert_to_trust(Some(&shown), &b),
+            None,
+            "a different certificate"
+        );
+        assert_eq!(cert_to_trust(None, &a), None, "nothing is pending");
+        assert_eq!(cert_to_trust(Some(&shown), ""), None);
+        assert_eq!(
+            cert_to_trust(Some(&shown), &a.to_uppercase()),
+            None,
+            "not an exact match"
+        );
+    }
+
+    /// FR-SPOT-13: a default port follows the TLS switch; a chosen one is left alone.
+    /// trace: FR-SPOT-13
+    #[test]
+    fn fr_spot_13_the_port_follows_the_tls_switch() {
+        assert_eq!(port_after_tls_switch(true, "1883"), "1884");
+        assert_eq!(port_after_tls_switch(false, "1884"), "1883");
+        // Already right, or chosen by the operator: unchanged.
+        assert_eq!(port_after_tls_switch(true, "1884"), "1884");
+        assert_eq!(port_after_tls_switch(false, "1883"), "1883");
+        for chosen in ["8883", "", "18830", "1"] {
+            assert_eq!(port_after_tls_switch(true, chosen), chosen);
+            assert_eq!(port_after_tls_switch(false, chosen), chosen);
+        }
+    }
+
+    /// FR-SPOT-13: the approval is wired end to end — the click goes through the check above, is
+    /// stored, given to the worker and saved, and the worker is told to try again; forgetting one
+    /// updates the worker's copy and the file; and the switch is passed on to the source. Structural,
+    /// like the emergency-stop guard, because nothing else proves the pieces are connected.
+    /// trace: FR-SPOT-13
+    #[test]
+    fn fr_spot_13_the_approval_is_wired() {
+        // Only the code above this module: the needles below also appear in this test's own text,
+        // which would satisfy them whether or not the real line is there.
+        let whole = include_str!("main.rs");
+        let src = &whole[..whole
+            .find(concat!("mod spot_settings", "_tests {"))
+            .expect("the test module")];
+        let arm = |head: &str, tail: &str| {
+            let a = src.find(head).unwrap_or_else(|| panic!("no `{head}` arm"));
+            let b = src[a..]
+                .find(tail)
+                .unwrap_or_else(|| panic!("no end for `{head}`"));
+            src[a..a + b].to_string()
+        };
+        let trust = arm(
+            "Message::TrustSpotCert(sha256) => {",
+            "Message::ForgetSpotCert",
+        );
+        for needed in [
+            "cert_to_trust(",
+            "self.spot_networks.trust(",
+            "self.sync_spot_pins()",
+            "self.save_config()",
+            "spot_sources::Cmd::RetryNow",
+        ] {
+            assert!(
+                trust.contains(needed),
+                "approving does not call `{needed}`:\n{trust}"
+            );
+        }
+        let forget = arm(
+            "Message::ForgetSpotCert(index) => {",
+            "Message::SpotPollChanged",
+        );
+        for needed in [
+            "self.spot_networks.forget(",
+            "self.sync_spot_pins()",
+            "self.save_config()",
+        ] {
+            assert!(
+                forget.contains(needed),
+                "forgetting does not call `{needed}`:\n{forget}"
+            );
+        }
+        let toggle = arm("Message::ToggleSpotTls => {", "Message::TrustSpotCert");
+        for needed in ["port_after_tls_switch(", "self.save_config()"] {
+            assert!(
+                toggle.contains(needed),
+                "the switch does not call `{needed}`:\n{toggle}"
+            );
+        }
+        assert!(
+            src.contains("tls: nets.psk_reporter.tls,"),
+            "the TLS switch is not passed to the source"
+        );
+        assert!(
+            src.contains("*p = tls::pins_from(&spot_networks.trusted());"),
+            "the saved approvals are not given to the worker at start-up"
+        );
+    }
 
     /// FR-SPOT-04: the login field keeps only what a callsign holds — letters,
     /// digits and `/` — upper-cased and bounded, so a control or look-alike
