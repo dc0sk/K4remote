@@ -62,6 +62,12 @@ pub struct Roster {
     pub rejected: u64,
     /// Stations not added because the roster was full.
     pub dropped: u64,
+    /// Text fields that were well-typed but unusable (too long, or not printable ASCII) and were
+    /// dropped while the rest of their event applied. Not an error, but counted: it is the class of
+    /// thing an over-strict parser used to reject whole.
+    pub degraded: u64,
+    /// As `rejected_shapes`, for degraded fields.
+    degraded_shapes: BTreeMap<String, (u64, String)>,
     /// For diagnosis: per event name, how many were rejected and the *shape* of the last one (its
     /// field names and the kinds of their values — never a value, so nothing an operator or a
     /// station typed can end up in a log).
@@ -123,26 +129,29 @@ fn sid_of(args: &Value) -> Option<String> {
         .map(str::to_string)
 }
 
-/// A text field. `Err` only if it is present with the **wrong type** — that is a malformed event.
-/// Absent, `null`, or a string that cannot be kept (longer than `max`, or not printable ASCII —
-/// operators write free text with accents and emoji, which a nameplate cannot show) is `Ok(None)`:
-/// the field degrades, the rest of the event still applies. (Found by looking at the real service:
-/// rejecting the whole event for a non-ASCII message lost the station's other data.)
-fn text_of(args: &Value, key: &str, max: usize) -> Result<Option<String>, ()> {
-    match args.get(key) {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::Str(s)) => {
-            let t = s.trim();
-            Ok(
-                (t.len() <= max && t.bytes().all(|b| (b' '..=b'~').contains(&b)))
-                    .then(|| t.to_string()),
-            )
-        }
-        Some(_) => Err(()),
-    }
-}
-
 impl Roster {
+    /// A text field. `Err` only if it is present with the **wrong type** — that is a malformed
+    /// event. Absent, `null` or blank is `Ok(None)`. A string that cannot be kept (longer than
+    /// `max`, or not printable ASCII) is also `Ok(None)` — the field degrades and the rest of the
+    /// event still applies — but it is **counted** in [`Roster::degraded`], so a probe cannot report
+    /// "nothing rejected" while dropping what operators wrote. (This client keeps only printable
+    /// ASCII by choice, as a policy for untrusted text; it is not a limit of the display.)
+    fn text(&mut self, args: &Value, key: &str, max: usize) -> Result<Option<String>, ()> {
+        match args.get(key) {
+            None | Some(Value::Null) => Ok(None),
+            Some(Value::Str(s)) => {
+                let t = s.trim();
+                if t.len() <= max && t.bytes().all(|b| (b' '..=b'~').contains(&b)) {
+                    Ok(Some(t.to_string()))
+                } else {
+                    self.degraded += 1;
+                    Ok(None)
+                }
+            }
+            Some(_) => Err(()),
+        }
+    }
+
     /// How many stations are known.
     pub fn len(&self) -> usize {
         self.by_sid.len()
@@ -212,17 +221,24 @@ impl Roster {
         &self.rejected_shapes
     }
 
+    /// Per event name, how many had a field degraded and the shape of the last (diagnosis only).
+    pub fn degraded_shapes(&self) -> &BTreeMap<String, (u64, String)> {
+        &self.degraded_shapes
+    }
+
     fn one(&mut self, name: &str, args: &Value) -> Vec<String> {
-        let before = self.rejected;
+        let (rejected, degraded) = (self.rejected, self.degraded);
         let changed = self.apply(name, args);
-        // Only the six known events can be rejected, so this holds at most six names.
-        if self.rejected > before {
-            let entry = self
-                .rejected_shapes
-                .entry(name.to_string())
-                .or_insert((0, String::new()));
-            entry.0 += self.rejected - before;
-            entry.1 = shape(args).chars().take(200).collect();
+        // Only the six known events can be rejected or degraded, so each map holds at most six.
+        for (map, count) in [
+            (&mut self.rejected_shapes, self.rejected - rejected),
+            (&mut self.degraded_shapes, self.degraded - degraded),
+        ] {
+            if count > 0 {
+                let entry = map.entry(name.to_string()).or_insert((0, String::new()));
+                entry.0 += count;
+                entry.1 = shape(args).chars().take(200).collect();
+            }
         }
         changed
     }
@@ -254,8 +270,8 @@ impl Roster {
     fn new_connection(&mut self, args: &Value) -> Vec<String> {
         let (Some(sid), Ok(call), Ok(grid)) = (
             sid_of(args),
-            text_of(args, "callsign", MAX_CALL),
-            text_of(args, "grid_square", MAX_GRID),
+            self.text(args, "callsign", MAX_CALL),
+            self.text(args, "grid_square", MAX_GRID),
         ) else {
             return self.reject();
         };
@@ -273,8 +289,8 @@ impl Roster {
         let (Some(sid), Some(freq), Ok(call), Ok(grid)) = (
             sid_of(args),
             args.get("freq").and_then(Value::as_u64),
-            text_of(args, "callsign", MAX_CALL),
-            text_of(args, "grid_square", MAX_GRID),
+            self.text(args, "callsign", MAX_CALL),
+            self.text(args, "grid_square", MAX_GRID),
         ) else {
             return self.reject();
         };
@@ -302,9 +318,9 @@ impl Roster {
         let (Some(sid), Some(tx), Ok(mode), Ok(call), Ok(grid)) = (
             sid_of(args),
             args.get("transmitting").and_then(Value::as_bool),
-            text_of(args, "mode", MAX_MODE),
-            text_of(args, "callsign", MAX_CALL),
-            text_of(args, "grid_square", MAX_GRID),
+            self.text(args, "mode", MAX_MODE),
+            self.text(args, "callsign", MAX_CALL),
+            self.text(args, "grid_square", MAX_GRID),
         ) else {
             return self.reject();
         };
@@ -327,8 +343,8 @@ impl Roster {
     fn rx_report(&mut self, args: &Value) -> Vec<String> {
         // Keyed by the *heard* station's callsign, not by session: `sid` here is the receiver.
         let (Ok(Some(heard)), Ok(Some(receiver)), Some(snr)) = (
-            text_of(args, "callsign", MAX_CALL),
-            text_of(args, "receiver_callsign", MAX_CALL),
+            self.text(args, "callsign", MAX_CALL),
+            self.text(args, "receiver_callsign", MAX_CALL),
             args.get("snr").and_then(Value::as_f64),
         ) else {
             return self.reject();
@@ -355,11 +371,11 @@ impl Roster {
 
     fn message_update(&mut self, args: &Value) -> Vec<String> {
         // The key must be there (an event without it is malformed); its value may be empty, `null`
-        // or text a nameplate cannot show, all of which clear the message.
+        // or text this client does not keep (printable ASCII only, by policy), all of which clear it.
         let (Some(sid), Some(_), Ok(message)) = (
             sid_of(args),
             args.get("message"),
-            text_of(args, "message", MAX_MESSAGE),
+            self.text(args, "message", MAX_MESSAGE),
         ) else {
             return self.reject();
         };
@@ -1071,6 +1087,111 @@ mod tests {
         feed(&mut r, "trim", "a", "a", "a", &format!("  {}  ", s(128)));
         assert_eq!(r.by_sid["trim"].message.len(), 128);
         assert_eq!(r.rejected, 0);
+    }
+
+    /// FR-SPOT-08: a field that is well-typed but cannot be kept is **counted** as degraded, with a
+    /// value-free shape, so it stays visible: without this the probe that found the strict-parser
+    /// problem would report "0 rejected" while every accented message was being cleared. Blank,
+    /// `null` and absent are ordinary and are not counted; a wrong type is a rejection, not a
+    /// degrade.
+    /// trace: FR-SPOT-08
+    #[test]
+    fn fr_spot_08_freedv_degraded_fields_are_counted() {
+        let mut r = Roster::default();
+        // Ordinary: usable, blank, whitespace only, null, absent — none is degraded.
+        ev(&mut r, "message_update", r#"{"sid":"s","message":"CQ"}"#);
+        ev(&mut r, "message_update", r#"{"sid":"s","message":""}"#);
+        ev(&mut r, "message_update", r#"{"sid":"s","message":"   "}"#);
+        ev(&mut r, "message_update", r#"{"sid":"s","message":null}"#);
+        ev(
+            &mut r,
+            "freq_change",
+            r#"{"sid":"s","freq":14236000,"callsign":"aa1aaa"}"#,
+        );
+        assert_eq!((r.degraded, r.rejected), (0, 0));
+        assert!(r.degraded_shapes().is_empty());
+
+        // One unusable field per event: a non-ASCII message, a long grid, a long mode.
+        ev(
+            &mut r,
+            "message_update",
+            "{\"sid\":\"s\",\"message\":\"caf\u{e9}\"}",
+        );
+        assert_eq!(r.degraded, 1);
+        let long = "x".repeat(200);
+        ev(
+            &mut r,
+            "freq_change",
+            &format!(r#"{{"sid":"s","freq":14236000,"grid_square":"{long}"}}"#),
+        );
+        assert_eq!(r.degraded, 2);
+        ev(
+            &mut r,
+            "tx_report",
+            &format!(r#"{{"sid":"s","transmitting":true,"mode":"{long}"}}"#),
+        );
+        assert_eq!(r.degraded, 3);
+        // Two unusable fields in one event count twice, and the event still applies.
+        ev(
+            &mut r,
+            "freq_change",
+            &format!(
+                r#"{{"sid":"s","freq":7177000,"callsign":"F5{accent}","grid_square":"{long}"}}"#,
+                accent = "\u{e9}"
+            ),
+        );
+        assert_eq!(r.degraded, 5);
+        assert_eq!(r.rejected, 0);
+        assert_eq!(r.spot("s", 1).unwrap().freq_hz, 7_177_000);
+
+        // The shapes name the event and the kind of each field, never a value.
+        let shapes = r.degraded_shapes();
+        assert_eq!(
+            shapes["message_update"],
+            (
+                1,
+                "message:str(len=5,non-ascii),sid:str(len=1,ascii)".to_string()
+            )
+        );
+        assert_eq!(shapes["tx_report"].0, 1);
+        assert_eq!(
+            shapes["freq_change"].0, 3,
+            "the long grid, then the event with two"
+        );
+        assert!(
+            shapes["freq_change"]
+                .1
+                .contains("callsign:str(len=4,non-ascii)"),
+            "{shapes:?}"
+        );
+        assert!(
+            shapes["freq_change"]
+                .1
+                .contains("grid_square:str(len=200,ascii)"),
+            "{shapes:?}"
+        );
+        assert!(!format!("{shapes:?}").contains("xxxx"), "no value leaks");
+
+        // A wrong type is a rejection, not a degrade; the two counts stay apart.
+        let before = (r.degraded, r.rejected);
+        ev(&mut r, "message_update", r#"{"sid":"s","message":5}"#);
+        assert_eq!((r.degraded, r.rejected), (before.0, before.1 + 1));
+        assert_eq!(r.rejected_shapes()["message_update"].0, 1);
+        assert_eq!(
+            r.degraded_shapes()["message_update"].0,
+            1,
+            "the degrade map is untouched"
+        );
+
+        // Inside a bulk_update each item is counted on its own.
+        let mut r = Roster::default();
+        ev(
+            &mut r,
+            "bulk_update",
+            "[[\"message_update\",{\"sid\":\"a\",\"message\":\"\u{e9}\"}],[\"message_update\",{\"sid\":\"b\",\"message\":\"\u{e9}\"}],[\"message_update\",{\"sid\":\"c\",\"message\":\"ok\"}]]",
+        );
+        assert_eq!(r.degraded, 2);
+        assert_eq!(r.degraded_shapes()["message_update"].0, 2);
     }
 
     /// FR-SPOT-08: the roster is capped; a flood of invented session ids cannot grow it, and the

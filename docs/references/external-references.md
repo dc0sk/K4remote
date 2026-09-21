@@ -568,7 +568,7 @@ done for RBN, at DC0SK's invitation ("how did SDRoxide solve the API issues").
 
 ### FreeDV Reporter — observed live (2026-09-21)
 
-**Four short sessions** to `ws://qso.freedv.org:80`, each **at most 10 seconds**, in the read-only
+**Five short sessions** to `ws://qso.freedv.org:80`, each **at most 10 seconds**, in the read-only
 `view` role, sending only the WebSocket upgrade (with a `User-Agent` naming a probe), the `view`
 connect and the pongs the protocol requires. The probe is `crates/k4-spot/tests/freedv_live.rs`
 (`#[ignore]`, run by hand) and **prints counts and shapes only — never a callsign or any text an
@@ -584,10 +584,17 @@ operator wrote**. Nothing here contains one.
   1. **`freq_change` with `freq` = 0.** A station with no frequency set (or cleared) sends 0. That is
      a normal event meaning "no frequency", not a malformed one.
   2. **`message_update` with non-ASCII text.** Operators write free text with accents and other
-     characters. A nameplate can only show printable ASCII, so such a message must read as "no
+     characters. This client keeps only printable ASCII in a spot's text — a **policy for untrusted
+     text**, not a limit of the display, which renders Unicode — so such a message must read as "no
      message" and must not cost the station the rest of its data.
   The rule now: a field of the **wrong type** rejects the event; a well-typed value that cannot be
-  displayed **degrades that one field**. After the change the same probe reported **0 rejected**.
+  kept **degrades that one field**. After the change the same probe reported **0 rejected**.
+- **But "0 rejected" hid the degrading, and the probe was blind to it.** The degrade path first had no
+  counter, so a probe that printed only `rejected` would have said "0" while every accented message
+  was being cleared. A second counter and value-free shapes for degraded fields were added; the
+  **fifth session** then showed **0 rejected and 3 degraded** — three `message_update`s with
+  non-ASCII text of 51 bytes — which is what had been happening all along. A clean result exonerates
+  the parser only against the shapes the few seconds contained.
 - **Every event also carries `last_update`** (a 32-character timestamp string). It is **not used**: a
   nameplate's age counts from when the station was last confirmed on the roster (see the design note
   in `FR-SPOT-08`), and the timestamp's zone and precision were not examined.

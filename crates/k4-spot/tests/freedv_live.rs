@@ -47,11 +47,12 @@ fn live_freedv_reporter() {
         joined_at
     );
     println!(
-        "PROBE: stations={} spots_delivered={} distinct_frequencies={} rejected={} connects={}",
+        "PROBE: stations={} spots_delivered={} distinct_frequencies={} rejected={} degraded={} connects={}",
         src.stations(),
         spots,
         freqs.len(),
         st.rejected,
+        src.degraded(),
         st.connects
     );
     if let (Some(lo), Some(hi)) = (freqs.first(), freqs.last()) {
@@ -60,5 +61,10 @@ fn live_freedv_reporter() {
     println!("PROBE: errors={errors:?}");
     for (event, (count, shape)) in src.rejected_shapes() {
         println!("PROBE: rejected {count} x {event}: {shape}");
+    }
+    // A field that could not be kept is not an error, but it is data the parser dropped: a probe
+    // that printed only `rejected` would say "0" while every accented message was being cleared.
+    for (event, (count, shape)) in src.degraded_shapes() {
+        println!("PROBE: degraded {count} x {event}: {shape}");
     }
 }

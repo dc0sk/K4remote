@@ -349,6 +349,12 @@ pub fn parse(text: &str) -> Result<Value, String> {
 mod tests {
     use super::*;
 
+    // Each bound is pinned once, as a number (a test built from the constant under test would move
+    // with it and never notice a change); the fixtures are derived from these.
+    const DEPTH: usize = 8;
+    const NODES: usize = 20_000;
+    const STRING: usize = 4096;
+
     /// FR-SPOT-08: real-shaped messages parse to the right tree, and the accessors read what they
     /// should — exactly, and no more.
     /// trace: FR-SPOT-08
@@ -462,14 +468,14 @@ mod tests {
         for (name, text) in &bad {
             assert!(parse(text).is_err(), "{name} must be refused: {text:?}");
         }
-        // The limits are written as numbers, not taken from the constants: a test built from a constant
-        // moves with it and never notices a change. Depth: 8 levels are read, a ninth is not.
+        // The bounds first: pinned to the numbers above. Then depth: DEPTH levels are read, one more is not.
+        assert_eq!((MAX_DEPTH, MAX_NODES, MAX_STRING), (DEPTH, NODES, STRING));
         let nest = |n: usize| format!("{}{}", "[".repeat(n), "]".repeat(n));
-        assert!(parse(&nest(8)).is_ok());
-        assert!(parse(&nest(9)).is_err());
+        assert!(parse(&nest(DEPTH)).is_ok());
+        assert!(parse(&nest(DEPTH + 1)).is_err());
         let objects = |n: usize| format!("{}1{}", r#"{"a":"#.repeat(n), "}".repeat(n));
-        assert!(parse(&objects(8)).is_ok());
-        assert!(parse(&objects(9)).is_err());
+        assert!(parse(&objects(DEPTH)).is_ok());
+        assert!(parse(&objects(DEPTH + 1)).is_err());
         assert!(
             parse(&nest(100_000)).is_err(),
             "a deep bomb must not recurse without limit"
@@ -477,16 +483,16 @@ mod tests {
         // Nodes: exactly MAX_NODES values are read; one more is not.
         let flat = |n: usize| format!("[{}]", vec!["0"; n - 1].join(","));
         assert!(
-            parse(&flat(20_000)).is_ok(),
+            parse(&flat(NODES)).is_ok(),
             "the array and its elements make MAX_NODES"
         );
-        assert!(parse(&flat(20_001)).is_err());
+        assert!(parse(&flat(NODES + 1)).is_err());
         // Strings: MAX_STRING bytes are read, one more is not — keys as well as values.
         let s = |n: usize| format!("\"{}\"", "a".repeat(n));
-        assert!(parse(&s(4096)).is_ok());
-        assert!(parse(&s(4097)).is_err());
-        assert!(parse(&format!("{{{}:1}}", s(4097))).is_err());
-        assert!(parse(&format!("{{{}:1}}", s(4096))).is_ok());
+        assert!(parse(&s(STRING)).is_ok());
+        assert!(parse(&s(STRING + 1)).is_err());
+        assert!(parse(&format!("{{{}:1}}", s(STRING + 1))).is_err());
+        assert!(parse(&format!("{{{}:1}}", s(STRING))).is_ok());
         // Time is linear in the text: 256 KB of short strings is read at once, not in seconds.
         let big = format!("[{}]", vec!["\"abcdefghij\u{4e2d}\""; 15_000].join(","));
         let t = std::time::Instant::now();
@@ -497,7 +503,7 @@ mod tests {
             t.elapsed()
         );
         // Multi-byte characters count as their bytes.
-        let wide = format!("\"{}\"", "\u{4e2d}".repeat(1366));
+        let wide = format!("\"{}\"", "\u{4e2d}".repeat(STRING / 3 + 1));
         assert!(parse(&wide).is_err());
     }
 }

@@ -167,6 +167,17 @@ impl FreeDvSource {
         self.roster.rejected_shapes()
     }
 
+    /// Text fields dropped for being unusable (too long, or not printable ASCII) while the rest of
+    /// their event applied: not an error, but counted so it can be seen.
+    pub fn degraded(&self) -> u64 {
+        self.roster.degraded
+    }
+
+    /// As [`rejected_shapes`](Self::rejected_shapes), for degraded fields.
+    pub fn degraded_shapes(&self) -> &std::collections::BTreeMap<String, (u64, String)> {
+        self.roster.degraded_shapes()
+    }
+
     /// Stations on the roster now.
     pub fn stations(&self) -> usize {
         self.roster.len()
