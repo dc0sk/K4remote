@@ -23,7 +23,7 @@
 //! [`poll`]: SpotSource::poll
 
 use std::io::{ErrorKind, Read, Write};
-use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
+use std::net::TcpStream;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -77,12 +77,15 @@ pub type Connector =
     Arc<dyn Fn(&str, u16, Duration) -> Result<Box<dyn Wire>, ConnectError> + Send + Sync>;
 
 /// Plain TCP: every resolved address is tried in turn.
+///
+/// Resolution is bounded (FR-SPOT-14): plain `to_socket_addrs` has no timeout of its own, and this
+/// runs on the shared spot-sources thread every network is polled from (also used by FreeDV
+/// Reporter, which shares this connector) — an unbounded hang here would stall every enabled
+/// network, not just this one.
 pub fn plain_connector() -> Connector {
     Arc::new(|host, port, timeout| {
-        let addrs: Vec<SocketAddr> = (host, port)
-            .to_socket_addrs()
-            .map_err(|e| ConnectError::Failed(format!("cannot resolve {host}: {e}")))?
-            .collect();
+        let addrs = crate::dns::resolve_bounded(host, port, timeout)
+            .map_err(|e| ConnectError::Failed(format!("cannot resolve {host}: {e}")))?;
         let mut last = None;
         for addr in addrs {
             match TcpStream::connect_timeout(&addr, timeout) {

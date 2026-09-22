@@ -10,7 +10,7 @@
 //! [`poll`]: SpotSource::poll
 
 use std::io::{ErrorKind, Read, Write};
-use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
+use std::net::TcpStream;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::cluster::{is_call_prompt, parse_line, LineSplitter, RateGate};
@@ -193,9 +193,15 @@ impl TelnetSource {
             return Err(SourceError("no host is set".into()));
         }
         self.attempts += 1;
-        let target = (self.cfg.host.trim(), self.cfg.port);
-        let addrs: Vec<SocketAddr> = match target.to_socket_addrs() {
-            Ok(a) => a.collect(),
+        // Bounded (FR-SPOT-14): plain `to_socket_addrs` has no timeout of its own, and this runs
+        // on the shared spot-sources thread every network is polled from — an unbounded hang here
+        // would stall RBN, DX cluster, PSK Reporter and FreeDV Reporter alike, not just this one.
+        let addrs = match crate::dns::resolve_bounded(
+            self.cfg.host.trim(),
+            self.cfg.port,
+            self.timing.connect_timeout,
+        ) {
+            Ok(a) => a,
             Err(e) => return Err(self.fail(now, format!("cannot resolve {}: {e}", self.cfg.host))),
         };
         // A host can have several addresses (IPv6 and IPv4); try each before giving up.

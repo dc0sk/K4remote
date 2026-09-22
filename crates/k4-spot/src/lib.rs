@@ -7,6 +7,7 @@
 //! clock and every result is deterministic.
 
 pub mod cluster;
+mod dns;
 pub mod freedv;
 pub mod freedv_source;
 pub mod json;
