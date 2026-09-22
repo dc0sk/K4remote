@@ -9,14 +9,37 @@ use k4_config::{redact, Config, MemoryStore, Peer, PeerSecret, Prefs, Profile, S
 #[test]
 fn fr_cfg_03_secret_store_roundtrip() {
     let store = MemoryStore::new();
-    assert_eq!(store.get("host:9204"), None);
+    assert_eq!(store.get("host:9204").unwrap(), None);
 
     store.set("host:9204", "hunter2").unwrap();
-    assert_eq!(store.get("host:9204").as_deref(), Some("hunter2"));
+    assert_eq!(store.get("host:9204").unwrap().as_deref(), Some("hunter2"));
 
     store.delete("host:9204").unwrap();
-    assert_eq!(store.get("host:9204"), None);
+    assert_eq!(store.get("host:9204").unwrap(), None);
     store.delete("host:9204").unwrap(); // deleting absent is fine
+}
+
+/// `Ok(None)` (no secret saved) and `Err` (the store could not be read) are
+/// different facts and must stay distinguishable end to end — collapsing them
+/// is exactly what let a saved password silently read back as "none" (FR-CFG-08).
+///
+/// trace: FR-CFG-08
+#[test]
+fn fr_cfg_08_a_store_failure_is_not_a_clean_miss() {
+    struct FailingStore;
+    impl SecretStore for FailingStore {
+        fn get(&self, _account: &str) -> Result<Option<String>, k4_config::SecretError> {
+            Err(k4_config::SecretError("locked".into()))
+        }
+        fn set(&self, _account: &str, _secret: &str) -> Result<(), k4_config::SecretError> {
+            Ok(())
+        }
+        fn delete(&self, _account: &str) -> Result<(), k4_config::SecretError> {
+            Ok(())
+        }
+    }
+    let err = FailingStore.get("host:9204").unwrap_err();
+    assert_eq!(err.to_string(), "secret store error: locked");
 }
 
 /// A config round-trips through TOML unchanged (profile + prefs).

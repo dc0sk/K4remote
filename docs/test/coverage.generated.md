@@ -41,6 +41,7 @@ Legend: ✅ test-traced · 🟡 waived (see r3-waivers.md) · ⚪ not test-requi
 | `FR-CFG-05` | S | T/D | ✅ |
 | `FR-CFG-06` | C | T | ✅ |
 | `FR-CFG-07` | C | T | ✅ |
+| `FR-CFG-08` | S | T | ✅ |
 | `FR-CFG-09` | S | T | ✅ |
 | `FR-CONN-01` | M | T | ✅ |
 | `FR-CONN-02` | M | T | ✅ |

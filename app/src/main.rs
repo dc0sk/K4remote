@@ -198,6 +198,10 @@ struct App {
     host: String,
     port: String,
     password: String,
+    /// Set when the saved password could not be confirmed absent — the store
+    /// itself failed or a read timed out (FR-CFG-08) — so a keychain problem is
+    /// visible instead of manifesting as an unexplained blank-password connect.
+    password_warning: String,
     // tuning form
     // use TLS-PSK (port 9204) instead of plaintext (9205)
     use_tls: bool,
@@ -1158,25 +1162,22 @@ impl App {
 
         // Keychain reads block on the Secret Service and can hang on a locked
         // keyring; bound startup with a timeout so it can never freeze the app.
-        let password = if last.remember {
-            let store = Arc::clone(&secret_store);
+        // A failed or timed-out read must not look like "no password saved" —
+        // see `password_load_outcome` (FR-CFG-08).
+        let (password, password_warning) = if last.remember {
             let acct = account_key(&last.host, last.port);
-            let (tx, rx) = std::sync::mpsc::channel();
-            std::thread::spawn(move || {
-                let _ = tx.send(store.get(&acct));
-            });
-            rx.recv_timeout(Duration::from_secs(2))
-                .ok()
-                .flatten()
-                .unwrap_or_default()
+            let outcome = load_secret_timed(&secret_store, &acct, Duration::from_secs(2));
+            let (password, warning) = password_load_outcome(outcome);
+            (password, warning.unwrap_or_default())
         } else {
-            String::new()
+            (String::new(), String::new())
         };
 
         let app = App {
             host: last.host,
             port: last.port.to_string(),
             password,
+            password_warning,
             use_tls: last.use_tls,
             serial_mode: false,
             serial_path: "/dev/ttyUSB0".into(),
@@ -1796,18 +1797,11 @@ impl App {
     }
 
     /// Read a secret from the store with a bounded timeout (the keychain can
-    /// block on a locked Secret Service; never freeze the UI on a click).
-    fn secret_get_timed(&self, account: &str) -> String {
-        let store = Arc::clone(&self.secret_store);
-        let acct = account.to_string();
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let _ = tx.send(store.get(&acct));
-        });
-        rx.recv_timeout(Duration::from_secs(2))
-            .ok()
-            .flatten()
-            .unwrap_or_default()
+    /// block on a locked Secret Service; never freeze the UI on a click). See
+    /// [`load_secret_timed`] and [`password_load_outcome`] for what the result
+    /// means and how a failed read stays distinguishable from "nothing saved".
+    fn secret_get_timed(&self, account: &str) -> Option<Result<Option<String>, String>> {
+        load_secret_timed(&self.secret_store, account, Duration::from_secs(2))
     }
 
     /// Set or unlock the store master password for encrypted peer secrets
@@ -1856,11 +1850,15 @@ impl App {
         match &peer.secret {
             k4_config::PeerSecret::None => {
                 self.password.clear();
+                self.password_warning.clear();
                 self.remember = false;
                 self.peer_status = format!("selected {}", peer.name);
             }
             k4_config::PeerSecret::Keyring => {
-                self.password = self.secret_get_timed(&account_key(&peer.host, peer.port));
+                let outcome = self.secret_get_timed(&account_key(&peer.host, peer.port));
+                let (password, warning) = password_load_outcome(outcome);
+                self.password = password;
+                self.password_warning = warning.unwrap_or_default();
                 self.remember = true;
                 self.use_master = false;
                 self.peer_status = format!("selected {} (keychain)", peer.name);
@@ -1868,6 +1866,7 @@ impl App {
             k4_config::PeerSecret::Encrypted(sealed) => {
                 self.use_master = true;
                 self.remember = true;
+                self.password_warning.clear();
                 match &self.master_key {
                     Some(key) => match key.open(sealed) {
                         Ok(pw) => {
@@ -1946,7 +1945,10 @@ impl App {
         match message {
             Message::HostChanged(v) => self.host = v,
             Message::PortChanged(v) => self.port = v,
-            Message::PasswordChanged(v) => self.password = v,
+            Message::PasswordChanged(v) => {
+                self.password = v;
+                self.password_warning.clear();
+            }
             Message::Connect => {
                 if self.serial_mode {
                     self.send(WorkerCmd::Connect(ConnectTarget::Serial {
@@ -7116,11 +7118,21 @@ impl App {
                     Message::SerialBaudChanged,
                 ))
         } else {
-            Column::new()
+            let mut col = Column::new()
                 .spacing(6)
                 .push(labeled("Host", &self.host, Message::HostChanged))
                 .push(labeled("Port", &self.port, Message::PortChanged))
-                .push(secret("Password", &self.password, Message::PasswordChanged))
+                .push(secret("Password", &self.password, Message::PasswordChanged));
+            // A saved-password read that failed or timed out (FR-CFG-08) — never
+            // silent, so a keychain problem doesn't just look like a blank field.
+            if !self.password_warning.is_empty() {
+                col = col.push(
+                    Text::new(&self.password_warning)
+                        .size(11)
+                        .color(role_color(ui::ColorRole::Caution)),
+                );
+            }
+            col
         };
         // Options and actions on separate rows so the buttons never get
         // squeezed in the third-width panel (glyph-wrapped labels).
@@ -10459,6 +10471,166 @@ fn shade(s: ui::Shade) -> Color {
 /// Keychain account key for a connection (`host:port`).
 fn account_key(host: &str, port: u16) -> String {
     format!("{host}:{port}")
+}
+
+/// Read `account` from `store` off the calling thread, bounded by `timeout` so a
+/// locked or hung keyring can never freeze the UI (FR-CFG-08).
+///
+/// `None` means the read did not finish within `timeout` — the spawned thread is
+/// simply abandoned, as with a hung network read elsewhere in this app. Otherwise
+/// the store's own `Result` is passed through unchanged: `Some(Ok(None))` is a
+/// clean "nothing saved", `Some(Err(_))` is the store itself failing, and the two
+/// must stay distinguishable all the way to the UI — see [`password_load_outcome`].
+fn load_secret_timed(
+    store: &Arc<dyn SecretStore>,
+    account: &str,
+    timeout: Duration,
+) -> Option<Result<Option<String>, String>> {
+    let store = Arc::clone(store);
+    let acct = account.to_string();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(store.get(&acct).map_err(|e| e.to_string()));
+    });
+    rx.recv_timeout(timeout).ok()
+}
+
+/// What a saved-password load should leave in the password field and, when the
+/// read did not cleanly come back empty-because-nothing-was-saved, in a warning
+/// the operator actually sees (FR-CFG-08).
+///
+/// "No password was ever saved" is not a problem and gets no warning. Everything
+/// else — the store failing, or the read not finishing in time — must be visible,
+/// never silently treated the same as "no password": that is what let a keychain
+/// outage turn into an unexplained connect-and-drop with a blank password.
+fn password_load_outcome(
+    result: Option<Result<Option<String>, String>>,
+) -> (String, Option<String>) {
+    match result {
+        Some(Ok(Some(pw))) => (pw, None),
+        Some(Ok(None)) => (String::new(), None),
+        Some(Err(e)) => (
+            String::new(),
+            Some(format!(
+                "could not read the saved password ({e}) — enter it manually"
+            )),
+        ),
+        None => (
+            String::new(),
+            Some(
+                "timed out reading the saved password from the OS keychain — enter it manually"
+                    .into(),
+            ),
+        ),
+    }
+}
+
+/// FR-CFG-08: a saved password that fails to load must be visibly different from
+/// a peer that never had one saved — the defect this closes let a locked or
+/// unreachable keychain read back as a quiet empty string, so the app tried to
+/// connect with a blank password and gave no reason why.
+#[cfg(test)]
+mod password_load_tests {
+    use super::{load_secret_timed, password_load_outcome};
+    use k4_config::{SecretError, SecretStore};
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    /// The store answering with no entry is not a problem: empty password, no warning.
+    #[test]
+    fn fr_cfg_08_no_password_saved_is_not_a_warning() {
+        assert_eq!(password_load_outcome(Some(Ok(None))), (String::new(), None));
+    }
+
+    /// A password that loads cleanly is used as-is, with no warning.
+    #[test]
+    fn fr_cfg_08_a_saved_password_loads_with_no_warning() {
+        assert_eq!(
+            password_load_outcome(Some(Ok(Some("hunter2".into())))),
+            ("hunter2".into(), None)
+        );
+    }
+
+    /// The store itself failing (locked keyring, D-Bus gone, ...) must not look like
+    /// "nothing was ever saved" — this is the exact defect: `.ok().flatten().unwrap_or_default()`
+    /// discarded the distinction and connected with a silent blank password.
+    #[test]
+    fn fr_cfg_08_a_store_failure_warns_and_names_the_reason() {
+        let (pw, warning) = password_load_outcome(Some(Err("keyring locked".into())));
+        assert_eq!(pw, "");
+        let warning = warning.expect("a store failure must warn, not read as a clean miss");
+        assert!(
+            warning.contains("keyring locked"),
+            "the reason must reach the operator: {warning}"
+        );
+    }
+
+    /// A read that never comes back in time is a different fact from both of the above
+    /// (the store might still be fine) and gets its own, distinct wording.
+    #[test]
+    fn fr_cfg_08_a_timeout_warns_distinctly_from_a_failure_or_a_miss() {
+        let (pw, warning) = password_load_outcome(None);
+        assert_eq!(pw, "");
+        let warning = warning.expect("a timeout must warn too");
+        assert!(warning.contains("timed out"), "{warning}");
+    }
+
+    struct FailingStore;
+    impl SecretStore for FailingStore {
+        fn get(&self, _account: &str) -> Result<Option<String>, SecretError> {
+            Err(SecretError("locked".into()))
+        }
+        fn set(&self, _account: &str, _secret: &str) -> Result<(), SecretError> {
+            Ok(())
+        }
+        fn delete(&self, _account: &str) -> Result<(), SecretError> {
+            Ok(())
+        }
+    }
+
+    /// End to end through the real thread/channel wiring, not just the pure decision
+    /// function: a store error must surface as `Some(Err(_))`, never silently as `None`
+    /// (which `load_secret_timed`'s caller would read as "nothing saved").
+    #[test]
+    fn fr_cfg_08_wiring_a_failing_store_reads_as_an_error_not_a_miss() {
+        let store: Arc<dyn SecretStore> = Arc::new(FailingStore);
+        let result = load_secret_timed(&store, "host:9204", Duration::from_secs(1));
+        assert!(
+            matches!(result, Some(Err(_))),
+            "a store error must not read as a clean miss: {result:?}"
+        );
+    }
+
+    struct HangingStore;
+    impl SecretStore for HangingStore {
+        fn get(&self, _account: &str) -> Result<Option<String>, SecretError> {
+            std::thread::sleep(Duration::from_secs(3600));
+            Ok(None)
+        }
+        fn set(&self, _account: &str, _secret: &str) -> Result<(), SecretError> {
+            Ok(())
+        }
+        fn delete(&self, _account: &str) -> Result<(), SecretError> {
+            Ok(())
+        }
+    }
+
+    /// A hung backend must not block past its bound (the whole reason for the timeout
+    /// existing) and must report as a timeout (`None`), not block forever or panic.
+    #[test]
+    fn fr_cfg_08_wiring_a_hung_store_times_out_instead_of_blocking() {
+        let store: Arc<dyn SecretStore> = Arc::new(HangingStore);
+        let start = Instant::now();
+        let result = load_secret_timed(&store, "host:9204", Duration::from_millis(50));
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "must return promptly at the bound, not wait for the hung thread"
+        );
+        assert!(
+            result.is_none(),
+            "a hung read must report as a timeout, not silently as no password: {result:?}"
+        );
+    }
 }
 
 /// Next enabled RX-antenna value after `cur`, cycling within an `AR$`-value
