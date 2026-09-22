@@ -143,9 +143,9 @@ pub struct Prefs {
     #[serde(default = "default_spot_max_age_min")]
     pub spot_max_age_min: u32,
     /// Spectrum afterglow, milliseconds (FR-PAN-14): how long a peak lingers on the trace. `0` is
-    /// off, the default. Read through [`Prefs::spectrum_afterglow_ms`], which brings a hand-edited
-    /// value back into range.
-    #[serde(default)]
+    /// off; the default is [`AFTERGLOW_DEFAULT_MS`]. Read through
+    /// [`Prefs::spectrum_afterglow_ms`], which brings a hand-edited value back into range.
+    #[serde(default = "default_afterglow_ms")]
     pub spectrum_afterglow_ms: u32,
     /// Which spotting networks feed the spectrum nameplates, and each one's
     /// settings (FR-SPOT-04). Every network defaults to off.
@@ -419,11 +419,18 @@ pub fn parse_spot_max_age_min(input: &str) -> u32 {
 /// [`AFTERGLOW_MAX_MS`].
 pub const AFTERGLOW_MIN_MS: u32 = 50;
 pub const AFTERGLOW_MAX_MS: u32 = 5000;
+/// Default afterglow, milliseconds: on by default, at a gentle trail length.
+pub const AFTERGLOW_DEFAULT_MS: u32 = 500;
+
+fn default_afterglow_ms() -> u32 {
+    AFTERGLOW_DEFAULT_MS
+}
 
 /// Bring an afterglow time into range: `0` stays off, a smaller non-zero value is raised to the
 /// minimum and a larger one lowered to the maximum. Unlike the spot age limit this **clamps**
-/// instead of falling back to the default, because the default is *off* and a typed `6000` should
-/// give the longest trail, not none.
+/// instead of falling back to the default, because `0` (off) is a deliberate, valid choice rather
+/// than an out-of-range one — a typed `6000` should give the longest trail, not silently reset to
+/// whatever the current default happens to be.
 pub fn sanitise_afterglow_ms(ms: u32) -> u32 {
     if ms == 0 {
         0
@@ -783,7 +790,7 @@ impl Default for Prefs {
             kpa1500_port: 1500,
             kpa1500_poll_ms: 500,
             spot_max_age_min: SPOT_MAX_AGE_DEFAULT_MIN,
-            spectrum_afterglow_ms: 0,
+            spectrum_afterglow_ms: AFTERGLOW_DEFAULT_MS,
             spot_networks: SpotNetworks::default(),
             kpod_enabled: false,
             kpod_buttons: default_kpod_buttons(),
@@ -792,7 +799,7 @@ impl Default for Prefs {
 }
 
 /// Persisted application config.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Config {
     /// The most recently used connection (prefilled on next launch).
     #[serde(default)]
@@ -803,6 +810,25 @@ pub struct Config {
     /// Cache of successfully-connected peers (FR-CFG-04).
     #[serde(default)]
     pub peers: PeerCache,
+    /// Whether the one-time afterglow-default migration (FR-CFG-09) has already been applied
+    /// to this config. `false` only for a file saved before this field existed; a config built
+    /// fresh in code (nothing to migrate) is `true` by construction — see [`Config::default`].
+    /// Bare `#[serde(default)]` cannot express this on its own: it supplies a value for a field
+    /// the file never had, not for a value (`spectrum_afterglow_ms = 0`) the file has
+    /// explicitly, left over from before that field's default changed.
+    #[serde(default)]
+    pub afterglow_default_migrated: bool,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            last: None,
+            prefs: Prefs::default(),
+            peers: PeerCache::default(),
+            afterglow_default_migrated: true,
+        }
+    }
 }
 
 impl Config {
@@ -816,13 +842,30 @@ impl Config {
         toml::from_str(text)
     }
 
+    /// One-time migrations for a config loaded from disk (FR-CFG-09): a default that changed
+    /// after some configs were already saved with the *old* default explicitly present cannot
+    /// be handled by `#[serde(default = "...")]` alone, since that only supplies a value for a
+    /// field the file never had — not for a value the file has explicitly, from before the
+    /// default changed. Runs at most once per config: an operator who sets the field back to
+    /// `0` afterwards is respected, not repeatedly overridden.
+    fn migrate(&mut self) {
+        if !self.afterglow_default_migrated {
+            if self.prefs.spectrum_afterglow_ms == 0 {
+                self.prefs.spectrum_afterglow_ms = AFTERGLOW_DEFAULT_MS;
+            }
+            self.afterglow_default_migrated = true;
+        }
+    }
+
     /// Load from `path`, returning the default config on any error (missing file,
     /// parse failure) so startup never fails.
     pub fn load(path: &Path) -> Self {
-        std::fs::read_to_string(path)
+        let mut cfg = std::fs::read_to_string(path)
             .ok()
             .and_then(|text| Self::from_toml(&text).ok())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        cfg.migrate();
+        cfg
     }
 
     /// Save to `path`, creating parent directories as needed.

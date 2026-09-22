@@ -107,6 +107,16 @@ fn spot_window_settings() -> iced::window::Settings {
     }
 }
 
+/// The detached Settings window (FR-UI-23): tabbed by topic, a fixed size so it never
+/// resizes as the tabs' content heights differ.
+fn settings_window_settings() -> iced::window::Settings {
+    iced::window::Settings {
+        size: iced::Size::new(900.0, 720.0),
+        icon: app_icon(),
+        ..Default::default()
+    }
+}
+
 /// A spotting network the operator can enable (FR-SPOT-04).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SpotNet {
@@ -280,9 +290,12 @@ struct App {
     /// DTMF keypad popup open (FR-FM-02).
     dtmf_open: bool,
     memory_name: String,
-    // Peer cache + settings dialog (FR-CFG-04, FR-UI-23).
+    // Peer cache + settings window (FR-CFG-04, FR-UI-23).
     peers: k4_config::PeerCache,
-    settings_open: bool,
+    /// The detached Settings window (FR-UI-23), `None` when closed.
+    settings_window: Option<iced::window::Id>,
+    /// Which Settings section is shown; resets to Connection each time the window opens.
+    settings_tab: SettingsTab,
     // The RX chip whose settings popup is open, if any (FR-UI-POPUP-01).
     rx_popup: Option<ui::RxPopup>,
     // Live pointer position, and where it was when the popup was opened — the
@@ -652,6 +665,19 @@ enum FnTab {
     Macros,
 }
 
+/// Which section the Settings dialog shows (FR-UI-23).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum SettingsTab {
+    #[default]
+    Connection,
+    Peers,
+    Spotting,
+    Audio,
+    Kpod,
+    Kpa1500,
+    Backup,
+}
+
 /// A single TX-config adjustment (FR-KEY-01/FR-AUD-CFG-01/FR-ANT-01).
 #[derive(Debug, Clone, Copy)]
 enum TxMsg {
@@ -866,6 +892,7 @@ enum Message {
     UpdateChecked(update::UpdateStatus),
     // Settings dialog + peer cache (FR-UI-23, FR-CFG-04).
     ToggleSettings,
+    SetSettingsTab(SettingsTab),
     /// AF recorder (FR-AUD-REC-01): the radio's own 90 s receive-audio buffer.
     AfRecord,
     AfPlay,
@@ -1202,7 +1229,8 @@ impl App {
             dtmf_open: false,
             memory_name: String::new(),
             peers,
-            settings_open: false,
+            settings_window: None,
+            settings_tab: SettingsTab::default(),
             rx_popup: None,
             cursor: (0.0, 0.0),
             rx_popup_at: (0.0, 0.0),
@@ -1719,6 +1747,10 @@ impl App {
                     remember: self.remember,
                 }),
                 peers: self.peers.clone(),
+                // Every save writes current-version semantics: the one-time afterglow-default
+                // migration (FR-CFG-09) is only ever meaningful for a file this app did not
+                // just write itself.
+                afterglow_default_migrated: true,
                 prefs: k4_config::Prefs {
                     memories: self.memories.clone(),
                     audio_output: self.selected_output.clone(),
@@ -2541,8 +2573,15 @@ impl App {
                         return iced::window::close(id);
                     }
                 }
-                // ESC dismisses an open modal (Settings / About, FR-UI-23) or
-                // cancels an in-progress hotkey capture, before other key handling.
+                // ESC in the Settings window closes it (FR-UI-23).
+                if is_esc && self.settings_window == Some(window) {
+                    if let Some(id) = self.settings_window.take() {
+                        self.save_config();
+                        return iced::window::close(id);
+                    }
+                }
+                // ESC dismisses an open modal (About) or cancels an in-progress hotkey
+                // capture, before other key handling.
                 if matches!(
                     key,
                     iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape)
@@ -2563,10 +2602,6 @@ impl App {
                     }
                     if self.dtmf_open {
                         self.dtmf_open = false;
-                        return Task::none();
-                    }
-                    if self.settings_open {
-                        self.settings_open = false;
                         return Task::none();
                     }
                     if self.about_open {
@@ -2703,7 +2738,17 @@ impl App {
             Message::AfStop => self.send(WorkerCmd::AfStop),
             Message::AfClear => self.send(WorkerCmd::AfClear),
             Message::AfJump(t) => self.send(WorkerCmd::AfJump(t)),
-            Message::ToggleSettings => self.settings_open = !self.settings_open,
+            Message::ToggleSettings => {
+                if let Some(id) = self.settings_window.take() {
+                    self.save_config();
+                    return iced::window::close(id);
+                }
+                self.settings_tab = SettingsTab::default();
+                let (id, open) = iced::window::open(settings_window_settings());
+                self.settings_window = Some(id);
+                return open.map(|_| Message::WindowOpened);
+            }
+            Message::SetSettingsTab(tab) => self.settings_tab = tab,
             Message::ToggleMemories => self.memories_open = !self.memories_open,
             Message::MemoryNameChanged(n) => self.memory_name = n,
             Message::MemoryStore => {
@@ -2853,6 +2898,12 @@ impl App {
                 if Some(id) == self.spot_config_window {
                     // Closing the networks window persists whatever was edited.
                     self.spot_config_window = None;
+                    self.save_config();
+                }
+                if Some(id) == self.settings_window {
+                    // Closing via the OS window chrome (not the ESC path above, which
+                    // already saves and clears this) persists whatever was edited.
+                    self.settings_window = None;
                     self.save_config();
                 }
                 if Some(id) == self.kpa1500_config_window {
@@ -7044,6 +7095,193 @@ impl App {
     /// its buffer; closing the window (Done / ESC / the window control) persists
     /// via `save_config`. Telemetry and control land in a later change — this
     /// window is the enable + connection surface.
+    /// The detached Settings window (FR-UI-23): tabbed by topic — Connection, Peers,
+    /// Spotting, Audio, K-Pod, KPA1500, Backup. Houses the connection form, peer cache and
+    /// master-password controls, which used to occupy a permanent panel / a modal overlay.
+    fn settings_window_view(&self) -> Element<'_, Message> {
+        set_active_theme(self.effective_theme());
+        let dim = role_color(ui::ColorRole::Inactive);
+        // Connection panel (FR-UI-01) — Ethernet or serial fields.
+        let fields: Column<Message> = if self.serial_mode {
+            Column::new()
+                .spacing(6)
+                .push(labeled(
+                    "Serial port",
+                    &self.serial_path,
+                    Message::SerialPathChanged,
+                ))
+                .push(labeled(
+                    "Baud",
+                    &self.serial_baud,
+                    Message::SerialBaudChanged,
+                ))
+        } else {
+            Column::new()
+                .spacing(6)
+                .push(labeled("Host", &self.host, Message::HostChanged))
+                .push(labeled("Port", &self.port, Message::PortChanged))
+                .push(secret("Password", &self.password, Message::PasswordChanged))
+        };
+        // Options and actions on separate rows so the buttons never get
+        // squeezed in the third-width panel (glyph-wrapped labels).
+        let mut conn_options = Row::new().spacing(6).push(small_btn_pair(
+            self.serial_mode,
+            "ETHERNET",
+            "SERIAL",
+            Message::ToggleSerialMode,
+        ));
+        if !self.serial_mode {
+            conn_options = conn_options
+                .push(tipped(
+                    self.tips_on(),
+                    self.hover,
+                    "conn.tls",
+                    Button::new(Text::new("TLS").size(12))
+                        .style(btn_style(if self.use_tls {
+                            BtnKind::Active
+                        } else {
+                            BtnKind::Plain
+                        }))
+                        .padding([4, 10])
+                        .on_press(Message::ToggleTls),
+                ))
+                .push(tipped(
+                    self.tips_on(),
+                    self.hover,
+                    "conn.remember",
+                    Button::new(Text::new("REMEMBER").size(12))
+                        .style(btn_style(if self.remember {
+                            BtnKind::Active
+                        } else {
+                            BtnKind::Plain
+                        }))
+                        .padding([4, 10])
+                        .on_press(Message::ToggleRemember),
+                ));
+        }
+        // Both buttons stay in place (FR-UI-16). The CONNECT button switches to
+        // CANCEL while an attempt is in flight, and cancels it; DISCONNECT stays
+        // put and also aborts a pending attempt (worker Disconnect = cancel).
+        let connecting = self.ui.phase == ui::ConnPhase::Connecting;
+        let (connect_label, connect_press, connect_btn_kind) = if connecting {
+            ("CANCEL", Message::Disconnect, BtnKind::Plain)
+        } else {
+            ("CONNECT", Message::Connect, BtnKind::Active)
+        };
+        let conn_actions = Row::new()
+            .spacing(6)
+            .push(tipped(
+                self.tips_on(),
+                self.hover,
+                "conn.connect",
+                Button::new(Text::new(connect_label).size(12))
+                    .style(btn_style(connect_btn_kind))
+                    .padding([5, 10])
+                    .on_press(connect_press),
+            ))
+            .push(small_btn("DISCONNECT", Message::Disconnect));
+        // The connection form now lives in the Settings dialog (FR-UI-23), along
+        // with the peer cache and master-password controls. It used to be one long
+        // scrolling column; it is tabbed by topic instead, so each section is seen
+        // without hunting through the others.
+        let settings_tab_btn = |tab: SettingsTab, label: &'static str| -> Element<Message> {
+            let kind = if self.settings_tab == tab {
+                BtnKind::Active
+            } else {
+                BtnKind::Plain
+            };
+            Button::new(Text::new(label).size(12))
+                .style(btn_style(kind))
+                .padding([5, 10])
+                .on_press(Message::SetSettingsTab(tab))
+                .into()
+        };
+        let settings_tabs = Row::new()
+            .spacing(6)
+            .push(settings_tab_btn(SettingsTab::Connection, "CONNECTION"))
+            .push(settings_tab_btn(SettingsTab::Peers, "PEERS"))
+            .push(settings_tab_btn(SettingsTab::Spotting, "SPOTTING"))
+            .push(settings_tab_btn(SettingsTab::Audio, "AUDIO"))
+            .push(settings_tab_btn(SettingsTab::Kpod, "K-POD"))
+            .push(settings_tab_btn(SettingsTab::Kpa1500, "KPA1500"))
+            .push(settings_tab_btn(SettingsTab::Backup, "BACKUP"));
+        let settings_body: Element<Message> = match self.settings_tab {
+            SettingsTab::Connection => Column::new()
+                .spacing(10)
+                .push(Text::new("Connection").size(12).color(dim))
+                .push(fields)
+                .push(conn_options)
+                .push(conn_actions)
+                .into(),
+            SettingsTab::Peers => Column::new()
+                .spacing(10)
+                .push(Text::new("Saved peers").size(12).color(dim))
+                .push(self.peer_list_view())
+                .push(Text::new("Peer-password storage").size(12).color(dim))
+                .push(self.master_section_view())
+                .into(),
+            SettingsTab::Spotting => Column::new()
+                .spacing(10)
+                .push(Text::new("Spot nameplates").size(12).color(dim))
+                .push(self.afterglow_settings_view())
+                .push(self.spot_settings_view())
+                .into(),
+            SettingsTab::Audio => Column::new()
+                .spacing(10)
+                .push(Text::new("Audio").size(12).color(dim))
+                .push(self.audio_section_view())
+                .into(),
+            SettingsTab::Kpod => Column::new()
+                .spacing(10)
+                .push(Text::new("K-Pod function switches").size(12).color(dim))
+                .push(self.kpod_buttons_view())
+                .into(),
+            SettingsTab::Kpa1500 => Column::new()
+                .spacing(10)
+                .push(Text::new("KPA1500 amplifier").size(12).color(dim))
+                .push(
+                    Row::new()
+                        .spacing(8)
+                        .align_y(Alignment::Center)
+                        .push(small_btn_pair(
+                            self.kpa1500_enabled,
+                            "Support: ON",
+                            "Support: OFF",
+                            Message::ToggleKpa1500,
+                        ))
+                        .push(small_btn("Configuration…", Message::ToggleKpa1500Window)),
+                )
+                .into(),
+            SettingsTab::Backup => Column::new()
+                .spacing(10)
+                .push(Text::new("K4 settings backup").size(12).color(dim))
+                .push(self.backup_section_view())
+                .into(),
+        };
+        // No in-content Close button: this is now a detached window (FR-UI-23), closed by
+        // the OS window chrome or ESC, like the KPA1500 and Networks windows. That also
+        // removes the reason for one: the button used to sit right after the tab content,
+        // so its position moved with each tab's height.
+        let settings_inner = Column::new()
+            .spacing(10)
+            .push(settings_tabs)
+            .push(settings_body);
+        Container::new(scrollable(
+            // Inset the content so the scrollbar doesn't overlap it.
+            Container::new(settings_inner).padding(iced::Padding {
+                top: 0.0,
+                right: 16.0,
+                bottom: 0.0,
+                left: 0.0,
+            }),
+        ))
+        .style(panel_style)
+        .padding(18)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+    }
+
     fn kpa1500_config_view(&self) -> Element<'_, Message> {
         set_active_theme(self.effective_theme());
         let dim = role_color(ui::ColorRole::Inactive);
@@ -7247,6 +7485,8 @@ impl App {
             "K4 Remote — KPA1500".into()
         } else if Some(window) == self.spot_config_window {
             "K4 Remote — Spot networks".into()
+        } else if Some(window) == self.settings_window {
+            "K4 Remote — Settings".into()
         } else {
             "K4 Remote".into()
         }
@@ -7266,6 +7506,10 @@ impl App {
         // The detached spot-networks window (FR-SPOT-04).
         if Some(window) == self.spot_config_window {
             return self.spot_config_view();
+        }
+        // The detached Settings window (FR-UI-23).
+        if Some(window) == self.settings_window {
+            return self.settings_window_view();
         }
         let dim = role_color(ui::ColorRole::Inactive);
 
@@ -7337,13 +7581,13 @@ impl App {
                 .padding([5, 10])
                 .on_press(Message::ToggleAbout),
         );
-        // Settings dialog (FR-UI-23) — houses the connection form + peer cache.
+        // Settings window (FR-UI-23) — houses the connection form + peer cache.
         let settings_btn = tipped(
             self.tips_on(),
             self.hover,
             "app.settings",
             Button::new(Text::new("Settings").size(12))
-                .style(btn_style(if self.settings_open {
+                .style(btn_style(if self.settings_window.is_some() {
                     BtnKind::Active
                 } else {
                     BtnKind::Plain
@@ -8460,146 +8704,6 @@ impl App {
         .padding(12)
         .width(Length::Fill);
 
-        // Connection panel (FR-UI-01) — Ethernet or serial fields.
-        let fields: Column<Message> = if self.serial_mode {
-            Column::new()
-                .spacing(6)
-                .push(labeled(
-                    "Serial port",
-                    &self.serial_path,
-                    Message::SerialPathChanged,
-                ))
-                .push(labeled(
-                    "Baud",
-                    &self.serial_baud,
-                    Message::SerialBaudChanged,
-                ))
-        } else {
-            Column::new()
-                .spacing(6)
-                .push(labeled("Host", &self.host, Message::HostChanged))
-                .push(labeled("Port", &self.port, Message::PortChanged))
-                .push(secret("Password", &self.password, Message::PasswordChanged))
-        };
-        // Options and actions on separate rows so the buttons never get
-        // squeezed in the third-width panel (glyph-wrapped labels).
-        let mut conn_options = Row::new().spacing(6).push(small_btn_pair(
-            self.serial_mode,
-            "ETHERNET",
-            "SERIAL",
-            Message::ToggleSerialMode,
-        ));
-        if !self.serial_mode {
-            conn_options = conn_options
-                .push(tipped(
-                    self.tips_on(),
-                    self.hover,
-                    "conn.tls",
-                    Button::new(Text::new("TLS").size(12))
-                        .style(btn_style(if self.use_tls {
-                            BtnKind::Active
-                        } else {
-                            BtnKind::Plain
-                        }))
-                        .padding([4, 10])
-                        .on_press(Message::ToggleTls),
-                ))
-                .push(tipped(
-                    self.tips_on(),
-                    self.hover,
-                    "conn.remember",
-                    Button::new(Text::new("REMEMBER").size(12))
-                        .style(btn_style(if self.remember {
-                            BtnKind::Active
-                        } else {
-                            BtnKind::Plain
-                        }))
-                        .padding([4, 10])
-                        .on_press(Message::ToggleRemember),
-                ));
-        }
-        // Both buttons stay in place (FR-UI-16). The CONNECT button switches to
-        // CANCEL while an attempt is in flight, and cancels it; DISCONNECT stays
-        // put and also aborts a pending attempt (worker Disconnect = cancel).
-        let connecting = self.ui.phase == ui::ConnPhase::Connecting;
-        let (connect_label, connect_press, connect_btn_kind) = if connecting {
-            ("CANCEL", Message::Disconnect, BtnKind::Plain)
-        } else {
-            ("CONNECT", Message::Connect, BtnKind::Active)
-        };
-        let conn_actions = Row::new()
-            .spacing(6)
-            .push(tipped(
-                self.tips_on(),
-                self.hover,
-                "conn.connect",
-                Button::new(Text::new(connect_label).size(12))
-                    .style(btn_style(connect_btn_kind))
-                    .padding([5, 10])
-                    .on_press(connect_press),
-            ))
-            .push(small_btn("DISCONNECT", Message::Disconnect));
-        // The connection form now lives in the Settings dialog (FR-UI-23), along
-        // with the peer cache and master-password controls.
-        let settings_inner = Column::new()
-            .spacing(10)
-            .push(Text::new("Settings").size(18))
-            .push(Text::new("Connection").size(12).color(dim))
-            .push(fields)
-            .push(conn_options)
-            .push(conn_actions)
-            .push(Text::new("Saved peers").size(12).color(dim))
-            .push(self.peer_list_view())
-            .push(Text::new("Peer-password storage").size(12).color(dim))
-            .push(self.master_section_view())
-            .push(Text::new("Audio").size(12).color(dim))
-            .push(self.audio_section_view())
-            .push(Text::new("K4 settings backup").size(12).color(dim))
-            .push(self.backup_section_view())
-            .push(Text::new("K-Pod function switches").size(12).color(dim))
-            .push(self.kpod_buttons_view())
-            .push(Text::new("Spot nameplates").size(12).color(dim))
-            .push(self.afterglow_settings_view())
-            .push(self.spot_settings_view())
-            .push(Text::new("KPA1500 amplifier").size(12).color(dim))
-            .push(
-                Row::new()
-                    .spacing(8)
-                    .align_y(Alignment::Center)
-                    .push(small_btn_pair(
-                        self.kpa1500_enabled,
-                        "Support: ON",
-                        "Support: OFF",
-                        Message::ToggleKpa1500,
-                    ))
-                    .push(small_btn("Configuration…", Message::ToggleKpa1500Window)),
-            )
-            .push(
-                Container::new(
-                    Row::new()
-                        .push(horizontal_space())
-                        .push(small_btn("Close", Message::ToggleSettings)),
-                )
-                .width(Length::Fill)
-                .padding([10, 0]),
-            );
-        let settings_card: Element<Message> = modal_scrim(
-            Container::new(scrollable(
-                // Inset the content so the scrollbar doesn't overlap it.
-                Container::new(settings_inner).padding(iced::Padding {
-                    top: 0.0,
-                    right: 16.0,
-                    bottom: 0.0,
-                    left: 0.0,
-                }),
-            ))
-            .style(panel_style)
-            .padding(18)
-            .width(Length::Fixed(500.0))
-            .max_height(720.0)
-            .into(),
-        );
-
         // The diagnostics console lives in its own window now (FR-DIAG-04), so
         // the transmit panel stretches across the whole bottom row.
         let bottom: Element<Message> = tx_panel.into();
@@ -8619,17 +8723,15 @@ impl App {
 
         let content = Container::new(scrollable(body)).width(Length::Fill);
 
-        // Modal dialogs over a dimming scrim: Settings (FR-UI-23) / About.
-        // The RX settings popup (FR-UI-POPUP-01) sits above both, matching the
-        // order ESC dismisses them in.
+        // Modal dialogs over a dimming scrim: About. Settings is a detached window now
+        // (FR-UI-23), not an overlay here. The RX settings popup (FR-UI-POPUP-01) sits
+        // above the rest, matching the order ESC dismisses them in.
         if let Some(p) = self.rx_popup {
             stack![content, self.rx_popup_overlay(p)].into()
         } else if self.memories_open {
             stack![content, self.memories_overlay()].into()
         } else if self.dtmf_open {
             stack![content, self.dtmf_overlay()].into()
-        } else if self.settings_open {
-            stack![content, settings_card].into()
         } else if self.about_open {
             stack![content, self.about_overlay()].into()
         } else {
@@ -11126,6 +11228,112 @@ mod afterglow_wiring_tests {
         assert!(
             code.contains(".on_input(Message::AfterglowChanged)"),
             "the field does not send its edits"
+        );
+    }
+}
+
+#[cfg(test)]
+mod settings_tabs_wiring_tests {
+    /// FR-UI-23: the Settings window is tabbed by topic rather than one long scrolling column, and
+    /// every section that used to be reachable by scrolling must still be reachable through some
+    /// tab — a section silently dropped during the split would be a real regression a screenshot
+    /// would not obviously catch (it just looks like a shorter window). It is a detached OS
+    /// window, like KPA1500/Networks/Diagnostics, not a modal overlay: opened and closed through
+    /// `iced::window`, at a fixed initial size, with no in-content Close button (the button used
+    /// to sit right after the tab content, so its position moved with each tab's height — a real
+    /// window's own close, or ESC, replaces it). Structural, reading only the code above this
+    /// module so the needles cannot match this test's own text.
+    /// trace: FR-UI-23
+    #[test]
+    fn fr_ui_23_every_settings_section_is_reachable_through_a_tab() {
+        let whole = include_str!("main.rs");
+        let code = &whole[..whole
+            .find(concat!("mod settings_tabs_wiring", "_tests {"))
+            .expect("the test module")];
+        let between = |from: &str, to: &str| {
+            let a = code.find(from).unwrap_or_else(|| panic!("no `{from}`"));
+            let b = code[a..]
+                .find(to)
+                .unwrap_or_else(|| panic!("no end for `{from}`"));
+            &code[a..a + b]
+        };
+        // Opening the dialog always starts on a known tab, not whatever was last selected.
+        let toggle = between(
+            "Message::ToggleSettings => {",
+            "Message::SetSettingsTab(tab)",
+        );
+        assert!(
+            toggle.contains("self.settings_tab = SettingsTab::default();"),
+            "opening Settings does not reset the tab:\n{toggle}"
+        );
+        assert!(
+            code.contains("Message::SetSettingsTab(tab) => self.settings_tab = tab,"),
+            "selecting a tab does not reach the state"
+        );
+        // Every tab has a button that can select it.
+        for tab in [
+            "Connection",
+            "Peers",
+            "Spotting",
+            "Audio",
+            "Kpod",
+            "Kpa1500",
+            "Backup",
+        ] {
+            assert!(
+                code.contains(&format!("settings_tab_btn(SettingsTab::{tab}")),
+                "no button selects the {tab} tab"
+            );
+        }
+        // Every section that lived in the old single column is still shown somewhere.
+        for view_call in [
+            ".push(fields)",       // Connection: host/port/password/serial
+            ".push(conn_actions)", // Connection: connect/disconnect
+            "self.peer_list_view()",
+            "self.master_section_view()",
+            "self.afterglow_settings_view()",
+            "self.spot_settings_view()",
+            "self.audio_section_view()",
+            "self.kpod_buttons_view()",
+            "self.backup_section_view()",
+            "Message::ToggleKpa1500Window", // KPA1500 configuration entry point
+        ] {
+            assert!(
+                code.contains(view_call),
+                "a Settings section went missing in the tab split: {view_call}"
+            );
+        }
+        // The window's own size, scoped to just its settings function so a size declared for a
+        // different window cannot satisfy or falsify this.
+        let win = between(
+            "fn settings_window_settings() -> iced::window::Settings {",
+            "\n}",
+        );
+        // The widened window (FR-UI-23, 1.8x the original 500px dialog) is a contract pin, not
+        // a derived fixture — mutate this literal by hand to verify the test catches it.
+        assert!(
+            win.contains("iced::Size::new(900.0, 720.0)"),
+            "the Settings window is not the widened, fixed size:\n{win}"
+        );
+        // It really is a detached window, opened/closed like its siblings — not a modal overlay
+        // sized inside the main content.
+        assert!(
+            code.contains("iced::window::open(settings_window_settings())"),
+            "Settings does not open as its own window"
+        );
+        assert!(
+            code.contains("Some(window) == self.settings_window"),
+            "the view/title functions do not route the Settings window"
+        );
+        assert!(
+            code.contains("if Some(id) == self.settings_window {"),
+            "closing the Settings window (e.g. via the OS chrome) is not handled"
+        );
+        // No in-content Close button: that is the whole point of making this a real window —
+        // its position used to move with each tab's height, and a real window has its own close.
+        assert!(
+            !code.contains(r#"small_btn("Close", Message::ToggleSettings)"#),
+            "an in-content Close button crept back in — the point of the window was to remove it"
         );
     }
 }

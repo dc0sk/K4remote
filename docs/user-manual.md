@@ -2,7 +2,7 @@
 title: "K4 Remote — User Manual"
 status: Draft
 version: "0.9.0"
-updated: 2026-09-21
+updated: 2026-09-22
 authors:
   - Simon Keimer (DC0SK)
 ---
@@ -85,11 +85,12 @@ cargo run -p k4remote --no-default-features --features audio-device
 
 ## 2. Connecting to your K4
 
-All connection settings live in the **Settings** dialog — open it from the **Settings** button
-in the header.
+All connection settings live in the **Settings** window — open it from the **Settings** button
+in the header. It has its own window, like Networks, KPA1500 and Diagnostics, and closes with
+the window's own controls or **ESC**.
 
-> 📷 **Screenshot needed — `screenshots/settings-connection.png`:** The Settings dialog open at
-> the **Connection** section, showing the host / port / TLS fields and the Saved peers list.
+> 📷 **Screenshot needed — `screenshots/settings-connection.png`:** The Settings window open on
+> the **Connection** tab, showing the host / port / TLS fields.
 
 ### Connection types
 
@@ -373,7 +374,7 @@ runs a **CAT macro**: a string of K4 commands sent to the radio when you press t
 mirrors how the K-Pod's macros work on a standalone K4, but the app holds the table (the K4
 exposes no way to read or write its stored macros remotely).
 
-Configure them in **Settings → K-Pod function switches**:
+Configure them in **Settings → K-Pod**:
 
 - Each row is one slot (**F1 tap**, **F1 hold**, … **F8 hold**).
 - Pick a **preset** from the list (shown as `label — description`) to fill the slot, **or** type
@@ -418,26 +419,29 @@ The log keeps several thousand recent lines; the header shows how many are curre
 
 Open **Settings** from the header; press **ESC** (or **Close**) to dismiss it.
 
-| Section | What it holds |
+The dialog is organized into tabs, one per topic, so a setting is found by its tab rather than by
+scrolling:
+
+| Tab | What it holds |
 |---|---|
 | **Connection** | Host, port, TLS, password, Remember, Connect/Disconnect |
-| **Saved peers** | Reconnect to / delete stored peers |
-| **Peer-password storage** | OS-keychain master controls |
-| **Audio** | Speaker/Mic device selection, Volume, Mic gain, mute-radio-monitor, mode-adaptive UI toggle, K-Pod on/off |
-| **K4 settings backup** | Export the radio's settings to a SHA-256-stamped `.cfg`, and import one back |
-| **K-Pod function switches** | The 16-slot F1–F8 tap/hold macro editor |
-| **Spectrum afterglow** | How long a peak lingers on the spectrum trace, in milliseconds (0 = off) |
-| **Spot nameplates** | How old a spot may be before it is hidden, and a **Networks…** window to choose and configure the spotting networks |
+| **Peers** | Reconnect to / delete stored peers; OS-keychain master controls |
+| **Spotting** | Spectrum afterglow; how old a spot may be before it is hidden, and a **Networks…** window to choose and configure the spotting networks |
+| **Audio** | Speaker/Mic device selection, Volume, Mic gain, mute-radio-monitor, mode-adaptive UI toggle |
+| **K-Pod** | K-Pod on/off, and the 16-slot F1–F8 tap/hold macro editor |
+| **KPA1500** | Amplifier support on/off, and the **Configuration…** window |
+| **Backup** | Export the radio's settings to a SHA-256-stamped `.cfg`, and import one back |
 
 The **theme** (dark / light / high-contrast / follow-system) cycles from the header.
 
 ### Spectrum afterglow
 
-By default the spectrum trace shows only the newest row, so a brief signal is gone the moment it stops.
-Set **Settings → Spectrum afterglow** to a number of milliseconds and a peak lingers and fades instead:
+By default a peak lingers on the spectrum trace for 500 ms and fades, rather than disappearing the
+moment it stops (a brief signal — a CW dit, an FT8 tone — would otherwise be gone instantly, since the
+trace normally shows only the newest row). Change it in **Settings → Spotting → Spectrum afterglow**:
 the trail is drawn under the live trace as a faint fill with a dimmer outline. A peak falls **4.3 dB every
 time you enter** (so 500 is a gentle trail, and 3000 holds a signal for several seconds); it rises at once,
-never lags a stronger signal, and is never below the live trace. **0 is off**; otherwise 50 to 5000. It
+never lags a stronger signal, and is never below the live trace. **0 turns it off**; otherwise 50 to 5000. It
 takes effect as you type. The trail restarts when the pan moves or changes span, and the waterfall is not
 affected.
 
@@ -448,7 +452,7 @@ down to the trace at the station's frequency. Plates that would overlap are stac
 lanes, and any that do not fit are counted as **+N** in the corner. A spot older than the limit in
 Settings (default 15 minutes), or outside the view, is not shown.
 
-Everything is **off until you turn it on**. Open **Settings → Spot nameplates → Networks…**:
+Everything is **off until you turn it on**. Open **Settings → Spotting → Networks…**:
 
 - **RBN** (Reverse Beacon Network) — CW/RTTY skimmer spots. The relay server is prefilled but off.
   RBN asks that end-users connect to a **DX cluster that carries its spots** rather than to its own
