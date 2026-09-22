@@ -21,8 +21,15 @@ impl std::error::Error for SecretError {}
 
 /// A keyed secret store (account → secret).
 pub trait SecretStore: Send + Sync {
-    /// Retrieve the secret for `account`, or `None` if absent/unavailable.
-    fn get(&self, account: &str) -> Option<String>;
+    /// Retrieve the secret for `account`.
+    ///
+    /// `Ok(None)` means no secret is stored for this account — not an error, and
+    /// not to be confused with the next case. `Err` means the store itself could
+    /// not be read (backend unavailable, keyring locked, ...); a caller that
+    /// treats this the same as `Ok(None)` turns "I could not check" into "there is
+    /// no saved password", which is how a keychain outage silently becomes a
+    /// blank-password connection attempt with no visible reason (FR-CFG-08).
+    fn get(&self, account: &str) -> Result<Option<String>, SecretError>;
     /// Store `secret` for `account`.
     fn set(&self, account: &str, secret: &str) -> Result<(), SecretError>;
     /// Remove the secret for `account` (no error if absent).
@@ -44,8 +51,13 @@ impl MemoryStore {
 }
 
 impl SecretStore for MemoryStore {
-    fn get(&self, account: &str) -> Option<String> {
-        self.map.lock().ok()?.get(account).cloned()
+    fn get(&self, account: &str) -> Result<Option<String>, SecretError> {
+        Ok(self
+            .map
+            .lock()
+            .map_err(|e| SecretError(e.to_string()))?
+            .get(account)
+            .cloned())
     }
     fn set(&self, account: &str, secret: &str) -> Result<(), SecretError> {
         self.map
@@ -64,8 +76,10 @@ impl SecretStore for MemoryStore {
 }
 
 /// OS-keychain store (Secret Service / macOS Keychain / Windows Credential
-/// Manager) via the `keyring` crate. Operations degrade gracefully when no
-/// keychain service is available.
+/// Manager) via the `keyring` crate. A missing entry is reported as `Ok(None)`;
+/// anything else that stops a read from completing (no keychain service, a
+/// locked keyring, ...) is reported as `Err`, not folded into "no entry" — see
+/// [`SecretStore::get`].
 #[cfg(feature = "keychain")]
 pub struct KeyringStore {
     service: String,
@@ -83,10 +97,15 @@ impl KeyringStore {
 
 #[cfg(feature = "keychain")]
 impl SecretStore for KeyringStore {
-    fn get(&self, account: &str) -> Option<String> {
-        keyring::Entry::new(&self.service, account)
-            .ok()
-            .and_then(|e| e.get_password().ok())
+    fn get(&self, account: &str) -> Result<Option<String>, SecretError> {
+        let entry =
+            keyring::Entry::new(&self.service, account).map_err(|e| SecretError(e.to_string()))?;
+        match entry.get_password() {
+            Ok(pw) => Ok(Some(pw)),
+            // Absent entry is not an error — see the trait doc comment.
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(e) => Err(SecretError(e.to_string())),
+        }
     }
     fn set(&self, account: &str, secret: &str) -> Result<(), SecretError> {
         keyring::Entry::new(&self.service, account)

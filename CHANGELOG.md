@@ -101,6 +101,17 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
   same way the OS-keychain read already is, and time out on their own
   rather than blocking the others.
 
+### Fixed
+
+- **A saved password that failed to load from the OS keychain connected
+  silently with a blank one instead.** If the keychain read failed — a locked
+  or unreachable keyring, a timeout — it looked exactly like "no password was
+  ever saved", so the app tried to connect anyway with an empty password and
+  gave no reason for the immediate disconnect that followed. It now shows a
+  warning next to the password field naming the problem, so it is visible
+  before you click Connect instead of looking like an unexplained connection
+  failure.
+
 ## [0.9.0] — 2026-07-27
 
 ### Added
