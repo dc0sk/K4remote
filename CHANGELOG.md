@@ -76,6 +76,18 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
   drawing; the app also does this by itself when no graphics adapter is found.
 - `--demo` now shows a live, moving spectrum so the panadapter can be inspected
   without a radio.
+- **Spectrum afterglow is on by default (500 ms)**, instead of off. It was easy
+  to miss as a new, disabled-by-default setting; a gentle trail now shows out
+  of the box, and `0` in Settings still turns it off. An existing config
+  saved by an earlier build is migrated to the new default **once**, the
+  first time it is loaded — a `0` you set **after** upgrading is your choice
+  and is kept.
+- **Settings is now its own window**, like Networks, KPA1500 and Diagnostics,
+  instead of a dialog over the main window. It is tabbed (Connection, Peers,
+  Spotting, Audio, K-Pod, KPA1500, Backup) instead of one long scrolling
+  column, 80% wider, and a **fixed size**, so it no longer resizes as you
+  switch between tabs with different amounts of content. Close it with the
+  window's own controls or **ESC**.
 
 ## [0.9.0] — 2026-07-27
 

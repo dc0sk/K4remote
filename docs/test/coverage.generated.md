@@ -41,6 +41,7 @@ Legend: ✅ test-traced · 🟡 waived (see r3-waivers.md) · ⚪ not test-requi
 | `FR-CFG-05` | S | T/D | ✅ |
 | `FR-CFG-06` | C | T | ✅ |
 | `FR-CFG-07` | C | T | ✅ |
+| `FR-CFG-09` | S | T | ✅ |
 | `FR-CONN-01` | M | T | ✅ |
 | `FR-CONN-02` | M | T | ✅ |
 | `FR-CONN-03` | M | T | ✅ |
@@ -172,7 +173,7 @@ Legend: ✅ test-traced · 🟡 waived (see r3-waivers.md) · ⚪ not test-requi
 | `FR-UI-20` | S | T/D | ✅ |
 | `FR-UI-21` | C | T/D | ✅ |
 | `FR-UI-22` | C | T/D | ✅ |
-| `FR-UI-23` | S | D | ⚪ |
+| `FR-UI-23` | S | D | ✅ |
 | `FR-UI-24` | C | T | ✅ |
 | `FR-UI-ALT-01` | C | T/D | ✅ |
 | `FR-UI-HOLD-01` | S | T/D | ✅ |

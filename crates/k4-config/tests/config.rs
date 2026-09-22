@@ -36,6 +36,7 @@ fn fr_cfg_01_toml_roundtrip() {
             ..Default::default()
         },
         peers: Default::default(),
+        ..Default::default()
     };
     let toml = cfg.to_toml().unwrap();
     assert_eq!(Config::from_toml(&toml).unwrap(), cfg);
@@ -118,6 +119,7 @@ fn fr_cfg_01_save_load_file_roundtrip() {
             ..Default::default()
         },
         peers: Default::default(),
+        ..Default::default()
     };
     cfg.save(&path).unwrap();
     assert_eq!(Config::load(&path), cfg);
@@ -654,12 +656,17 @@ fn fr_spot_13_trusted_certificates_persist_and_are_validated() {
 #[test]
 fn fr_pan_14_afterglow_setting_persists_and_is_bounded() {
     use k4_config::{
-        parse_afterglow_ms, sanitise_afterglow_ms, AFTERGLOW_MAX_MS, AFTERGLOW_MIN_MS,
+        parse_afterglow_ms, sanitise_afterglow_ms, AFTERGLOW_DEFAULT_MS, AFTERGLOW_MAX_MS,
+        AFTERGLOW_MIN_MS,
     };
+    // A user-requested, documented default: pinned as a literal so it can't drift by one
+    // with nothing failing (mutate this by hand to check — cargo-mutants does not mutate
+    // `const` items).
+    assert_eq!(AFTERGLOW_DEFAULT_MS, 500);
     assert_eq!(
         Prefs::default().spectrum_afterglow_ms(),
-        0,
-        "off by default"
+        AFTERGLOW_DEFAULT_MS,
+        "on by default, at a gentle trail length"
     );
 
     let prefs = Prefs {
@@ -669,9 +676,14 @@ fn fr_pan_14_afterglow_setting_persists_and_is_bounded() {
     let back: Prefs = toml::from_str(&toml::to_string(&prefs).expect("serialize")).expect("parse");
     assert_eq!(back.spectrum_afterglow_ms(), 750);
 
-    // A config from before this feature loads as off.
+    // A config from before this feature existed has no opinion on it, so it picks up
+    // today's default rather than being silently switched off.
     let old: Prefs = toml::from_str("tune_step_hz = 100").expect("legacy config");
-    assert_eq!(old.spectrum_afterglow_ms(), 0);
+    assert_eq!(old.spectrum_afterglow_ms(), AFTERGLOW_DEFAULT_MS);
+
+    // A config that explicitly saved `0` (e.g. from before the default changed, or an
+    // operator choosing it off) keeps that choice — the loop below covers `0` alongside
+    // every other hand-edited value, so it is not repeated here.
 
     // A hand-edited value is brought into range when read.
     for (stray, want) in [
@@ -701,4 +713,55 @@ fn fr_pan_14_afterglow_setting_persists_and_is_bounded() {
     for bad in ["", "abc", "-5", "1.5", "5 0", "٣٠٠", "4294967296"] {
         assert_eq!(parse_afterglow_ms(bad), 0, "entry {bad:?}");
     }
+}
+
+/// FR-CFG-09: the one-time afterglow-default migration, at the `Config` level (not `Prefs`
+/// alone — the flag that distinguishes "never migrated" from "deliberately off" lives on
+/// `Config`, so a bare `Prefs` deserialize, as above, does not exercise it).
+///
+/// trace: FR-CFG-09
+#[test]
+fn fr_cfg_09_afterglow_migrates_once_and_respects_a_later_choice() {
+    use k4_config::AFTERGLOW_DEFAULT_MS;
+
+    // A file saved by a build before this migration existed: an explicit `0` (the old
+    // default, never a deliberate choice) and no migration flag at all. It must come back
+    // as today's default, and the file must now say so was migrated.
+    let path = std::env::temp_dir().join(format!("k4cfg-migrate-old-{}.toml", std::process::id()));
+    std::fs::write(
+        &path,
+        "[prefs]\ntune_step_hz = 100\nspectrum_afterglow_ms = 0\n",
+    )
+    .unwrap();
+    let loaded = Config::load(&path);
+    assert_eq!(
+        loaded.prefs.spectrum_afterglow_ms(),
+        AFTERGLOW_DEFAULT_MS,
+        "an old file's implicit 0 must be promoted to today's default"
+    );
+    assert!(
+        loaded.afterglow_default_migrated,
+        "a loaded config must record that migration has now run"
+    );
+    let _ = std::fs::remove_file(&path);
+
+    // A file already marked migrated, with an explicit `0`: the operator chose it after
+    // upgrading, and it must NOT be silently promoted back to the default.
+    let path2 = std::env::temp_dir().join(format!("k4cfg-migrate-new-{}.toml", std::process::id()));
+    std::fs::write(
+        &path2,
+        "afterglow_default_migrated = true\n[prefs]\ntune_step_hz = 100\nspectrum_afterglow_ms = 0\n",
+    )
+    .unwrap();
+    let loaded2 = Config::load(&path2);
+    assert_eq!(
+        loaded2.prefs.spectrum_afterglow_ms(),
+        0,
+        "a deliberate 0, chosen after migration, must be respected, not overridden"
+    );
+    let _ = std::fs::remove_file(&path2);
+
+    // A brand new, never-saved config has nothing to migrate and is marked as such by
+    // construction, not by having actually run the migration.
+    assert!(Config::default().afterglow_default_migrated);
 }
