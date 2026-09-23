@@ -435,9 +435,26 @@ pub struct WaterfallProgram {
     pub view: View,
 }
 
-/// Frames the waterfall has been asked to draw, for the opt-in `K4_FPS=1` frame-rate line. The
-/// window is redrawn as a whole, so this is the window's frame count.
+/// Window frames drawn with a waterfall in them, for the opt-in `K4_FPS=1` frame-rate line.
 pub static FRAMES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The `now` of the last redraw counted in [`FRAMES`].
+static LAST_FRAME: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
+
+/// Whether a redraw at `now` is a window frame not yet counted.
+///
+/// Every pane gets the **same** `RedrawRequested(now)` for one window redraw — iced makes one
+/// `Instant` per redraw and hands that event to the whole widget tree — so counting once per pane,
+/// as the first version did, reported a dual A+B view at twice its real frame rate (found on the
+/// radio: 40 in dual, 20 in single, for the same stream).
+fn first_sight(last: &mut Option<Instant>, now: Instant) -> bool {
+    if *last == Some(now) {
+        false
+    } else {
+        *last = Some(now);
+        true
+    }
+}
 
 /// With `K4_FPS=1` in the environment, print `FPS <frames in the last second>` once a second to
 /// stderr. A measurement aid: how often the window really redraws is what GPU load follows.
@@ -532,7 +549,12 @@ impl<Message> shader::Program<Message> for WaterfallProgram {
         shell: &mut Shell<'_, Message>,
     ) -> (iced::event::Status, Option<Message>) {
         if let shader::Event::RedrawRequested(now) = event {
-            FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if LAST_FRAME
+                .lock()
+                .is_ok_and(|mut last| first_sight(&mut last, now))
+            {
+                FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
             let total = self.pan.lock().map(|p| p.total(self.rx)).unwrap_or(0);
             if let Some(at) = state.next_frame_at(total, now) {
                 shell.request_redraw(RedrawRequest::At(at));
@@ -1182,6 +1204,37 @@ mod redraw_tests {
         );
     }
 
+    /// FR-PAN-13: the `K4_FPS` line counts **window** frames, not pane redraws. Both panes of a
+    /// dual view receive the same `now` for one window redraw; counting per pane read a dual view
+    /// at twice its real rate (40 against 20 in single view, on the radio, for the same stream).
+    /// trace: FR-PAN-13
+    #[test]
+    fn fr_pan_13_the_frame_count_is_per_window_not_per_pane() {
+        let t0 = Instant::now();
+        let mut last = None;
+        let mut counted = 0;
+        for frame in 0..100u64 {
+            let now = t0 + Duration::from_millis(50 * frame);
+            // Two panes, one window redraw: the same `now` twice.
+            for _pane in 0..2 {
+                if first_sight(&mut last, now) {
+                    counted += 1;
+                }
+            }
+        }
+        assert_eq!(
+            counted, 100,
+            "a dual view must count each window frame once"
+        );
+
+        // A single pane is unchanged: every distinct redraw counts.
+        let mut last = None;
+        let single = (0..100u64)
+            .filter(|f| first_sight(&mut last, t0 + Duration::from_millis(50 * f)))
+            .count();
+        assert_eq!(single, 100);
+    }
+
     /// FR-PAN-13: frames follow the *row* rate, not the display's. A stream of 30 rows a second
     /// is drawn at about 30 frames a second — every row shown, and half the frames of a 60 Hz
     /// chain — a faster stream never exceeds the cap, and a slower one never drops below the UI
@@ -1251,6 +1304,16 @@ mod redraw_tests {
         assert!(
             !code.contains("RedrawRequest::NextFrame"),
             "something else in the widget asks for every frame"
+        );
+        // The `K4_FPS` count goes through the per-window dedupe, and nowhere else.
+        assert!(
+            update.contains("first_sight(&mut last, now)"),
+            "update counts frames without the per-window dedupe:\n{update}"
+        );
+        assert_eq!(
+            code.matches("FRAMES.fetch_add").count(),
+            1,
+            "the frame counter is incremented in more than one place"
         );
     }
 
