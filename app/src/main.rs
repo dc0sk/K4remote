@@ -10021,7 +10021,8 @@ fn tipped<'a>(
     let inner: Element<'a, Message> = if dwelt {
         Tooltip::new(
             content,
-            Container::new(Text::new(text).size(11))
+            // 14 px (from 11, at DC0SK's request, 2026-09-24): a hint is read at a glance.
+            Container::new(Text::new(text).size(14))
                 .padding([4, 8])
                 .style(|theme: &Theme| {
                     let p = theme.extended_palette();

@@ -5,7 +5,7 @@ use crate::layout::{CHAR_W, PLATE_PAD};
 use crate::{Network, Spot};
 
 /// Height of one tooltip line, pixels.
-pub const LINE_H: f32 = 12.0;
+pub const LINE_H: f32 = crate::layout::TEXT_PX + 3.0;
 
 /// A frequency as megahertz to the hertz, e.g. `14.074742 MHz`.
 pub fn format_freq_mhz(hz: u64) -> String {

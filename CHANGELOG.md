@@ -88,6 +88,10 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
   column, 80% wider, and a **fixed size**, so it no longer resizes as you
   switch between tabs with different amounts of content. Close it with the
   window's own controls or **ESC**.
+- **Larger text on the spectrum and in hover hints.** The frequency axis, the
+  dB scale, the span readout, the spot nameplates and their tooltips are now
+  12 px (from 9), with the plates sized to match; the hints that appear when
+  you rest the pointer on a control are 14 px (from 11).
 
 ### Fixed
 
