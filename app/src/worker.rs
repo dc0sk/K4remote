@@ -91,6 +91,9 @@ pub struct PanShared {
     total: [u64; 2],
     /// The spectrum afterglow of each receiver (FR-PAN-14), advanced as each row arrives.
     glow: [crate::afterglow::Afterglow; 2],
+    /// When each receiver's newest row arrived: the redraw chain schedules from this (FR-PAN-13),
+    /// so a frame lands just after a row does, whatever else caused the last redraw.
+    arrived: [Option<std::time::Instant>; 2],
 }
 
 impl PanShared {
@@ -109,6 +112,7 @@ impl PanShared {
             self.rows[rx].pop_back();
         }
         self.total[rx] += 1;
+        self.arrived[rx] = Some(now);
     }
 
     /// Forget the history (disconnect, or the pan was reset). `total` keeps counting.
@@ -138,6 +142,11 @@ impl PanShared {
     /// Rows ever pushed for `rx`.
     pub fn total(&self, rx: usize) -> u64 {
         self.total[rx.min(1)]
+    }
+
+    /// When the newest row for `rx` arrived; `None` before the first.
+    pub fn arrived(&self, rx: usize) -> Option<std::time::Instant> {
+        self.arrived[rx.min(1)]
     }
 
     /// The most recent row for `rx`.
@@ -1909,6 +1918,38 @@ mod kpod {
 
 #[cfg(test)]
 mod tests {
+    /// FR-PAN-13: the pan history stamps when each receiver's newest row arrived — the redraw chain
+    /// schedules from this, so without it the chain never runs and only the UI tick draws — per
+    /// receiver, from the time the row came in, and a cleared history keeps it (the stream's
+    /// timing did not change).
+    /// trace: FR-PAN-13
+    #[test]
+    fn fr_pan_13_the_history_stamps_each_receivers_arrivals() {
+        use std::time::{Duration, Instant};
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        let row = PanRow {
+            bins: vec![-100.0],
+            center_hz: 14_074_000,
+            span_hz: 48_000,
+        };
+        let mut pan = PanShared::default();
+        assert_eq!(pan.arrived(0), None, "nothing has arrived yet");
+        pan.push_at(0, row.clone(), at(100));
+        assert_eq!(pan.arrived(0), Some(at(100)));
+        assert_eq!(pan.arrived(1), None, "receiver 1 has had nothing");
+        pan.push_at(1, row.clone(), at(130));
+        pan.push_at(0, row, at(183));
+        assert_eq!(
+            pan.arrived(0),
+            Some(at(183)),
+            "the newest arrival, not the first"
+        );
+        assert_eq!(pan.arrived(1), Some(at(130)));
+        pan.clear(0);
+        assert_eq!(pan.arrived(0), Some(at(183)));
+    }
+
     /// FR-PAN-14: the shared pan history feeds each receiver's afterglow as its rows arrive, keeps
     /// the two apart, drops it when the history is cleared or the trail is switched off, and shows
     /// nothing while the trail is off.
