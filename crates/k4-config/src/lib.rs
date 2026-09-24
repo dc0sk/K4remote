@@ -605,6 +605,35 @@ fn default_freedv_port() -> u16 {
     SPOT_FREEDV_DEFAULT_PORT
 }
 
+/// Default and bounds for how often FreeDV Reporter re-stamps a station still on the air, seconds
+/// (FR-SPOT-08; the default was 30 s until DC0SK found it too fast, 2026-09-24). They mirror
+/// `k4_spot::freedv_source` (this crate does not depend on it); the app has a test that they agree.
+pub const SPOT_FREEDV_REFRESH_DEFAULT_SECS: u64 = 60;
+pub const SPOT_FREEDV_REFRESH_MIN_SECS: u64 = 30;
+pub const SPOT_FREEDV_REFRESH_MAX_SECS: u64 = 300;
+
+/// Bring a refresh into `30 s ..= 5 min`; anything outside falls back to the default.
+pub fn sanitise_freedv_refresh_secs(secs: u64) -> u64 {
+    if (SPOT_FREEDV_REFRESH_MIN_SECS..=SPOT_FREEDV_REFRESH_MAX_SECS).contains(&secs) {
+        secs
+    } else {
+        SPOT_FREEDV_REFRESH_DEFAULT_SECS
+    }
+}
+
+/// Parse the Settings refresh field: digits only, in range, else the default.
+pub fn parse_freedv_refresh_secs(input: &str) -> u64 {
+    input
+        .trim()
+        .parse::<u64>()
+        .map(sanitise_freedv_refresh_secs)
+        .unwrap_or(SPOT_FREEDV_REFRESH_DEFAULT_SECS)
+}
+
+fn default_freedv_refresh_secs() -> u64 {
+    SPOT_FREEDV_REFRESH_DEFAULT_SECS
+}
+
 /// FreeDV Reporter as a spot source (FR-SPOT-08): a live WebSocket feed of the stations on the air,
 /// joined read-only. Off until the operator turns it on.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -615,6 +644,10 @@ pub struct FreeDvPrefs {
     pub host: String,
     #[serde(default = "default_freedv_port")]
     pub port: u16,
+    /// Seconds between re-stamps of the stations still on the air, always within `30 s ..= 5 min`
+    /// once read through [`FreeDvPrefs::refresh_secs`].
+    #[serde(default = "default_freedv_refresh_secs")]
+    pub refresh_secs: u64,
 }
 
 impl Default for FreeDvPrefs {
@@ -623,7 +656,15 @@ impl Default for FreeDvPrefs {
             enabled: false,
             host: default_freedv_host(),
             port: default_freedv_port(),
+            refresh_secs: SPOT_FREEDV_REFRESH_DEFAULT_SECS,
         }
+    }
+}
+
+impl FreeDvPrefs {
+    /// The refresh to use, in bounds whatever the file says.
+    pub fn refresh_secs(&self) -> u64 {
+        sanitise_freedv_refresh_secs(self.refresh_secs)
     }
 }
 

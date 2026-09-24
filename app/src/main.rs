@@ -168,6 +168,12 @@ fn port_after_tls_switch(tls_on: bool, port: &str) -> String {
     }
 }
 
+/// Whether FreeDV Reporter's refresh lets a present station be dropped for age between refreshes
+/// (FR-SPOT-08): the store drops a spot older than the limit, so a re-stamp must come before that.
+fn refresh_outlasts_age_limit(refresh_secs: u64, max_age_secs: u64) -> bool {
+    refresh_secs >= max_age_secs
+}
+
 /// Keep only the characters a callsign login can hold — letters, digits and `/`
 /// — upper-cased and bounded, so the field can never carry a control or
 /// look-alike character into a login line (FR-SPOT-04).
@@ -363,6 +369,8 @@ struct App {
     spot_dx_port: String,
     spot_pota_secs: String,
     spot_freedv_port: String,
+    /// FreeDV Reporter's re-stamp interval field as typed, seconds (FR-SPOT-08).
+    spot_freedv_refresh: String,
     /// The certificates approved for encrypted connections, shared with the worker.
     spot_pins: tls::Pins,
     // KPA1500 client worker (FR-AMP-03): a shared snapshot the worker writes
@@ -957,6 +965,8 @@ enum Message {
     SpotPortChanged(SpotNet, String),
     SpotLoginChanged(SpotNet, String),
     SpotPollChanged(String),
+    /// FreeDV Reporter's re-stamp interval field (FR-SPOT-08).
+    SpotFreeDvRefreshChanged(String),
     /// Switch PSK Reporter between plain and encrypted (FR-SPOT-13).
     ToggleSpotTls,
     /// Approve the certificate with this SHA-256 — the one the operator was shown.
@@ -1128,6 +1138,7 @@ impl App {
         let spot_dx_port = spot_networks.dx_cluster.port.to_string();
         let spot_pota_secs = spot_networks.pota.poll_secs().to_string();
         let spot_freedv_port = spot_networks.freedv.port.to_string();
+        let spot_freedv_refresh = spot_networks.freedv.refresh_secs().to_string();
         // The amplifier worker starts idle (disconnected); the tick reconciler
         // connects it once the K4 is up and support is enabled.
         let kpa_shared = Arc::new(Mutex::new(kpa::Shared::default()));
@@ -1263,6 +1274,7 @@ impl App {
             spot_dx_port,
             spot_pota_secs,
             spot_freedv_port,
+            spot_freedv_refresh,
             spot_pins,
             kpa1500_enabled,
             kpa1500_host,
@@ -1716,6 +1728,27 @@ impl App {
         }
     }
 
+    /// A warning under FreeDV Reporter's refresh field when it is no shorter than the spot age limit
+    /// (FR-SPOT-08): a station still on the air would then be dropped for age before its next
+    /// refresh, and its plate would come and go. Nothing is changed for the operator — both are
+    /// their choice — but it is said.
+    fn freedv_refresh_caution(&self) -> Element<'_, Message> {
+        let refresh = k4_config::parse_freedv_refresh_secs(&self.spot_freedv_refresh);
+        let max_age = u64::from(k4_config::parse_spot_max_age_min(&self.spot_max_age)) * 60;
+        if !refresh_outlasts_age_limit(refresh, max_age) {
+            return iced::widget::Space::with_height(0).into();
+        }
+        Text::new(format!(
+            "The refresh ({refresh} s) is not shorter than the spot age limit ({} min): a station \
+             still on the air will vanish before its next refresh and come back with it. Shorten \
+             the refresh or raise the age limit.",
+            max_age / 60
+        ))
+        .size(11)
+        .color(role_color(ui::ColorRole::Caution))
+        .into()
+    }
+
     /// Hand the worker the approved certificates as they are now in the settings.
     fn sync_spot_pins(&self) {
         if let Ok(mut p) = self.spot_pins.lock() {
@@ -1732,6 +1765,7 @@ impl App {
         nets.pota.poll_secs = k4_config::parse_spot_poll_secs(&self.spot_pota_secs);
         nets.freedv.port =
             k4_config::parse_spot_port(&self.spot_freedv_port, k4_config::SPOT_FREEDV_DEFAULT_PORT);
+        nets.freedv.refresh_secs = k4_config::parse_freedv_refresh_secs(&self.spot_freedv_refresh);
         nets
     }
 
@@ -3045,6 +3079,9 @@ impl App {
             Message::SpotPollChanged(v) => {
                 self.spot_pota_secs = v.chars().filter(char::is_ascii_digit).take(4).collect();
             }
+            Message::SpotFreeDvRefreshChanged(v) => {
+                self.spot_freedv_refresh = v.chars().filter(char::is_ascii_digit).take(3).collect();
+            }
             Message::SpotLoginChanged(net, v) => {
                 let login = sanitise_spot_login(&v);
                 match net {
@@ -3362,6 +3399,7 @@ impl App {
                                 host: nets.freedv.host.clone(),
                                 port: nets.freedv.port,
                                 user_agent: concat!("K4remote/", env!("CARGO_PKG_VERSION")).into(),
+                                refresh_secs: nets.freedv.refresh_secs(),
                             });
                     let sent = SpotSent {
                         rbn,
@@ -7046,7 +7084,8 @@ impl App {
                     "Stations on the air right now on FreeDV Reporter, read-only: you join as a \
                      viewer, nothing identifying is sent and you are not listed as a station. \
                      It is a presence list, so a station's plate stays while it is connected \
-                     and fades after it leaves.",
+                     and fades after it leaves. Its plates are renewed at the refresh interval \
+                     below (30 s to 5 min).",
                 )
                 .size(11)
                 .color(dim),
@@ -7071,6 +7110,14 @@ impl App {
                 90.0,
                 |v| Message::SpotPortChanged(SpotNet::FreeDv, v),
             ))
+            .push(Self::spot_field(
+                "Refresh (s)",
+                "60",
+                &self.spot_freedv_refresh,
+                90.0,
+                Message::SpotFreeDvRefreshChanged,
+            ))
+            .push(self.freedv_refresh_caution())
             .push(Self::spot_status_line(
                 &self.spot_status_ui.freedv,
                 nets.freedv.enabled,
@@ -11613,11 +11660,51 @@ mod freedv_wiring_tests {
                 "the window shows its status",
                 "&self.spot_status_ui.freedv,",
             ),
+            (
+                "the window has its refresh field",
+                "Message::SpotFreeDvRefreshChanged,",
+            ),
+            (
+                "the refresh field keeps digits only",
+                "Message::SpotFreeDvRefreshChanged(v) => {\n                self.spot_freedv_refresh = v.chars().filter(char::is_ascii_digit).take(3).collect();",
+            ),
+            (
+                "the refresh field starts from the saved refresh",
+                "let spot_freedv_refresh = spot_networks.freedv.refresh_secs().to_string();",
+            ),
+            (
+                "the saved refresh comes from the field",
+                "nets.freedv.refresh_secs = k4_config::parse_freedv_refresh_secs(&self.spot_freedv_refresh);",
+            ),
+            (
+                "the worker is given the refresh",
+                "refresh_secs: nets.freedv.refresh_secs(),",
+            ),
+            (
+                "the window warns when the refresh outlasts the age limit",
+                ".push(self.freedv_refresh_caution())",
+            ),
         ] {
             assert!(
                 code.contains(&squash(needle)),
                 "FreeDV wiring missing — {what}"
             );
         }
+    }
+
+    /// FR-SPOT-08: the refresh warning appears exactly when a present station could be dropped for
+    /// age before its next refresh — a refresh as long as the age limit or longer.
+    /// trace: FR-SPOT-08
+    #[test]
+    fn fr_spot_08_refresh_warning_when_it_outlasts_the_age_limit() {
+        use super::refresh_outlasts_age_limit as outlasts;
+        assert!(!outlasts(60, 15 * 60), "the defaults do not warn");
+        assert!(!outlasts(59, 60));
+        assert!(
+            outlasts(60, 60),
+            "equal: the plate expires as it is renewed"
+        );
+        assert!(outlasts(300, 60), "5 min refresh, 1 min age limit");
+        assert!(!outlasts(300, 301));
     }
 }
