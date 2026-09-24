@@ -115,7 +115,11 @@ impl Feed {
                     parse,
                 ))
             }
-            FeedConfig::FreeDv(c) => Feed::FreeDv(FreeDvSource::new(c.clone())),
+            FeedConfig::FreeDv(c) => {
+                let mut source = FreeDvSource::new(c.clone());
+                source.set_tls_connector(tls::connector(std::sync::Arc::clone(pins)));
+                Feed::FreeDv(source)
+            }
         })
     }
 
@@ -157,13 +161,16 @@ impl Feed {
     fn pending_cert(&self) -> Option<CertInfo> {
         match self {
             Feed::Mqtt(s) => s.pending_cert().cloned(),
+            Feed::FreeDv(s) => s.pending_cert().cloned(),
             _ => None,
         }
     }
 
     fn retry_now(&mut self) {
-        if let Feed::Mqtt(s) = self {
-            s.retry_now();
+        match self {
+            Feed::Mqtt(s) => s.retry_now(),
+            Feed::FreeDv(s) => s.retry_now(),
+            _ => {}
         }
     }
 
@@ -1093,9 +1100,10 @@ mod tests {
         assert_eq!(connects.load(Ordering::SeqCst), 1);
     }
 
-    /// A mock FreeDV Reporter: upgrade, Engine.IO open, read the client's connect frame, Socket.IO
-    /// acknowledgement, then the given events, then hold the line. Frames are built by hand.
-    fn mock_freedv(events: Vec<String>) -> u16 {
+    /// The server side of a FreeDV Reporter session, over any stream: upgrade, Engine.IO open, read
+    /// the client's connect frame, Socket.IO acknowledgement, then the given events. Frames are
+    /// built by hand. `false` if the client went away first.
+    fn freedv_session(s: &mut (impl Read + Write), events: &[String]) -> bool {
         fn frame(payload: &[u8]) -> Vec<u8> {
             let mut f = vec![0x81];
             match payload.len() {
@@ -1108,51 +1116,202 @@ mod tests {
             f.extend_from_slice(payload);
             f
         }
+        let mut req = Vec::new();
+        let mut b = [0u8; 1];
+        while !req.ends_with(b"\r\n\r\n") {
+            if s.read_exact(&mut b).is_err() {
+                return false;
+            }
+            req.push(b[0]);
+        }
+        let req = String::from_utf8_lossy(&req).into_owned();
+        let key = req
+            .lines()
+            .find_map(|l| l.strip_prefix("Sec-WebSocket-Key: "))
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let _ = write!(
+            s,
+            "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {}\r\n\r\n",
+            k4_spot::ws::accept_key(&key)
+        );
+        let _ = s.write_all(&frame(
+            br#"0{"sid":"s","pingInterval":25000,"pingTimeout":20000}"#,
+        ));
+        let _ = s.flush();
+        // The client's connect frame: 2 header bytes, 4 mask bytes, the payload.
+        let mut h = [0u8; 2];
+        if s.read_exact(&mut h).is_err() {
+            return false;
+        }
+        let mut rest = vec![0u8; 4 + usize::from(h[1] & 0x7f)];
+        if s.read_exact(&mut rest).is_err() {
+            return false;
+        }
+        let _ = s.write_all(&frame(br#"40{"sid":"me"}"#));
+        for e in events {
+            let _ = s.write_all(&frame(e.as_bytes()));
+        }
+        let _ = s.flush();
+        true
+    }
+
+    /// A mock FreeDV Reporter on plain TCP: one session with the given events, then hold the line.
+    fn mock_freedv(events: Vec<String>) -> u16 {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         thread::spawn(move || {
             let Ok((mut s, _)) = listener.accept() else {
                 return;
             };
-            let mut req = Vec::new();
-            let mut b = [0u8; 1];
-            while !req.ends_with(b"\r\n\r\n") {
-                if s.read_exact(&mut b).is_err() {
-                    return;
-                }
-                req.push(b[0]);
+            if freedv_session(&mut s, &events) {
+                thread::sleep(Duration::from_secs(4));
             }
-            let req = String::from_utf8_lossy(&req).into_owned();
-            let key = req
-                .lines()
-                .find_map(|l| l.strip_prefix("Sec-WebSocket-Key: "))
-                .unwrap_or("")
-                .trim()
-                .to_string();
-            let _ = write!(
-                s,
-                "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {}\r\n\r\n",
-                k4_spot::ws::accept_key(&key)
-            );
-            let _ = s.write_all(&frame(
-                br#"0{"sid":"s","pingInterval":25000,"pingTimeout":20000}"#,
-            ));
-            // The client's connect frame: 2 header bytes, 4 mask bytes, the payload.
-            let mut h = [0u8; 2];
-            if s.read_exact(&mut h).is_err() {
-                return;
-            }
-            let mut rest = vec![0u8; 4 + usize::from(h[1] & 0x7f)];
-            if s.read_exact(&mut rest).is_err() {
-                return;
-            }
-            let _ = s.write_all(&frame(br#"40{"sid":"me"}"#));
-            for e in events {
-                let _ = s.write_all(&frame(e.as_bytes()));
-            }
-            thread::sleep(Duration::from_secs(4));
         });
         port
+    }
+
+    /// FR-SPOT-08 over `wss` (with FR-SPOT-13's approval): the worker refuses a certificate no
+    /// authority signed, reports it with its fingerprint against FreeDV Reporter, and sends the
+    /// server **nothing** — not even the upgrade request; once the operator approves it and the
+    /// worker is told to retry, the session runs over TLS and delivers spots.
+    /// trace: FR-SPOT-08, FR-SPOT-13
+    #[test]
+    fn fr_spot_08_worker_runs_freedv_over_wss_once_the_certificate_is_approved() {
+        use crate::tls::test_certs::{A_CERT, A_KEY, A_SHA256};
+        use crate::tls::{testkit, Pin};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let sessions = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&sessions);
+        let port = testkit::serve_tls(
+            A_CERT,
+            A_KEY,
+            rustls::DEFAULT_VERSIONS,
+            4,
+            Arc::new(move |mut tls| {
+                let events = [
+                    r#"42["new_connection",{"sid":"a","callsign":"AA1AAA"}]"#.to_string(),
+                    r#"42["freq_change",{"sid":"a","freq":14050000}]"#.to_string(),
+                ];
+                let mut first = [0u8; 1];
+                // The handshake runs on this first read; a client that refused the certificate
+                // never gets here with a byte.
+                if tls.read(&mut first).is_ok_and(|n| n == 1) {
+                    seen.fetch_add(1, Ordering::SeqCst);
+                    let mut rest = Prepend(Some(first[0]), &mut tls);
+                    if freedv_session(&mut rest, &events) {
+                        thread::sleep(Duration::from_secs(3));
+                    }
+                }
+            }),
+        );
+
+        let store: SpotHandle = Arc::default();
+        let status: StatusHandle = Arc::default();
+        let pins: tls::Pins = Arc::default();
+        let (tx, rx) = mpsc::channel();
+        spawn(
+            rx,
+            Arc::clone(&store),
+            Arc::clone(&status),
+            Arc::clone(&pins),
+        );
+        tx.send(Cmd::Window(Some((14_000_000, 14_100_000))))
+            .unwrap();
+        tx.send(Cmd::Configure {
+            rbn: None,
+            dx_cluster: None,
+            psk_reporter: None,
+            pota: None,
+            freedv: Some(FreeDvConfig {
+                tls: true,
+                ..freedv_cfg(port)
+            }),
+        })
+        .unwrap();
+
+        wait("the untrusted certificate is reported", || {
+            status
+                .lock()
+                .unwrap()
+                .freedv
+                .as_ref()
+                .is_some_and(|p| p.cert.is_some())
+        });
+        let f = status.lock().unwrap().freedv.clone().unwrap();
+        let cert = f.cert.clone().expect("a pending certificate");
+        assert_eq!(
+            cert.sha256, A_SHA256,
+            "the fingerprint shown is the server's"
+        );
+        assert_eq!((cert.host.as_str(), cert.port), ("127.0.0.1", port));
+        assert_eq!(f.state, ConnState::Disconnected);
+        assert!(
+            f.error
+                .as_deref()
+                .is_some_and(|e| e.contains("not trusted")),
+            "{:?}",
+            f.error
+        );
+        assert_eq!(
+            sessions.load(Ordering::SeqCst),
+            0,
+            "the server was sent a request before the certificate was approved"
+        );
+
+        pins.lock().unwrap().push(Pin {
+            host: cert.host.clone(),
+            port: cert.port,
+            sha256: cert.sha256.clone(),
+        });
+        tx.send(Cmd::RetryNow).unwrap();
+        // Well inside the 1 s the source would otherwise wait before trying again: the retry is
+        // what makes an approval take effect at once.
+        let t0 = Instant::now();
+        while !store
+            .lock()
+            .unwrap()
+            .spots()
+            .iter()
+            .any(|s| s.call == "AA1AAA")
+        {
+            assert!(
+                t0.elapsed() < Duration::from_millis(700),
+                "no spot over wss within 700 ms of the approval"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        let f = status.lock().unwrap().freedv.clone().unwrap();
+        assert_eq!(f.state, ConnState::Connected);
+        assert!(f.cert.is_none(), "the pending certificate is cleared");
+        assert_eq!(f.error, None);
+        assert_eq!(sessions.load(Ordering::SeqCst), 1);
+    }
+
+    /// A stream with one byte already read put back in front of it.
+    struct Prepend<'a, S>(Option<u8>, &'a mut S);
+
+    impl<S: Read> Read for Prepend<'_, S> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            match self.0.take() {
+                Some(b) if !buf.is_empty() => {
+                    buf[0] = b;
+                    Ok(1)
+                }
+                _ => self.1.read(buf),
+            }
+        }
+    }
+
+    impl<S: Write> Write for Prepend<'_, S> {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.1.write(buf)
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.1.flush()
+        }
     }
 
     fn freedv_cfg(port: u16) -> FreeDvConfig {
@@ -1161,6 +1320,7 @@ mod tests {
             port,
             user_agent: "K4remote/test".into(),
             refresh_secs: k4_spot::freedv_source::DEFAULT_REFRESH_SECS,
+            tls: false,
         }
     }
 

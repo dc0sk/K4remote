@@ -596,6 +596,8 @@ impl PotaPrefs {
 /// FreeDV Reporter (R-EXT-05): the service's host and its plain-WebSocket port.
 pub const SPOT_FREEDV_DEFAULT_HOST: &str = "qso.freedv.org";
 pub const SPOT_FREEDV_DEFAULT_PORT: u16 = 80;
+/// Its port for `wss` (TLS).
+pub const SPOT_FREEDV_TLS_PORT: u16 = 443;
 
 fn default_freedv_host() -> String {
     SPOT_FREEDV_DEFAULT_HOST.to_string()
@@ -648,6 +650,9 @@ pub struct FreeDvPrefs {
     /// once read through [`FreeDvPrefs::refresh_secs`].
     #[serde(default = "default_freedv_refresh_secs")]
     pub refresh_secs: u64,
+    /// Connect over `wss` (TLS, normally port 443) instead of plain `ws` (FR-SPOT-08, FR-SPOT-13).
+    #[serde(default)]
+    pub tls: bool,
 }
 
 impl Default for FreeDvPrefs {
@@ -657,6 +662,7 @@ impl Default for FreeDvPrefs {
             host: default_freedv_host(),
             port: default_freedv_port(),
             refresh_secs: SPOT_FREEDV_REFRESH_DEFAULT_SECS,
+            tls: false,
         }
     }
 }

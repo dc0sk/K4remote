@@ -22,6 +22,7 @@ fn live_freedv_reporter() {
         port: 80,
         user_agent: "K4remote-live-probe".into(),
         refresh_secs: k4_spot::freedv_source::DEFAULT_REFRESH_SECS,
+        tls: false,
     });
     let t0 = Instant::now();
     let (mut spots, mut errors, mut joined_at) = (0usize, Vec::new(), None);

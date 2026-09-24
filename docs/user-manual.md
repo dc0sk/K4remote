@@ -469,7 +469,9 @@ Everything is **off until you turn it on**. Open **Settings → Spotting → Net
 - **FreeDV Reporter** — the stations on the air right now on FreeDV Reporter, shown at the frequency each
   one reports. You join **read-only**: you are not listed as a station, and nothing that identifies you is
   sent. It is a presence list, so a plate stays while its station is connected and fades after it leaves.
-  The host and port are prefilled. **Refresh (s)** sets how often the plates of stations still on the air
+  The host and port are prefilled. **TLS** connects over `wss` (port 443) so the traffic is encrypted; the
+  port follows the switch, and a certificate no public authority signed is shown for you to approve, as
+  for PSK Reporter. **Refresh (s)** sets how often the plates of stations still on the air
   are renewed: every 60 seconds by default, anywhere from 30 to 300. Keep it shorter than the spot age
   limit — otherwise a station still on the air drops off before its next refresh and comes back with it,
   and Settings says so.

@@ -853,3 +853,28 @@ fn fr_spot_08_freedv_refresh_default_bounds_and_persist() {
         assert_eq!(parse_freedv_refresh_secs(bad), 60, "refresh {bad:?}");
     }
 }
+
+/// FR-SPOT-08 over `wss`: FreeDV Reporter's TLS switch is off by default (so a saved plain port
+/// stays right), persists, and a config from before it loads plain; the encrypted port is 443.
+/// trace: FR-SPOT-08
+#[test]
+fn fr_spot_08_freedv_tls_default_off_and_persists() {
+    assert_eq!(k4_config::SPOT_FREEDV_TLS_PORT, 443);
+    let def = Prefs::default().spot_networks;
+    assert!(!def.freedv.tls);
+    let mut nets = def.clone();
+    nets.freedv.tls = true;
+    nets.freedv.port = 443;
+    let prefs = Prefs {
+        spot_networks: nets.clone(),
+        ..Default::default()
+    };
+    let back: Prefs = toml::from_str(&toml::to_string(&prefs).expect("serialize")).expect("parse");
+    assert_eq!(back.spot_networks, nets);
+    assert!(back.spot_networks.freedv.tls);
+    let older: Prefs =
+        toml::from_str("tune_step_hz = 100\n[spot_networks.freedv]\nenabled = true\nport = 80\n")
+            .expect("a config from before the switch");
+    assert!(!older.spot_networks.freedv.tls);
+    assert_eq!(older.spot_networks.freedv.port, 80);
+}

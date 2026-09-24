@@ -13,6 +13,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use k4_spot::freedv_source::{FreeDvConfig, FreeDvSource};
+use k4_spot::mqtt_source::{CertInfo, ConnectError, Connector, Wire};
 use k4_spot::telnet::{ConnState, Timing};
 use k4_spot::ws::accept_key;
 use k4_spot::{Network, Spot, SpotSource};
@@ -34,6 +35,7 @@ fn cfg(port: u16) -> FreeDvConfig {
         port,
         user_agent: "K4remote/test".into(),
         refresh_secs: k4_spot::freedv_source::DEFAULT_REFRESH_SECS,
+        tls: false,
     }
 }
 
@@ -994,4 +996,165 @@ fn fr_spot_08_source_bounds_what_one_poll_reads() {
     // Everything still arrives over the following polls.
     let rest = pump(&mut src, LONG, |s, _| s.stations() == 3000);
     assert_eq!(src.stations(), 3000, "{}", rest.errors.len());
+}
+
+/// A connector that counts its calls and hands out the scripted results in turn.
+fn scripted(
+    results: Vec<Result<u16, ConnectError>>,
+) -> (Connector, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+    let calls = Arc::new(AtomicUsize::new(0));
+    let (c, queue) = (Arc::clone(&calls), Mutex::new(results.into_iter()));
+    let connector: Connector = Arc::new(move |_host, _port, _timeout| {
+        c.fetch_add(1, Ordering::SeqCst);
+        match queue.lock().unwrap().next() {
+            Some(Ok(port)) => {
+                let s = TcpStream::connect(("127.0.0.1", port)).unwrap();
+                s.set_read_timeout(Some(Duration::from_millis(20))).unwrap();
+                Ok(Box::new(s) as Box<dyn Wire>)
+            }
+            Some(Err(e)) => Err(e),
+            None => Err(ConnectError::Failed("script ran out".into())),
+        }
+    });
+    (connector, calls)
+}
+
+fn cert_info(changed: bool) -> CertInfo {
+    CertInfo {
+        host: "127.0.0.1".into(),
+        port: 443,
+        sha256: "cd".repeat(32),
+        reason: "unknown issuer".into(),
+        changed,
+    }
+}
+
+fn wss(port: u16) -> FreeDvConfig {
+    FreeDvConfig {
+        tls: true,
+        ..cfg(port)
+    }
+}
+
+/// FR-SPOT-08 over `wss`: asking for TLS with no TLS connector is an error, never a quiet fall back
+/// to plain text; each configuration uses only its own connector; and a session over the TLS
+/// connector runs like a plain one.
+#[test]
+fn fr_spot_08_wss_never_falls_back_to_plain_text() {
+    use std::sync::atomic::Ordering;
+    let (plain, plain_calls) = scripted(vec![Err(ConnectError::Failed("plain was used".into()))]);
+    let mut src = FreeDvSource::with_timing(wss(443), fast());
+    src.set_connector(plain.clone());
+    let run = pump(&mut src, LONG, |_, r| !r.errors.is_empty());
+    assert_eq!(run.errors[0], "encrypted connections are not available");
+    assert_eq!(
+        plain_calls.load(Ordering::SeqCst),
+        0,
+        "plain text was tried"
+    );
+
+    // With a TLS connector, TLS is what is used and plain is not — and the session runs over it,
+    // naming the host in `Host` without `wss`'s own port 443 (RFC 6455 §4.1).
+    let (req_tx, req_rx) = std::sync::mpsc::channel();
+    let port = serve(vec![Box::new(move |mut s| {
+        let (req, _) = join(&mut s);
+        let _ = req_tx.send(req);
+        s.write_all(&ev(
+            "new_connection",
+            r#"{"sid":"a","callsign":"AA1AAA","grid_square":"FN20","version":"x","rx_only":false}"#,
+        ))
+        .unwrap();
+        s.write_all(&ev("freq_change", r#"{"sid":"a","freq":14236000}"#))
+            .unwrap();
+        thread::sleep(Duration::from_millis(600));
+    })]);
+    let (tls, tls_calls) = scripted(vec![Ok(port)]);
+    let mut src = FreeDvSource::with_timing(wss(443), fast());
+    src.set_connector(plain.clone());
+    src.set_tls_connector(tls);
+    let run = pump(&mut src, LONG, |_, r| !r.spots.is_empty());
+    assert!(run.errors.is_empty(), "{:?}", run.errors);
+    assert_eq!(run.spots[0].call, "AA1AAA");
+    assert_eq!(src.state(), ConnState::Connected);
+    let req = req_rx.recv_timeout(LONG).expect("the upgrade request");
+    assert!(req.contains("\r\nHost: 127.0.0.1\r\n"), "{req}");
+    assert_eq!(tls_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(plain_calls.load(Ordering::SeqCst), 0);
+
+    // A plain configuration never touches the TLS connector.
+    let (tls2, tls2_calls) = scripted(vec![Err(ConnectError::Failed("tls was used".into()))]);
+    let (plain2, plain2_calls) = scripted(vec![Err(ConnectError::Failed("plain was used".into()))]);
+    let mut src = FreeDvSource::with_timing(cfg(80), fast());
+    src.set_connector(plain2);
+    src.set_tls_connector(tls2);
+    let run = pump(&mut src, LONG, |_, r| !r.errors.is_empty());
+    assert_eq!(run.errors[0], "plain was used");
+    assert_eq!(plain2_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(tls2_calls.load(Ordering::SeqCst), 0);
+}
+
+/// FR-SPOT-08 over `wss`: an untrusted certificate is reported with its reason and kept for the
+/// operator to decide on, the source does not hammer the server while waiting, `retry_now` tries
+/// again at once, and a good connection clears the pending certificate.
+#[test]
+fn fr_spot_08_wss_untrusted_certificate_is_kept_until_decided() {
+    use std::sync::atomic::Ordering;
+    let port = serve(vec![Box::new(|mut s| {
+        join(&mut s);
+        thread::sleep(Duration::from_millis(600));
+    })]);
+    let (tls, calls) = scripted(vec![
+        Err(ConnectError::Untrusted(cert_info(false))),
+        Err(ConnectError::Untrusted(cert_info(true))),
+        Ok(port),
+    ]);
+    let timing = Timing {
+        initial_backoff: Duration::from_millis(150),
+        max_backoff: Duration::from_secs(60),
+        ..fast()
+    };
+    let mut src = FreeDvSource::with_timing(wss(443), timing);
+    src.set_tls_connector(tls);
+    assert!(src.pending_cert().is_none(), "nothing pending at the start");
+
+    let run = pump(&mut src, LONG, |_, r| !r.errors.is_empty());
+    assert_eq!(
+        run.errors[0],
+        "the server's certificate is not trusted (unknown issuer)"
+    );
+    assert_eq!(src.pending_cert(), Some(&cert_info(false)));
+    assert_eq!(src.state(), ConnState::Disconnected);
+
+    // Inside the backoff, polling does not reconnect.
+    let t0 = Instant::now();
+    while t0.elapsed() < Duration::from_millis(80) {
+        assert!(src.poll(&mut |_| {}).is_ok());
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "retried during the backoff"
+    );
+
+    // Approved: retry at once. The second attempt shows the certificate has changed.
+    src.retry_now();
+    let run = pump(&mut src, LONG, |_, r| !r.errors.is_empty());
+    assert_eq!(
+        run.errors[0],
+        "the server's certificate is not trusted (unknown issuer) — and it is not the one you approved"
+    );
+    assert_eq!(src.pending_cert(), Some(&cert_info(true)));
+
+    // Then it is trusted. `retry_now` restarted the backoff, so the next attempt comes after the
+    // initial 150 ms, not the doubled 300 ms it would be otherwise: joined within 250 ms.
+    let run = pump(&mut src, Duration::from_millis(250), |s, _| {
+        s.state() == ConnState::Connected
+    });
+    assert!(run.errors.is_empty(), "{:?}", run.errors);
+    assert_eq!(src.state(), ConnState::Connected);
+    assert!(src.pending_cert().is_none(), "cleared by a good connection");
+    assert_eq!(calls.load(Ordering::SeqCst), 3);
 }
