@@ -10,6 +10,7 @@ use iced::{Color, Pixels, Point, Rectangle, Renderer, Size, Theme};
 
 use crate::spots::{unix_now, SpotHandle};
 use crate::worker::{PanHandle, PanRow};
+use k4_spot::layout::{CHAR_W, TEXT_PX};
 use k4_stream::render::{
     axis_ticks, bin_to_x, column_to_bin, db_grid_step, dbm_to_color, dbm_to_y, hz_per_bin,
 };
@@ -210,16 +211,17 @@ impl<Message> Spectrum<'_, Message> {
                 content: spot.call.clone(),
                 position: Point::new(p.left + PLATE_PAD, y + 1.0),
                 color: Color::from_rgba8(r, g, b, alpha),
-                size: Pixels(9.0),
+                size: Pixels(TEXT_PX),
                 ..Text::default()
             });
         }
         if view.layout.dropped > 0 {
             frame.fill_text(Text {
                 content: format!("+{}", view.layout.dropped),
-                position: Point::new(34.0, 2.0),
+                // Clear of the dB labels down the left edge ("-120" and a little).
+                position: Point::new(5.0 * CHAR_W + 4.0, 2.0),
                 color: Color::from_rgb8(170, 176, 188),
-                size: Pixels(9.0),
+                size: Pixels(TEXT_PX),
                 ..Text::default()
             });
         }
@@ -254,7 +256,7 @@ impl<Message> Spectrum<'_, Message> {
                 } else {
                     Color::from_rgb8(220, 224, 234)
                 },
-                size: Pixels(9.0),
+                size: Pixels(TEXT_PX),
                 ..Text::default()
             });
         }
@@ -388,7 +390,7 @@ impl<Message> canvas::Program<Message> for Spectrum<'_, Message> {
                 content: format!("{db:.0}"),
                 position: Point::new(3.0, y + 1.0),
                 color: label,
-                size: Pixels(9.0),
+                size: Pixels(TEXT_PX),
                 ..Text::default()
             });
             db -= step;
@@ -412,12 +414,14 @@ impl<Message> canvas::Program<Message> for Spectrum<'_, Message> {
                 }
                 // MHz with enough decimals to resolve one division.
                 let text = format!("{:.3}", hz as f64 / 1e6);
+                // Half a label ("14.074", ~6 characters) and a little: keeps the edge ones whole.
+                const EDGE: f32 = 3.0 * CHAR_W + 2.0;
                 frame.fill_text(Text {
                     content: text,
                     // Nudge the edge labels inward so they stay on-canvas.
-                    position: Point::new(x.clamp(20.0, w - 20.0), spec_h - 11.0),
+                    position: Point::new(x.clamp(EDGE, w - EDGE), spec_h - (TEXT_PX + 2.0)),
                     color: label,
-                    size: Pixels(9.0),
+                    size: Pixels(TEXT_PX),
                     horizontal_alignment: iced::alignment::Horizontal::Center,
                     ..Text::default()
                 });
@@ -434,7 +438,7 @@ impl<Message> canvas::Program<Message> for Spectrum<'_, Message> {
                 },
                 position: Point::new(w - 4.0, 2.0),
                 color: label,
-                size: Pixels(9.0),
+                size: Pixels(TEXT_PX),
                 horizontal_alignment: iced::alignment::Horizontal::Right,
                 ..Text::default()
             });
@@ -624,6 +628,27 @@ impl<Message> canvas::Program<Message> for MiniPan<'_> {
             );
         }
         vec![frame.into_geometry()]
+    }
+}
+
+#[cfg(test)]
+mod text_size_tests {
+    /// Every piece of text on the spectrum — axis, dB scale, readout, nameplates, tooltips — is drawn
+    /// at `k4_spot::layout::TEXT_PX`, the one number the plate and tooltip geometry is derived from
+    /// (raised to 12 px at DC0SK's request). A literal size here would drift from that geometry: text
+    /// wider than its plate, or a plate taller than its lane. Structural, reading only the code above
+    /// this module so its own needles cannot match.
+    /// trace: FR-SPOT-02
+    #[test]
+    fn fr_spot_02_all_spectrum_text_uses_the_one_text_size() {
+        let whole = include_str!("spectrum.rs");
+        let code = &whole[..whole
+            .find(concat!("mod text_size", "_tests {"))
+            .expect("the test module")];
+        let sizes = code.matches("size: Pixels(").count();
+        let shared = code.matches("size: Pixels(TEXT_PX)").count();
+        assert!(sizes >= 6, "fewer text draws than expected: {sizes}");
+        assert_eq!(sizes, shared, "a spectrum text size is not TEXT_PX");
     }
 }
 

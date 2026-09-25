@@ -6,17 +6,22 @@
 //! waterfall, so it stays on the signal as the view retunes or the span changes. The label may be
 //! moved to keep neighbours from covering each other ([`declutter`]); the marker never is.
 
-/// Height of one label lane, pixels.
-pub const LANE_H: f32 = 13.0;
+/// Size of all text drawn on the spectrum — the frequency axis, the dB scale, the span readout, the
+/// nameplates and their tooltips — pixels. Everything below that must fit text is derived from it,
+/// so the text size is one number (raised from 9 at DC0SK's request, 2026-09-24; each derived value
+/// below is what it was at 9).
+pub const TEXT_PX: f32 = 12.0;
+/// Height of one label lane, pixels: the text and a little air.
+pub const LANE_H: f32 = TEXT_PX + 4.0;
 /// Top of the first lane: clear of the span/resolution readout in the corner.
-pub const LANES_TOP: f32 = 14.0;
+pub const LANES_TOP: f32 = TEXT_PX + 5.0;
 /// Height of a plate within its lane: a little less than the lane, so lanes do not touch.
 pub const PLATE_H: f32 = LANE_H - 2.0;
 /// Most lanes ever used.
 pub const MAX_LANES: usize = 3;
 /// Estimated width of one label character, pixels. The label font is proportional, so this is an
 /// average; it is deliberately a little generous so the estimate errs towards *not* overlapping.
-pub const CHAR_W: f32 = 6.0;
+pub const CHAR_W: f32 = TEXT_PX * 2.0 / 3.0;
 /// Padding either side of the text inside the plate.
 pub const PLATE_PAD: f32 = 4.0;
 /// Clear space kept between two plates in the same lane.
@@ -370,12 +375,16 @@ mod tests {
         // Deterministic.
         assert_eq!(declutter(&dense, width, 3), declutter(&dense, width, 3));
 
-        // Lane budget follows the band height. A lane needs LANES_TOP + LANE_H = 27 px of the
-        // half-band the labels may use, so the band must be at least 54 px tall for one lane.
+        // The text size is a contract (DC0SK asked for 12 px); pinned here once, and the geometry
+        // below is pinned as numbers, not re-derived from the constants it is meant to check.
+        assert_eq!(TEXT_PX, 12.0);
+        assert_eq!((LANE_H, LANES_TOP, CHAR_W), (16.0, 17.0, 8.0));
+        // Lane budget follows the band height. A lane needs LANES_TOP + LANE_H = 33 px of the
+        // half-band the labels may use, so the band must be at least 66 px tall for one lane.
         assert_eq!(max_lanes(50.0), 0, "too short to label anything");
-        assert_eq!(max_lanes(53.9), 0);
-        assert_eq!(max_lanes(54.0), 1);
-        assert_eq!(max_lanes(60.0), 1);
+        assert_eq!(max_lanes(65.9), 0);
+        assert_eq!(max_lanes(66.0), 1);
+        assert_eq!(max_lanes(80.0), 1);
         assert_eq!(max_lanes(100.0), 2);
         assert_eq!(max_lanes(400.0), MAX_LANES);
         // Plate width grows with the callsign.
