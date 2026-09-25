@@ -435,9 +435,26 @@ pub struct WaterfallProgram {
     pub view: View,
 }
 
-/// Frames the waterfall has been asked to draw, for the opt-in `K4_FPS=1` frame-rate line. The
-/// window is redrawn as a whole, so this is the window's frame count.
+/// Window frames drawn with a waterfall in them, for the opt-in `K4_FPS=1` frame-rate line.
 pub static FRAMES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The `now` of the last redraw counted in [`FRAMES`].
+static LAST_FRAME: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
+
+/// Whether a redraw at `now` is a window frame not yet counted.
+///
+/// Every pane gets the **same** `RedrawRequested(now)` for one window redraw — iced makes one
+/// `Instant` per redraw and hands that event to the whole widget tree — so counting once per pane,
+/// as the first version did, reported a dual A+B view at twice its real frame rate (found on the
+/// radio: 40 in dual, 20 in single, for the same stream).
+fn first_sight(last: &mut Option<Instant>, now: Instant) -> bool {
+    if *last == Some(now) {
+        false
+    } else {
+        *last = Some(now);
+        true
+    }
+}
 
 /// With `K4_FPS=1` in the environment, print `FPS <frames in the last second>` once a second to
 /// stderr. A measurement aid: how often the window really redraws is what GPU load follows.
@@ -456,10 +473,14 @@ pub fn spawn_fps_report() {
     });
 }
 
-/// The fastest the chain redraws, however fast rows arrive: about 125 frames a second.
+/// The fastest the chain redraws, however fast rows arrive (about 125 frames a second), and how
+/// soon it looks again for a row that is late.
 pub const MIN_PERIOD: Duration = Duration::from_millis(8);
-/// The slowest the chain redraws while rows are arriving: the UI tick's own 10 Hz.
-pub const MAX_PERIOD: Duration = Duration::from_millis(100);
+/// How long after a row is due the frame is drawn. Rows do not arrive on the dot — on the radio
+/// they came 83 ms apart ± about 8 ms — and a frame drawn exactly when a row is due races it: half
+/// the time it finds nothing and must look again. Drawing this much later lets one frame catch a
+/// row that is a little late, for a latency nobody can see.
+pub const LATE_MARGIN: Duration = Duration::from_millis(8);
 /// The row interval assumed until one has been measured.
 const INITIAL_PERIOD: Duration = Duration::from_millis(33);
 /// How much of each new measurement of the row interval is taken in (the rest is the old estimate).
@@ -467,32 +488,49 @@ const SMOOTHING: f64 = 0.25;
 
 /// Redraw-chain bookkeeping (FR-PAN-13).
 ///
-/// The window is redrawn as a whole, so what GPU load follows is how *often* it is redrawn. Rows
-/// arrive at 20–30 a second; a frame between two rows shows nothing new. The chain therefore asks
-/// for its next frame one row interval ahead, not for the next vsync.
+/// The window is redrawn as a whole, so what GPU load follows is how *often* it is redrawn. A
+/// frame between two rows shows nothing new, so the chain asks for a frame when the next row is
+/// **due**: one estimated interval after the newest row *arrived*.
+///
+/// It schedules from the arrival, not from the frame that asks, and that is the point. Other
+/// things redraw the window too — the UI's 100 ms tick above all — and iced_winit only ever moves
+/// a pending wake-up *later*. A chain that asked for "one interval after this frame" was pushed
+/// back by every tick and ended up drawing on the tick's beat: 10 frames a second for 12 rows, two
+/// rows at once twice a second, a visible pulse (found on the radio). Every frame now computes the
+/// same due time from the same arrival, so no other redraw can postpone it.
 #[derive(Default)]
 pub struct RedrawState {
     seen_total: u64,
-    last_change: Option<Instant>,
-    /// Estimated time between rows, from how many arrived between frames.
+    /// When the newest row seen so far arrived.
+    arrived: Option<Instant>,
+    /// Estimated time between rows, from their arrival times.
     period: Option<Duration>,
 }
 
 impl RedrawState {
-    /// Called on every redraw with the pane's current row count: when should the *next* frame be
-    /// drawn? `None` ends the chain — nothing has ever arrived, or the stream has been quiet for
-    /// longer than [`KEEP_ALIVE`] — and the UI tick's own redraw restarts it when rows resume.
-    /// Otherwise one estimated row interval from `now`, kept between [`MIN_PERIOD`] and
-    /// [`MAX_PERIOD`].
-    pub fn next_frame_at(&mut self, total: u64, now: Instant) -> Option<Instant> {
+    /// Called on every redraw with the pane's row count and when its newest row arrived: when
+    /// should the next frame be drawn? `None` ends the chain — nothing has ever arrived, or
+    /// nothing has for [`KEEP_ALIVE`] — and the UI tick's own redraw restarts it when rows resume.
+    /// Otherwise when the next row is due — the newest arrival plus the estimated interval — plus
+    /// [`LATE_MARGIN`]; if that is less than [`MIN_PERIOD`] away (the row is later still, or rows
+    /// come faster than the cap), `MIN_PERIOD` from now.
+    pub fn next_frame_at(
+        &mut self,
+        total: u64,
+        arrived: Option<Instant>,
+        now: Instant,
+    ) -> Option<Instant> {
         if total != self.seen_total {
-            // Rows since the last frame. A total that went *down* (a cleared history) counts as one.
+            // Rows since the last change seen. A total that went *down* (a cleared history) counts
+            // as one.
             let rows = total
                 .checked_sub(self.seen_total)
                 .filter(|r| *r > 0)
                 .unwrap_or(1);
-            if let Some(prev) = self.last_change {
-                let gap = now.saturating_duration_since(prev);
+            if let (Some(prev), Some(new)) = (self.arrived, arrived) {
+                // Measured between *arrivals*, as the worker stamped them — not between the frames
+                // that happened to see them, which are only as fine-grained as the frames are.
+                let gap = new.saturating_duration_since(prev);
                 // A gap longer than the grace is a stream that stopped and restarted, not a row
                 // interval.
                 if gap < KEEP_ALIVE {
@@ -500,18 +538,19 @@ impl RedrawState {
                     let old = self.period.unwrap_or(INITIAL_PERIOD).as_secs_f64();
                     let blended = old * (1.0 - SMOOTHING) + sample * SMOOTHING;
                     self.period = Some(
-                        Duration::from_secs_f64(blended.max(0.0)).clamp(MIN_PERIOD, MAX_PERIOD),
+                        Duration::from_secs_f64(blended.max(0.0)).clamp(MIN_PERIOD, KEEP_ALIVE),
                     );
                 }
             }
             self.seen_total = total;
-            self.last_change = Some(now);
+            self.arrived = arrived;
         }
-        let active = self
-            .last_change
-            .is_some_and(|t| now.saturating_duration_since(t) < KEEP_ALIVE);
-        // The stored estimate is always inside [MIN_PERIOD, MAX_PERIOD], so it needs no clamp here.
-        active.then(|| now + self.period.unwrap_or(INITIAL_PERIOD))
+        let last = self.arrived?;
+        if now.saturating_duration_since(last) >= KEEP_ALIVE {
+            return None;
+        }
+        let due = last + self.period.unwrap_or(INITIAL_PERIOD) + LATE_MARGIN;
+        Some(due.max(now + MIN_PERIOD))
     }
 }
 
@@ -520,9 +559,10 @@ impl<Message> shader::Program<Message> for WaterfallProgram {
     type Primitive = WaterfallPrimitive;
 
     /// Keep frames coming at the rate rows arrive, independent of the 100 ms UI tick (FR-PAN-13).
-    /// Each redraw asks for the next one a row interval ahead while the row count is still moving;
-    /// once the stream has been quiet for [`KEEP_ALIVE`] the chain stops, so an idle or
-    /// disconnected pan costs nothing. The tick's own redraw restarts it when rows resume.
+    /// Each redraw asks for the next frame when the pane's next row is due, from when its newest
+    /// row arrived (see [`RedrawState`]); once nothing has arrived for [`KEEP_ALIVE`] the chain
+    /// stops, so an idle or disconnected pan costs nothing. The tick's own redraw restarts it when
+    /// rows resume.
     fn update(
         &self,
         state: &mut RedrawState,
@@ -532,9 +572,18 @@ impl<Message> shader::Program<Message> for WaterfallProgram {
         shell: &mut Shell<'_, Message>,
     ) -> (iced::event::Status, Option<Message>) {
         if let shader::Event::RedrawRequested(now) = event {
-            FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let total = self.pan.lock().map(|p| p.total(self.rx)).unwrap_or(0);
-            if let Some(at) = state.next_frame_at(total, now) {
+            if LAST_FRAME
+                .lock()
+                .is_ok_and(|mut last| first_sight(&mut last, now))
+            {
+                FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            let (total, arrived) = self
+                .pan
+                .lock()
+                .map(|p| (p.total(self.rx), p.arrived(self.rx)))
+                .unwrap_or((0, None));
+            if let Some(at) = state.next_frame_at(total, arrived, now) {
                 shell.request_redraw(RedrawRequest::At(at));
             }
         }
@@ -1123,8 +1172,15 @@ mod redraw_tests {
         while at < end {
             let total = (at.as_nanos() / row_interval.as_nanos()) as u64;
             frames += 1;
-            match st.next_frame_at(total, t0 + at) {
-                Some(next) => at = next - t0,
+            let arrived = (total > 0).then(|| t0 + row_interval * total as u32);
+            match st.next_frame_at(total, arrived, t0 + at) {
+                Some(next) => {
+                    assert!(
+                        next > t0 + at,
+                        "the chain asked for a frame at or before now — it would spin"
+                    );
+                    at = next - t0
+                }
                 None => break,
             }
         }
@@ -1141,51 +1197,247 @@ mod redraw_tests {
         let mut st = RedrawState::default();
 
         // Nothing has ever arrived: never spend a frame on it.
-        assert_eq!(st.next_frame_at(0, ms(0)), None);
-        assert_eq!(st.next_frame_at(0, ms(5_000)), None);
+        assert_eq!(st.next_frame_at(0, None, ms(0)), None);
+        assert_eq!(st.next_frame_at(0, None, ms(5_000)), None);
 
         // Rows arriving: the chain runs, frame after frame, even on frames with no new row.
-        assert!(st.next_frame_at(1, ms(10_000)).is_some());
+        assert!(st.next_frame_at(1, Some(ms(10_000)), ms(10_000)).is_some());
         assert!(
-            st.next_frame_at(1, ms(10_016)).is_some(),
+            st.next_frame_at(1, Some(ms(10_000)), ms(10_016)).is_some(),
             "no new row yet, still in the grace"
         );
-        assert!(st.next_frame_at(2, ms(10_033)).is_some());
-        assert!(st.next_frame_at(2, ms(10_049)).is_some());
+        assert!(st.next_frame_at(2, Some(ms(10_033)), ms(10_033)).is_some());
+        assert!(st.next_frame_at(2, Some(ms(10_033)), ms(10_049)).is_some());
 
-        // The stream stops. The chain outlives the last row by the grace, then ends.
+        // The stream stops. The chain outlives the last *arrival* by the grace, then ends.
         assert!(
-            st.next_frame_at(2, ms(10_033 + 299)).is_some(),
+            st.next_frame_at(2, Some(ms(10_033)), ms(10_033 + 299))
+                .is_some(),
             "just inside the grace"
         );
         assert_eq!(
-            st.next_frame_at(2, ms(10_033 + 301)),
+            st.next_frame_at(2, Some(ms(10_033)), ms(10_033 + 301)),
             None,
             "quiet for longer than the grace"
         );
         assert_eq!(
-            st.next_frame_at(2, ms(60_000)),
+            st.next_frame_at(2, Some(ms(10_033)), ms(60_000)),
             None,
             "and it stays stopped"
         );
 
         // Rows resume (the UI tick's own redraw notices): the chain restarts.
-        assert!(st.next_frame_at(3, ms(60_100)).is_some());
+        assert!(st.next_frame_at(3, Some(ms(60_090)), ms(60_100)).is_some());
 
         // A cleared history that starts counting again from a *lower* total also counts as change.
         let mut st = RedrawState::default();
-        assert!(st.next_frame_at(500, ms(0)).is_some());
-        assert_eq!(st.next_frame_at(500, ms(1_000)), None);
+        assert!(st.next_frame_at(500, Some(ms(0)), ms(0)).is_some());
+        assert_eq!(st.next_frame_at(500, Some(ms(0)), ms(1_000)), None);
         assert!(
-            st.next_frame_at(3, ms(2_000)).is_some(),
+            st.next_frame_at(3, Some(ms(2_000)), ms(2_000)).is_some(),
             "a changed total, even downwards, is activity"
         );
     }
 
+    /// FR-PAN-13: the next frame is when the next row is *due* — the newest arrival plus the
+    /// interval, plus the late margin — whichever frame asks. A frame that happens early for another reason (the tick)
+    /// asks for the same instant, so it cannot push the chain back; a late row is looked for again
+    /// after `MIN_PERIOD`.
+    /// trace: FR-PAN-13
+    #[test]
+    fn fr_pan_13_the_next_frame_is_when_the_next_row_is_due() {
+        let t0 = Instant::now();
+        let ms = |n: u64| t0 + Duration::from_millis(n);
+        let mut st = RedrawState::default();
+        // Learn a steady 80 ms stream.
+        for i in 1..=60u64 {
+            st.next_frame_at(i, Some(ms(i * 80)), ms(i * 80));
+        }
+        let last = ms(60 * 80);
+        let due = st.next_frame_at(60, Some(last), last).unwrap();
+        let interval = due - last - LATE_MARGIN;
+        assert!(
+            (75..=85).contains(&(interval.as_millis() as u64)),
+            "learned {interval:?}, wanted ~80 ms"
+        );
+        // A tick frame 30 ms after the row asks for the very same instant — not 30 ms later.
+        assert_eq!(
+            st.next_frame_at(60, Some(last), last + Duration::from_millis(30)),
+            Some(due)
+        );
+        // The row is late: at the due frame, and after, it is looked for again MIN_PERIOD on.
+        assert_eq!(
+            st.next_frame_at(60, Some(last), due),
+            Some(due + MIN_PERIOD)
+        );
+        let later = due + Duration::from_millis(5);
+        assert_eq!(
+            st.next_frame_at(60, Some(last), later),
+            Some(later + MIN_PERIOD)
+        );
+        // Never sooner than MIN_PERIOD, however close the due time is.
+        let almost = due - Duration::from_millis(3);
+        assert_eq!(
+            st.next_frame_at(60, Some(last), almost),
+            Some(almost + MIN_PERIOD)
+        );
+    }
+
+    /// What a run of the redraw chain looked like on screen.
+    #[derive(Debug)]
+    struct Shown {
+        /// The longest a row waited between arriving and first being drawn.
+        max_latency: Duration,
+        /// Frames that drew two or more new rows at once — the visible "catch-up" jump.
+        catch_ups: usize,
+        /// Frames drawn per second, all sources.
+        fps: f64,
+    }
+
+    /// The chain as it runs in the app, not alone: rows arrive with jitter, the UI's own 100 ms
+    /// tick redraws the window too, and a pending wake-up follows iced_winit 0.13's rule — a new
+    /// `WaitUntil` that is *earlier* than a still-pending one is dropped, so any frame can
+    /// postpone the chain but none can bring it forward. `schedule` is the chain's decision:
+    /// given the state, the row count, the newest row's arrival and `now`, when is the next frame?
+    fn run_in_the_app(
+        row_interval: Duration,
+        mut schedule: impl FnMut(&mut RedrawState, u64, Option<Instant>, Instant) -> Option<Instant>,
+    ) -> Shown {
+        let t0 = Instant::now();
+        let ms = Duration::from_millis;
+        // Rows with a deterministic ±6 ms jitter, the spread measured on the radio.
+        const JITTER: [i64; 8] = [0, 4, -3, 6, -5, 2, -6, 3];
+        let arrivals: Vec<Instant> = (0..300u64)
+            .map(|i| {
+                let base = ms(100) + row_interval * i as u32;
+                let j = JITTER[i as usize % JITTER.len()];
+                if j >= 0 {
+                    t0 + base + ms(j as u64)
+                } else {
+                    t0 + base - ms((-j) as u64)
+                }
+            })
+            .collect();
+        let end = *arrivals.last().unwrap() + ms(50);
+        let tick = ms(100);
+        let mut next_tick = t0 + ms(37);
+        let mut pending: Option<Instant> = None;
+        let mut st = RedrawState::default();
+        let mut shown = 0usize;
+        let (mut max_latency, mut catch_ups, mut frames) = (Duration::ZERO, 0, 0u64);
+        let mut now = t0;
+        while now < end {
+            // The next frame: the tick, or the chain's pending wake-up, whichever is first.
+            now = match pending {
+                Some(p) if p < next_tick => {
+                    pending = None;
+                    p
+                }
+                _ => {
+                    let t = next_tick;
+                    next_tick += tick;
+                    t
+                }
+            };
+            frames += 1;
+            let total = arrivals.iter().take_while(|a| **a <= now).count();
+            if total > shown {
+                if total - shown >= 2 && shown > 0 {
+                    catch_ups += 1;
+                }
+                // The first row starts the chain from the UI tick, as a stream resuming after
+                // silence does; latency is a property of the running chain, measured after it.
+                for a in &arrivals[shown.max(1)..total] {
+                    max_latency = max_latency.max(now - *a);
+                }
+                shown = total;
+            }
+            let last = total.checked_sub(1).map(|i| arrivals[i]);
+            let asked = schedule(&mut st, total as u64, last, now);
+            assert!(
+                asked.is_none_or(|a| a > now),
+                "the chain asked for a frame at or before now — it would spin"
+            );
+            // iced_winit 0.13: an earlier request never replaces a later one still pending.
+            pending = match (pending, asked) {
+                (Some(p), Some(n)) if n < p && p > now => Some(p),
+                (Some(p), None) if p > now => Some(p),
+                (_, n) => n,
+            };
+        }
+        let secs = (end - arrivals[0]).as_secs_f64();
+        Shown {
+            max_latency,
+            catch_ups,
+            fps: frames as f64 / secs,
+        }
+    }
+
+    /// FR-PAN-13, found on the radio: rows arrive every ~83 ms, but reached the screen on the UI
+    /// tick's 100 ms beat — the chain scheduled "one interval after the last frame", and the tick's
+    /// frames kept postponing it (iced only ever moves a pending wake-up later). Twice a second a
+    /// frame had to draw two rows at once: a visible pulse. The chain must follow *arrivals*: every
+    /// row drawn promptly, never two at once, at about the row rate plus the tick.
+    /// trace: FR-PAN-13
+    #[test]
+    fn fr_pan_13_rows_reach_the_screen_promptly_despite_the_tick() {
+        let shown = run_in_the_app(Duration::from_millis(83), |st, total, arrived, now| {
+            st.next_frame_at(total, arrived, now)
+        });
+        assert_eq!(
+            shown.catch_ups, 0,
+            "rows drawn in catch-up jumps: {shown:?}"
+        );
+        // The worst case by design: a row up to 12 ms early (two ±6 ms jitters, one on it and one
+        // on the row its due time was measured from) waits for its due time, then LATE_MARGIN
+        // more — 20 ms — plus a little error in the learned interval. Before the fix a row waited
+        // up to 94 ms; what matters on screen is that every row is drawn well before the next one
+        // arrives, so none is ever drawn in a catch-up.
+        assert!(
+            shown.max_latency <= Duration::from_millis(25),
+            "a row waited too long to be drawn: {shown:?}"
+        );
+        assert!(
+            shown.fps <= 12.1 + 10.0 + 6.0,
+            "more frames than rows, tick and a few late-row checks need: {shown:?}"
+        );
+    }
+
+    /// FR-PAN-13: the `K4_FPS` line counts **window** frames, not pane redraws. Both panes of a
+    /// dual view receive the same `now` for one window redraw; counting per pane read a dual view
+    /// at twice its real rate (40 against 20 in single view, on the radio, for the same stream).
+    /// trace: FR-PAN-13
+    #[test]
+    fn fr_pan_13_the_frame_count_is_per_window_not_per_pane() {
+        let t0 = Instant::now();
+        let mut last = None;
+        let mut counted = 0;
+        for frame in 0..100u64 {
+            let now = t0 + Duration::from_millis(50 * frame);
+            // Two panes, one window redraw: the same `now` twice.
+            for _pane in 0..2 {
+                if first_sight(&mut last, now) {
+                    counted += 1;
+                }
+            }
+        }
+        assert_eq!(
+            counted, 100,
+            "a dual view must count each window frame once"
+        );
+
+        // A single pane is unchanged: every distinct redraw counts.
+        let mut last = None;
+        let single = (0..100u64)
+            .filter(|f| first_sight(&mut last, t0 + Duration::from_millis(50 * f)))
+            .count();
+        assert_eq!(single, 100);
+    }
+
     /// FR-PAN-13: frames follow the *row* rate, not the display's. A stream of 30 rows a second
     /// is drawn at about 30 frames a second — every row shown, and half the frames of a 60 Hz
-    /// chain — a faster stream never exceeds the cap, and a slower one never drops below the UI
-    /// tick's 10 Hz.
+    /// chain — a faster stream never exceeds the cap, and a slower one gets one frame per row (the
+    /// UI tick's own 10 Hz redraws the window regardless; the chain adds only what rows need).
     /// trace: FR-PAN-13
     #[test]
     fn fr_pan_13_frames_follow_the_row_rate_not_the_display() {
@@ -1205,19 +1457,25 @@ mod redraw_tests {
                 "{per_sec:.1} frames/s for {rows} rows/s"
             );
         }
-        // 500 rows/s: capped at one frame per MIN_PERIOD (125/s), not one per row.
+        // 500 rows/s: never faster than one frame per MIN_PERIOD (125/s), not one per row. With the
+        // late margin a stream this fast is drawn about every MIN_PERIOD + LATE_MARGIN (~60/s):
+        // below the cap, and still smooth. (The K4 sends about 12 rows/s per receiver.)
         let per_sec = simulate(ms(2), 20) as f64 / 20.0;
         assert!(per_sec <= 126.0, "{per_sec:.1} frames/s exceeds the cap");
+        assert!(per_sec >= 55.0, "{per_sec:.1} frames/s is not smooth");
+        // 4 rows/s: one frame per row once the interval is learned, not a poll every MIN_PERIOD
+        // waiting for the next one. Learning it costs something, once: the estimate starts at
+        // INITIAL_PERIOD and takes a quarter of the error per row, so the first dozen rows are
+        // "late" and looked for a few times each. Measured apart, so neither hides the other.
+        let warm = simulate(ms(250), 5);
+        let per_sec = (simulate(ms(250), 65) - simulate(ms(250), 5)) as f64 / 60.0;
         assert!(
-            per_sec >= 100.0,
-            "{per_sec:.1} frames/s is far below the cap"
+            (3.5..=5.0).contains(&per_sec),
+            "{per_sec:.1} frames/s for 4 rows/s, once learned"
         );
-        // 4 rows/s: the grace (300 ms) is longer than the gap (250 ms), so the chain runs on at no
-        // slower than 10 frames/s — never slower than the UI tick.
-        let per_sec = simulate(ms(250), 20) as f64 / 20.0;
         assert!(
-            (9.0..=11.0).contains(&per_sec),
-            "{per_sec:.1} frames/s for 4 rows/s"
+            warm <= 20 + 160,
+            "learning the interval cost {warm} frames in 5 s (20 rows)"
         );
     }
 
@@ -1237,8 +1495,14 @@ mod redraw_tests {
             .expect("the shader program's update");
         let update = &code[start..start + code[start..].find("fn draw(").expect("draw follows")];
         assert!(
-            update.contains("state.next_frame_at(total, now)"),
+            update.contains("state.next_frame_at(total, arrived, now)"),
             "update does not ask the state:\n{update}"
+        );
+        // …with the arrival read from the pan history: handed anything else (a `None`), the chain
+        // never runs and only the UI tick draws — which no simulation, fed its own arrivals, sees.
+        assert!(
+            update.contains("p.arrived(self.rx)"),
+            "update does not read when the row arrived:\n{update}"
         );
         assert!(
             update.contains("RedrawRequest::At(at)"),
@@ -1251,6 +1515,16 @@ mod redraw_tests {
         assert!(
             !code.contains("RedrawRequest::NextFrame"),
             "something else in the widget asks for every frame"
+        );
+        // The `K4_FPS` count goes through the per-window dedupe, and nowhere else.
+        assert!(
+            update.contains("first_sight(&mut last, now)"),
+            "update counts frames without the per-window dedupe:\n{update}"
+        );
+        assert_eq!(
+            code.matches("FRAMES.fetch_add").count(),
+            1,
+            "the frame counter is incremented in more than one place"
         );
     }
 
@@ -1266,7 +1540,7 @@ mod redraw_tests {
         let mut next = Duration::ZERO;
         for i in 1..=60u64 {
             let at = ms(i * 20);
-            next = st.next_frame_at(i, at).unwrap() - at;
+            next = st.next_frame_at(i, Some(at), at).unwrap() - at - LATE_MARGIN;
         }
         assert!(
             (17..=23).contains(&(next.as_millis() as u64)),
@@ -1276,7 +1550,7 @@ mod redraw_tests {
         let base = 60 * 20;
         for i in 1..=60u64 {
             let at = ms(base + i * 50);
-            next = st.next_frame_at(60 + i, at).unwrap() - at;
+            next = st.next_frame_at(60 + i, Some(at), at).unwrap() - at - LATE_MARGIN;
         }
         assert!(
             (44..=56).contains(&(next.as_millis() as u64)),
@@ -1286,10 +1560,18 @@ mod redraw_tests {
         // the smoothing takes in a quarter of a measurement, not all of it.
         let mut smooth = RedrawState::default();
         for i in 1..=40u64 {
-            smooth.next_frame_at(i, ms(i * 33));
+            smooth.next_frame_at(i, Some(ms(i * 33)), ms(i * 33));
         }
-        let steady = smooth.next_frame_at(41, ms(41 * 33)).unwrap() - ms(41 * 33);
-        let burst = smooth.next_frame_at(44, ms(42 * 33)).unwrap() - ms(42 * 33);
+        let steady = smooth
+            .next_frame_at(41, Some(ms(41 * 33)), ms(41 * 33))
+            .unwrap()
+            - ms(41 * 33)
+            - LATE_MARGIN;
+        let burst = smooth
+            .next_frame_at(44, Some(ms(42 * 33)), ms(42 * 33))
+            .unwrap()
+            - ms(42 * 33)
+            - LATE_MARGIN;
         assert!(
             burst.as_secs_f64() > steady.as_secs_f64() * 0.7,
             "one burst moved {steady:?} to {burst:?}"
@@ -1300,29 +1582,30 @@ mod redraw_tests {
         );
         // A long silence, then rows again: the silence is not taken as a row interval.
         let resume = base + 60 * 50 + 30_000;
-        let after = st.next_frame_at(121, ms(resume)).unwrap() - ms(resume);
+        let after =
+            st.next_frame_at(121, Some(ms(resume)), ms(resume)).unwrap() - ms(resume) - LATE_MARGIN;
         assert!(
             (44..=56).contains(&(after.as_millis() as u64)),
             "a restart after silence moved the estimate to {after:?}"
         );
         // Bounds: an absurdly fast burst (10 000 rows in one frame) and a slow crawl both stay in
-        // [MIN_PERIOD, MAX_PERIOD]; a total that jumps backwards does not panic.
+        // [MIN_PERIOD, KEEP_ALIVE]; a total that jumps backwards does not panic.
         let mut st = RedrawState::default();
-        st.next_frame_at(1, ms(0));
+        st.next_frame_at(1, Some(ms(0)), ms(0));
         for i in 1..=100u64 {
             let at = ms(i * 10);
-            let d = st.next_frame_at(1 + i * 10_000, at).unwrap() - at;
-            assert!((MIN_PERIOD..=MAX_PERIOD).contains(&d), "{d:?}");
+            let d = st.next_frame_at(1 + i * 10_000, Some(at), at).unwrap() - at - LATE_MARGIN;
+            assert!((MIN_PERIOD..=KEEP_ALIVE).contains(&d), "{d:?}");
         }
         let mut st = RedrawState::default();
-        st.next_frame_at(1, ms(0));
+        st.next_frame_at(1, Some(ms(0)), ms(0));
         for i in 1..=100u64 {
             let at = ms(i * 250);
-            let d = st.next_frame_at(1 + i, at).unwrap() - at;
-            assert!((MIN_PERIOD..=MAX_PERIOD).contains(&d), "{d:?}");
+            let d = st.next_frame_at(1 + i, Some(at), at).unwrap() - at - LATE_MARGIN;
+            assert!((MIN_PERIOD..=KEEP_ALIVE).contains(&d), "{d:?}");
         }
-        st.next_frame_at(u64::MAX, ms(100_000));
-        st.next_frame_at(0, ms(100_010));
-        st.next_frame_at(u64::MAX, ms(100_020));
+        st.next_frame_at(u64::MAX, Some(ms(100_000)), ms(100_000));
+        st.next_frame_at(0, Some(ms(100_010)), ms(100_010));
+        st.next_frame_at(u64::MAX, Some(ms(100_020)), ms(100_020));
     }
 }

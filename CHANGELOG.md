@@ -54,8 +54,8 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
   requested when no radio is connected. (This replaces the poll interval the
   setting used to have.)
 - **FreeDV Reporter spots.** Turn on **FreeDV Reporter** in the Networks window and the stations that are on the air right now on FreeDV Reporter appear as **coral** nameplates at the frequency they report. You join **read-only**: you are not listed as a station and nothing that identifies you is sent (only the program's name and version). It is a presence list, so a plate stays while the station is connected and fades after it leaves. It was built from another program's source and then checked against the live service for a few seconds at a time, which found two ordinary cases the first version was too strict about; please report anything that does not draw. (WSPRnet was dropped.)
-- **Spectrum afterglow.** A new **Spectrum afterglow** setting (Settings, in milliseconds; **0 = off, the default**) makes a peak linger on the spectrum trace and fade, so a brief signal — a CW dit, an FT8 tone — can still be seen after it has passed. The trail is drawn under the live trace as a faint fill and a dimmer outline. A peak falls 4.3 dB every time-constant you set, 50 to 5000 ms; a few hundred milliseconds is a gentle trail, several seconds holds a signal for a while. It follows each row as it arrives, so it looks the same however fast the window redraws, and it restarts when the pan moves or changes span. The waterfall is unchanged.
-- **Lower GPU load while a pan is streaming.** The window used to redraw at the display's refresh rate whenever spectrum rows were arriving, although rows come at only about 30 a second and a frame between two of them shows nothing new. It now redraws at the rate rows arrive (never faster than about 125 a second, never slower than 10). A new row can appear up to one row interval later than before. `K4_FPS=1` in the environment prints the frames drawn per second, for checking.
+- **Spectrum afterglow.** A new **Spectrum afterglow** setting (Settings, in milliseconds; **500 by default**, 0 = off) makes a peak linger on the spectrum trace and fade, so a brief signal — a CW dit, an FT8 tone — can still be seen after it has passed. The trail is drawn under the live trace as a faint fill and a dimmer outline. A peak falls 4.3 dB every time-constant you set, 50 to 5000 ms; a few hundred milliseconds is a gentle trail, several seconds holds a signal for a while. It follows each row as it arrives, so it looks the same however fast the window redraws, and it restarts when the pan moves or changes span. The waterfall is unchanged.
+- **Lower GPU load while a pan is streaming.** The window used to redraw at the display's refresh rate whenever spectrum rows were arriving, although the K4 sends only about 12 rows a second per receiver and a frame between two of them shows nothing new. It now redraws when rows arrive (never faster than about 125 a second), each row shown within about 20 ms of arriving. `K4_FPS=1` in the environment prints the frames drawn per second, for checking.
 - **TLS for PSK Reporter, with approval of an untrusted certificate.** A new **TLS** switch under PSK Reporter in the Networks window (off by default; the port follows it, 1883 to 1884) encrypts the connection. PSK Reporter's own certificate is trusted by the public authorities, so it just works. If you point it at a server whose certificate is *not* — a self-hosted broker, say — nothing is sent and you are shown why and the certificate's SHA-256 fingerprint; **Trust this certificate** approves exactly that one for that host and port. If the certificate later changes you are asked again, with a warning, never silently. Approvals are listed and can be withdrawn.
 - **POTA spots.** Turn on **POTA** in the Networks window and activators currently on the air (Parks on the Air) appear as **green** nameplates, with the park in the hover text. POTA is asked for its public spot list every 60 seconds by default (you can set 30 seconds to 1 hour), and nothing but that request is sent. A slow or failing POTA does not affect the other networks; its status line says why. POTA publishes no description of its list, so the format is from one look at the live service — please report anything that does not draw.
 - **Nameplates you can click, and that show where they came from.** Click a
@@ -91,6 +91,14 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
 
 ### Fixed
 
+- **The waterfall pulsed two or three times a second.** Rows arrive from the
+  K4 about 12 times a second, evenly, but the redraw timing introduced in this
+  release drifted onto the window's 10-per-second housekeeping redraw, so
+  about twice a second one frame had to draw two rows at once — a visible
+  jump. Redraws are now timed from when each row actually arrives: on the
+  radio, every row now reaches the screen within about 20 ms and never two at
+  once, with a quarter fewer frames than before. Also, `K4_FPS=1` counted the
+  dual view's frames twice; it now counts the window's frames.
 - **A network with no reachable DNS could stall every spotting network, not
   just the one whose host couldn't be resolved.** RBN, DX cluster, PSK
   Reporter and FreeDV Reporter are all polled from one shared thread, and
@@ -101,8 +109,6 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
   same way the OS-keychain read already is, and time out on their own
   rather than blocking the others — including for encrypted connections
   (PSK Reporter over TLS), which the first version of this fix missed.
-
-### Fixed
 
 - **A saved password that failed to load from the OS keychain connected
   silently with a blank one instead.** If the keychain read failed — a locked
