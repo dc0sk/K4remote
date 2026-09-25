@@ -1,7 +1,7 @@
 ---
 title: "System Requirements Specification"
 status: Draft
-version: "0.78"
+version: "0.79"
 updated: 2026-09-25
 authors:
   - Simon Keimer (DC0SK)
@@ -338,6 +338,22 @@ networks' own published interfaces (`R-EXT-05`) — both to be confirmed at desi
 
 ---
 
+## Q. CAT Server for Third-Party Software — `FR-CATSRV`
+
+Logging, contest and digital-mode software on the same computer (WSJT-X/JTDX via Hamlib,
+fldigi/flrig, Log4OM, CQRLOG, N1MM Logger+) drives the remote K4 **through** K4 Remote, which
+owns the single link to the radio: the app emulates the K4's own raw-CAT TCP service on
+`127.0.0.1:9200`. Design, sources, decisions and an adversarial review:
+`docs/concept/cat-server-plan.md` v0.2 (§0, §0.1). Requirements are added here as they are
+built; the remaining ones (server, per-client state, forwarding allowlist, AI push, keying
+gate, link-down grace, UI) are drafted in the plan.
+
+| ID | Statement | Up | Pri | Ver | Acceptance criteria |
+|---|---|---|---|---|---|
+| `FR-CATSRV-03` | answer a client's GET for state the app already holds **from its cache**, in the K4 RESP wire form (PRG D12), without radio traffic — at minimum `FA FB MD MD$ BW BW$ DT DT$ FT FR TQ IF` — and give **no reply** for a field the radio has not reported (never a made-up value). `IF` is the fixed 37-character layout `IF[f]*****+yyyyrx*00tm0spbd1*`, with `b` always 0 and `d` the DATA sub-mode only for a client in K31 meta mode. `FR` is `FR0` (the K4 receives on VFO A; `FR` "is equivalent to FT0"). This row covers the reply formatters (`k4_protocol::cat_resp`); the server that uses them lands with `FR-CATSRV-01`. | STK-22 | S | T | Each formatter's bytes are pinned (`FA00014074000;`, `BW0280;` for 2.8 kHz, `IF…` byte for byte for basic and K31 and a transmitting/XIT case, exactly 37 characters) and round-trip through `apply_cat` to the same fields; an unreported field gives `None`; every `MD` digit round-trips (`fr_catsrv_03_*`). |
+
+---
+
 ## Non-Functional Requirements — `NFR`
 
 | ID | Statement | Up | Pri | Ver | Acceptance criteria |
@@ -425,6 +441,7 @@ networks' own published interfaces (`R-EXT-05`) — both to be confirmed at desi
 | 2026-07-25 | 0.48 | DC0SK | Added FR-FM-02 as a **DTMF keypad** (`DM`) — the part of the gap-analysis item that is both buildable and useful remotely: sending DTMF for repeater/link control cannot be done any other way over the link. A 4×4 popup opened from the FM panel, one `DM<digit>;` per key. **Scoped down from the gap analysis on purpose:** the '6 stored DTMF sequences' are config work deferred to a follow-up, and the **1750 Hz tone burst has no documented CAT command** in D12 (searched), so it is not buildable now rather than guessed at — the `RO`/`RA` lesson. `send_dtmf` refuses a non-DTMF character rather than emitting a malformed `DM`. |
 | 2026-07-25 | 0.49 | DC0SK | Added FR-XVTR-01 (transverter band setup), the last substantial backlog item — complex and niche (transverter operators), but fully documented so buildable without hardware-guessing. Six `XV*` encoders (`XVN`/`XVM`/`XVR`/`XVI`/`XVO`/`XVP`), a read-back parser for each field, and a setup form on the BAND screen. The design turns on `XVN` being **stateful** — it selects the band the other commands target — so every field send is prefixed with `XVN<band>`, and the form re-reads all fields when a band is picked, keyed on the `XVN` the radio confirms so a stale value never lands. The form outgrew the fixed-height config-screen slot and clipped; fixed by compacting it to three rows and wrapping the BAND screen in a scrollable. Deferred, and said so: the **mW power scale on XVTR bands** (showing mW instead of W when operating on a configured transverter band) — it needs the current-band-is-XVTR state wired through, and is an operating-display concern separate from this setup form. |
 | 2026-07-26 | 0.50 | DC0SK | Added FR-UI-UPD-02 (automatic update check + top-area notification), requested by DC0SK; **recorded, not yet implemented**. It is a deliberate, operator-chosen relaxation of FR-UI-UPD-01, which made the update check *manual-only* on the reasoning that "a radio-control app should not make unannounced outbound connections, and a remote station may be on a metered link." The automatic check is therefore constrained to bound that cost: default-on but **opt-out in Settings**, **once per start** rather than on a timer, and **silent** unless it finds a substantiated newer release — so a metered link sees at most one small request per launch, and only a real update ever draws attention. The notification lives in the top status area beside the connection indicator (not a modal), as a clickable link to the release page, reusing FR-UI-UPD-01's numeric, never-spurious comparison. Also fixed a stale/duplicated `version` block in this document's YAML frontmatter (a merge artifact: two `version:` keys) — set to 0.50 / 2026-07-26. |
+| 2026-09-25 | 0.79 | DC0SK | Added **section Q, `FR-CATSRV` (CAT server for third-party software)**, upstream `STK-22`, starting with **`FR-CATSRV-03`** (replies from the cache) — built as the reply formatters. The remaining rows are drafted in `docs/concept/cat-server-plan.md` v0.2 and land with their code. |
 | 2026-09-25 | 0.78 | DC0SK | Added and built **`FR-FM-03` (stored DTMF sequences)**, the README's deferred item — the '6 stored sequences' part `FR-FM-02` scoped out. App-side, since the K4's CMD1–6 have no CAT access; paced 200 ms per digit because `DM` queuing is undocumented; built blind at DC0SK's direction, to be verified on a radio. |
 | 2026-09-25 | 0.77 | DC0SK | **`FR-MTR-03`: the RF meter follows the power range.** Found while starting the README's deferred "mW power scale on transverter bands": `TM`'s forward power is in tenths of a watt in QRP (PRG D12), but the meter always read it as watts on a 110 W scale — 5.0 W QRP showed as "50 W". The RF bar and label now follow `PC`'s range, including the mW range the radio switches to on an external transverter band (D14 p.79). The mW unit of `TM` is not stated in the PRG; tenths of a mW (as `PC`) is assumed and to be confirmed on a radio. |
 | 2026-09-24 | 0.76 | DC0SK | **`FR-SPOT-08`: FreeDV Reporter over `wss`** — asked for by DC0SK. A TLS switch, off by default (a saved plain port stays right), whose default port follows it (80 ↔ 443); built on `FR-SPOT-13`'s connector, prompt and exact approval, which now covers both encrypted networks. Run once against the real service over `wss` for 10 s: joined in 1.0 s, 43 stations, 0 rejected, no prompt (Let's Encrypt). |

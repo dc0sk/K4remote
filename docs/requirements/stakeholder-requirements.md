@@ -1,8 +1,8 @@
 ---
 title: "Stakeholder Requirements"
 status: Draft
-version: "0.2"
-updated: 2026-09-19
+version: "0.3"
+updated: 2026-09-25
 authors:
   - Simon Keimer (DC0SK)
 owns: [STK]
@@ -40,6 +40,7 @@ These are **solution-independent needs**. They say *what* stakeholders need, not
 | `STK-19` | SH-1 | Be informed when other clients are connected to the same radio (shared-control awareness). | C | FR-SES-MULTI |
 | `STK-20` | SH-1 | Recover gracefully and automatically from transient network interruptions. | S | FR-SES-RECONNECT, NFR-REL-* |
 | `STK-21` | SH-1 | See which stations are active on the band as named markers on the spectrum, drawn from public spotting networks I choose and configure, with a limit on how old a spot may be. | S | FR-SPOT-* |
+| `STK-22` | SH-1 | Operate alongside logging, contest and digital-mode software on the same computer, which sees and sets the remote radio's frequency and mode — and keys it only when I allow it. | S | FR-CATSRV-* |
 
 ## Change history
 
@@ -47,3 +48,4 @@ These are **solution-independent needs**. They say *what* stakeholders need, not
 |---|---|---|---|
 | 2026-06-25 | 0.1 | DC0SK | Initial draft baseline (STK-01..20). |
 | 2026-09-19 | 0.2 | DC0SK | Added STK-21 (spot nameplates on the spectrum) → FR-SPOT-*. |
+| 2026-09-25 | 0.3 | DC0SK | Added STK-22 (work alongside logging/contest/digital software through a CAT server) → FR-CATSRV-*. |

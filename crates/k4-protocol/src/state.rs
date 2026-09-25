@@ -20,6 +20,20 @@ pub enum Mode {
 }
 
 impl Mode {
+    /// The ASCII `MD` digit for this mode — the inverse of [`Mode::from_md_digit`].
+    pub fn md_digit(self) -> u8 {
+        match self {
+            Mode::Lsb => b'1',
+            Mode::Usb => b'2',
+            Mode::Cw => b'3',
+            Mode::Fm => b'4',
+            Mode::Am => b'5',
+            Mode::Data => b'6',
+            Mode::CwRev => b'7',
+            Mode::DataRev => b'9',
+        }
+    }
+
     /// Parse a single ASCII `MD` digit.
     pub fn from_md_digit(d: u8) -> Option<Mode> {
         match d {
