@@ -788,3 +788,68 @@ fn fr_cfg_09_afterglow_migrates_once_and_respects_a_later_choice() {
     // construction, not by having actually run the migration.
     assert!(Config::default().afterglow_default_migrated);
 }
+
+/// FR-SPOT-08: how often FreeDV Reporter re-stamps a station that is still on the air — once a
+/// minute by default, never faster than 30 s or slower than 5 min (DC0SK, 2026-09-24: 30 s was too
+/// fast). The bounds are contract pins, written as numbers. It round-trips, a config from before it
+/// loads with the default, a stray value in a hand-edited file is brought back to the default, and
+/// the Settings field takes only a number in bounds.
+/// trace: FR-SPOT-08
+#[test]
+fn fr_spot_08_freedv_refresh_default_bounds_and_persist() {
+    use k4_config::{
+        parse_freedv_refresh_secs, SPOT_FREEDV_REFRESH_DEFAULT_SECS, SPOT_FREEDV_REFRESH_MAX_SECS,
+        SPOT_FREEDV_REFRESH_MIN_SECS,
+    };
+    assert_eq!(
+        (
+            SPOT_FREEDV_REFRESH_MIN_SECS,
+            SPOT_FREEDV_REFRESH_DEFAULT_SECS,
+            SPOT_FREEDV_REFRESH_MAX_SECS
+        ),
+        (30, 60, 300)
+    );
+    let def = Prefs::default().spot_networks;
+    assert_eq!(def.freedv.refresh_secs(), 60);
+
+    let mut nets = def.clone();
+    nets.freedv.refresh_secs = 180;
+    let prefs = Prefs {
+        spot_networks: nets.clone(),
+        ..Default::default()
+    };
+    let back: Prefs = toml::from_str(&toml::to_string(&prefs).expect("serialize")).expect("parse");
+    assert_eq!(back.spot_networks, nets);
+    assert_eq!(back.spot_networks.freedv.refresh_secs(), 180);
+
+    let older: Prefs =
+        toml::from_str("tune_step_hz = 100\n[spot_networks.freedv]\nenabled = true\n")
+            .expect("a config from before the setting");
+    assert_eq!(older.spot_networks.freedv.refresh_secs(), 60);
+
+    for (stray, want) in [
+        (0, 60),
+        (29, 60),
+        (30, 30),
+        (300, 300),
+        (301, 60),
+        (86_400, 60),
+    ] {
+        let p: Prefs = toml::from_str(&format!(
+            "tune_step_hz = 100\n[spot_networks.freedv]\nrefresh_secs = {stray}\n"
+        ))
+        .expect("a config with a refresh");
+        assert_eq!(
+            p.spot_networks.freedv.refresh_secs(),
+            want,
+            "refresh {stray}"
+        );
+    }
+
+    assert_eq!(parse_freedv_refresh_secs("120"), 120);
+    assert_eq!(parse_freedv_refresh_secs(" 30 "), 30);
+    assert_eq!(parse_freedv_refresh_secs("300"), 300);
+    for bad in ["", "0", "29", "301", "abc", "-5", "1.5"] {
+        assert_eq!(parse_freedv_refresh_secs(bad), 60, "refresh {bad:?}");
+    }
+}

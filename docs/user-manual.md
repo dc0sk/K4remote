@@ -469,7 +469,10 @@ Everything is **off until you turn it on**. Open **Settings → Spotting → Net
 - **FreeDV Reporter** — the stations on the air right now on FreeDV Reporter, shown at the frequency each
   one reports. You join **read-only**: you are not listed as a station, and nothing that identifies you is
   sent. It is a presence list, so a plate stays while its station is connected and fades after it leaves.
-  The host and port are prefilled.
+  The host and port are prefilled. **Refresh (s)** sets how often the plates of stations still on the air
+  are renewed: every 60 seconds by default, anywhere from 30 to 300. Keep it shorter than the spot age
+  limit — otherwise a station still on the air drops off before its next refresh and comes back with it,
+  and Settings says so.
 - **POTA** — Parks on the Air activators currently on the air. POTA's public list is asked for every
   60 seconds by default (set **Every (s)** between 30 and 3600); nothing but that request is sent. The
   park reference is shown in the hover text. Unlike the others this is a list fetched now and then, not a

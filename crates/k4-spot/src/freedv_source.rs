@@ -14,8 +14,8 @@
 //! visible is not reachable from here (`FR-SPOT-12`).
 //!
 //! **Presence.** The reporter says who is on the air *now*, not when they last did something. A
-//! station's spot is stamped when its event arrives and again on a periodic refresh while it stays
-//! on the roster, so a station that has left stops being refreshed and fades with age like any
+//! station's spot is stamped when its event arrives and again on a periodic refresh (configurable,
+//! 30 s to 5 min, once a minute by default) while it stays on the roster, so a station that has left stops being refreshed and fades with age like any
 //! other spot, instead of every idle station disappearing after the age limit.
 //!
 //! [`poll`]: SpotSource::poll
@@ -34,8 +34,17 @@ use crate::{Network, SourceError, Spot, SpotSource};
 /// The path of the Socket.IO endpoint on a WebSocket (Engine.IO revision 4).
 pub const PATH: &str = "/socket.io/?EIO=4&transport=websocket";
 
-/// How often the spots of stations still on the roster are re-stamped.
-pub const DEFAULT_REFRESH: Duration = Duration::from_secs(30);
+/// How often the spots of stations still on the roster are re-stamped, seconds: the default and the
+/// bounds a configured value is kept inside (the default was 30 s until DC0SK found it too fast,
+/// 2026-09-24).
+pub const DEFAULT_REFRESH_SECS: u64 = 60;
+pub const MIN_REFRESH_SECS: u64 = 30;
+pub const MAX_REFRESH_SECS: u64 = 300;
+
+/// A configured refresh as a duration, kept inside [`MIN_REFRESH_SECS`]–[`MAX_REFRESH_SECS`].
+pub fn clamp_refresh(secs: u64) -> Duration {
+    Duration::from_secs(secs.clamp(MIN_REFRESH_SECS, MAX_REFRESH_SECS))
+}
 
 /// What to connect to.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,6 +53,8 @@ pub struct FreeDvConfig {
     pub port: u16,
     /// Sent as the `User-Agent`: the program and its version, nothing about the operator.
     pub user_agent: String,
+    /// Seconds between re-stamps of the stations still on the roster (see [`clamp_refresh`]).
+    pub refresh_secs: u64,
 }
 
 enum Phase {
@@ -115,9 +126,9 @@ impl FreeDvSource {
         let now = Instant::now();
         Self {
             backoff: timing.initial_backoff,
+            refresh: clamp_refresh(cfg.refresh_secs),
             cfg,
             timing,
-            refresh: DEFAULT_REFRESH,
             connector: plain_connector(),
             conn: None,
             next_attempt: now,
@@ -131,9 +142,14 @@ impl FreeDvSource {
         }
     }
 
-    /// Change how often stations still on the roster are re-stamped (tests).
+    /// Change how often stations still on the roster are re-stamped, unclamped (tests).
     pub fn set_refresh(&mut self, refresh: Duration) {
         self.refresh = refresh;
+    }
+
+    /// How often stations still on the roster are re-stamped.
+    pub fn refresh(&self) -> Duration {
+        self.refresh
     }
 
     /// Replace the connector (tests).

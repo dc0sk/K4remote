@@ -21,6 +21,7 @@ fn live_freedv_reporter() {
         host: "qso.freedv.org".into(),
         port: 80,
         user_agent: "K4remote-live-probe".into(),
+        refresh_secs: k4_spot::freedv_source::DEFAULT_REFRESH_SECS,
     });
     let t0 = Instant::now();
     let (mut spots, mut errors, mut joined_at) = (0usize, Vec::new(), None);

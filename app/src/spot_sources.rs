@@ -965,6 +965,19 @@ mod tests {
             k4_config::SPOT_POLL_DEFAULT_SECS,
             k4_spot::polled::DEFAULT_INTERVAL_SECS
         );
+        // And so are FreeDV Reporter's refresh bounds (FR-SPOT-08).
+        assert_eq!(
+            (
+                k4_config::SPOT_FREEDV_REFRESH_MIN_SECS,
+                k4_config::SPOT_FREEDV_REFRESH_DEFAULT_SECS,
+                k4_config::SPOT_FREEDV_REFRESH_MAX_SECS
+            ),
+            (
+                k4_spot::freedv_source::MIN_REFRESH_SECS,
+                k4_spot::freedv_source::DEFAULT_REFRESH_SECS,
+                k4_spot::freedv_source::MAX_REFRESH_SECS
+            )
+        );
     }
 
     /// FR-SPOT-13: over TLS the worker refuses a certificate no authority signed, reports it with
@@ -1147,6 +1160,7 @@ mod tests {
             host: "127.0.0.1".into(),
             port,
             user_agent: "K4remote/test".into(),
+            refresh_secs: k4_spot::freedv_source::DEFAULT_REFRESH_SECS,
         }
     }
 

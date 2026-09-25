@@ -33,6 +33,35 @@ fn cfg(port: u16) -> FreeDvConfig {
         host: "127.0.0.1".into(),
         port,
         user_agent: "K4remote/test".into(),
+        refresh_secs: k4_spot::freedv_source::DEFAULT_REFRESH_SECS,
+    }
+}
+
+/// FR-SPOT-08: the re-stamp interval comes from the configuration and is kept inside 30 s – 5 min
+/// whatever it says (DC0SK, 2026-09-24: once a minute by default, 30 s is the fastest). The bounds
+/// are contract pins, written as numbers.
+#[test]
+fn fr_spot_08_source_refresh_comes_from_the_config_and_is_clamped() {
+    use k4_spot::freedv_source::{DEFAULT_REFRESH_SECS, MAX_REFRESH_SECS, MIN_REFRESH_SECS};
+    assert_eq!(
+        (MIN_REFRESH_SECS, DEFAULT_REFRESH_SECS, MAX_REFRESH_SECS),
+        (30, 60, 300)
+    );
+    for (secs, want) in [
+        (0, 30),
+        (29, 30),
+        (30, 30),
+        (60, 60),
+        (150, 150),
+        (300, 300),
+        (301, 300),
+        (u64::MAX, 300),
+    ] {
+        let src = FreeDvSource::new(FreeDvConfig {
+            refresh_secs: secs,
+            ..cfg(80)
+        });
+        assert_eq!(src.refresh(), Duration::from_secs(want), "refresh {secs}");
     }
 }
 
