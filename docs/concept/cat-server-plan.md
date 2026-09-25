@@ -1,8 +1,8 @@
 ---
 title: "Implementation Plan — CAT Server for Third-Party Logging Software"
 status: Draft
-version: "0.1"
-updated: 2026-07-19
+version: "0.2"
+updated: 2026-09-25
 authors:
   - Simon Keimer (DC0SK)
 ---
@@ -25,6 +25,146 @@ CAT server for WSJT-X/logger integration (nice Phase-3 idea)"*. This plan makes 
 Evidence discipline: statements are tagged **[repo]** (read from this codebase/docs),
 **[web]** (verified against a cited external source this session), or **[recalled]**
 (prior knowledge, unverified — must be confirmed before relied on).
+
+---
+
+## 0. Revision 0.2 (2026-09-25) — decisions and source-verified findings
+
+**This section supersedes the rest of the document where they differ.**
+
+**Decided by DC0SK (2026-09-25):** build the CAT server first among the deferred items;
+K4-native raw CAT over TCP as recommended in §1; **CAT clients may key only while TX is armed
+in the app *and* a "CAT clients may transmit" setting (default off) is on** (§5 as written);
+**frequency/mode changes from a client are allowed while transmitting** (§5.6, §8.9 settled);
+the software to capture against is **WSJT-X / JTDX, N1MM Logger+, and fldigi / flrig /
+Log4OM / CQRLOG**. DC0SK will provide a local Hamlib installation, so a real `rigctl`/`rigctld`
+K4 backend can be run against the server as a repeatable local test.
+
+**Source-verified (Hamlib `rigs/kenwood/{k3,elecraft,kenwood}.c`, `src/{rig,iofunc,network}.c`;
+flrig `src/rigs/elecraft/K4.cxx`; K4 PRG D12 — read 2026-09-25, file:line citations kept in the
+session record, no code copied).** These replace the *[recalled]* claims above:
+
+1. **Hamlib opens the K4 over TCP** when the pathname is `host:port`. Each read waits
+   **500 ms** (one read retry); **during open, command retries are 0**, so one missing or slow
+   reply fails the open.
+2. **Hamlib's open sequence:** `PS;` (expects `PS1`), `K40;`, `ID;`, `K2;`×2, `K22;`, `OM;`
+   (**exactly 15 characters**, fixed positions), `K3;`, `RVM;` (**fatal on failure**), `RVD;`,
+   `AI;`/`AI0;`, then `FR;` `FT;` `TQ;` (each exactly `XX0`/`XX1`). On close it restores `K2<n>;`.
+3. **Hamlib verifies every SET with `ID;`** (reply must start `ID`, length ≥ 5 — i.e. `ID017`);
+   `RX;` and `K22;` sleep 200 ms instead.
+4. **Hamlib steady state:** `FA;`/`FB;` (11 digits), `MD;`/`MD$;`, `BW;`/`BW$;` (×10 Hz), `DT;`
+   only when MD is 6/9, `IF;` (**exactly 37 characters**, cached 500 ms), `FR;FT;TQ;`. set_mode
+   sends `MDn`, `BWnnnn`, `DT0`; split sends `FR0;FT1;` then copies A→B with `FB…`; PTT sends
+   `TX;` (+`ID;`) / `RX;` then polls `TQ;` up to 5 times; VFO select is emulated in Hamlib.
+5. **flrig** sends no `ID/K2/K3/PS`; it sends `AI0;`, `K41;`, `OM;` (checks for `P`), reads
+   `FA/FB/MD/BW` for both VFOs, `FT0`, `IF;` for split, `TX;`/`RX;` + `TQ;` for PTT, and
+   `SW83;SW44;` to select a VFO.
+6. **Hamlib only understands a bare `?;`.** The K4's `<cmd>?;` error form is taken as a data
+   reply and mis-parsed (e.g. `TQ?` reads as "not transmitting"). **The server must never answer
+   a GET it supports with `<cmd>?;`.**
+7. **N1MM+** (docs only): control on 9200, spectrum automatically on **9201**; the K4 section
+   defers to the K3 one ("K31 mode all the time"; sends `RX;` on Esc). Its poll set is
+   undocumented — capture needed.
+8. **`IF` layout** (PRG p16) matches our `apply_if` exactly (indices after `IF`: freq 0–10, sign
+   16, offset 17–20, r 21, x 22, t 26, m 27, s 29, p 30); Hamlib reads the TX VFO from byte 30
+   (always `0` on the K4, which is correct for split).
+9. **Meta modes collide.** Our upstream link runs in **K41** (`k4-transport`, sent at connect),
+   Hamlib uses **K40/K22**, flrig **K41**, N1MM **K31**. `K41` changes the replies of `DS GT$ ID
+   IF IS$ NB$ PA$ PC RA$ SM$ VT$` (PRG p17–18); `ID;` is `ID017;` under K40 but `ID<text>;`
+   under K41. The PRG states per-client scope only for `AI` (p7); per-client meta mode is
+   **unconfirmed**. How K41 changes `IF` is **undocumented**.
+
+**Design changes that follow (v0.2):**
+
+- **Per-client meta mode** (`K2n`, `K3n`, `K4n` held in `ClientState`, default K40/K20/K30 as a
+  fresh legacy client) and **per-client reply formatting** for every meta-dependent command.
+  Meta-dependent GETs are **never passed through** (the radio would answer in *our* K41 form).
+- **The locally-answered set grows** — anything in an open sequence must answer from the app
+  in microseconds, never cross the WAN: `PS` (`PS1` while the link is up), `ID` (per client
+  mode; under K41 the radio's own ID text, cached), `K2/K3/K4` (per client), `AI` (per client),
+  `OM`, `RVM`, `RVD` (cached from the radio once per connect: the app sends `OM; RVM; RVD; ID;`
+  after its own init and stores the raw replies), `FR`/`FT` (from `RadioState` split; `FR` ≡
+  `FT0`'s receive side), `TQ` (from the transmit state).
+- **Pass-through** remains for *other* GETs the cache does not hold, with reply routing by
+  mnemonic and a deadline — acceptable because no open sequence depends on them.
+- **While the radio link is down: close connected clients and close each new one at once**
+  (rather than `<cmd>?;`, which Hamlib mis-parses — finding 6). Loggers see a dropped
+  connection, report it, and retry.
+- **9201** (N1MM spectrum) is not served: nothing listens there, so N1MM gets a refused
+  connection. Spectrum re-serve stays an unscoped idea (§10 C3).
+- **A client SET is also applied locally** (`apply_local`), so an immediate read-back (Hamlib
+  reads `FA;` before and after setting) answers the new value without waiting for the radio's
+  echo — the same reconciliation as K-Pod tuning.
+
+**Identifiers updated:** the requirements become **section Q, `FR-CATSRV-*`**, upstream a new
+**`STK-22`** (operate alongside logging/contest/digital software) — `O` and `STK-21` are now
+taken (amplifier, spot nameplates). Architecture: **ARC-16** (`k4-catsrv`), **ADR-16**.
+
+**Still needs a live capture** (DC0SK's radio, or the Hamlib install against our server): the
+radio's replies to `RVM;`/`RVD;`, `PS;`, `K2;`/`K3;`/`K4;` under K40 vs K41, `FR;`, `AI;`; the
+`IF` reply under K41 and K31; whether meta mode is per connection; a SET followed by `ID;`
+(nothing, then one `ID017;`); the exact bytes of an unknown-command error; a `rigctl -m K4
+-vvvvv` trace; WSJT-X's poll set; N1MM's full stream; DXLab Commander.
+
+### 0.1 Adversarial review of v0.2 (2026-09-25) and what it changes
+
+An independent review against the same sources tried to break the design above. Its findings
+are adopted; they **override §0 and §4–§5** where they differ.
+
+**Transmit safety (§5, `FR-CATSRV-07`) — the design was not safe as written:**
+
+1. **A deny-list of keying commands cannot be made complete.** `SW17` is both KEYPAD 1 and
+   "play message M1"; `SW17/51/18/52` (M1–M4), `SW162–165`, `SW50` (VOX), `SW132` (TEST),
+   `SWT…`/`SWH…` (Hamlib sends `SWT16` for the tuner and `SW40` for tune), `TS1` (TX test "still
+   keys any downstream gear"), `DAMP…` (voice memory) all key or can key. → **Client SETs are
+   forwarded only from an allowlist** of commands known not to key; the keying set is gated;
+   **everything else is dropped and logged** (reversing §4.3's "unknown SETs default to
+   forward"). All `SW`/`SWT`/`SWH` are treated as keying.
+2. **The opt-in must be at the seam, not only in the server's classifier**, so a misclassified
+   command cannot bypass it: client-originated commands carry their origin into the session,
+   which checks *arm* **and** *CAT may transmit* itself.
+3. **The stop direction must never be gated:** `RX`, `KY @` (CW stop, Hamlib), `KY0`, `TU0`,
+   `PB0`, `DA0` are always forwarded — and a client's `RX;` goes through `end_tx()`, not a raw
+   send, or the app keeps believing it transmits (mic streaming, playback suppressed).
+4. **Block list grows:** all `RR*` (e.g. `RRC0` disables remote connections, `RRP…` changes the
+   password), `EC`, `LB`, plus `PS` (SET), `EM`, `SL`, `ER`, `RDY`; `K2/K3/K4`, `AI`, `ID` are
+   handled per client, never forwarded.
+
+**Hamlib open and meta modes:**
+
+5. The open continues after `FR;FT;TQ;` with `FA; FB; IF;`, `MD;`, `BW;`/`BW$;` (exactly 6/7),
+   and **`DT;`/`DT$;` whenever the mode is DATA** — WSJT-X's normal mode. → `DT` is answered
+   locally too.
+6. **`SM` must be rescaled, not rewrapped**: Hamlib reads `SM;` as exactly `SMnnnn` in the K3
+   form (RVM < 4.37); `SM$` is 0–15 in K30 and 0–21 in K31, 0–42 in our K41 link. The same goes
+   for AI pushes.
+7. **`PC` under K22**: Hamlib reads `PCnnnx` and sets `PC0501`-style; whether the radio accepts
+   the K22 SET form while our link is in K41 is **unverified** — capture before forwarding it.
+8. **Meta modes are coupled** ("K4n; turns off K2 meta-mode and changes K3 meta-mode", PRG): the
+   per-client state models them as one state machine, not three independent flags.
+9. **AI push** must format per client the K41-dependent lines (`PC RA$ SM$ GT$ NB$ PA$ IS$ DS ID
+   IF`) and never tee `ER…`, `PONG`, the `RDY` dump, `EM`/`SL` acknowledgements or `CC`.
+
+**Corrections to §0's findings:** the per-read timeout is about **1 s** with one read retry
+(500 ms / no retry applies to the `PS` probe); Hamlib's TX-VFO byte is `IF` index **28** after
+the prefix (fixed `0` by the PRG template), and `b`/`d` are documented per meta mode (`b` K22
+band-change, `d` K31 DATA sub-mode — N1MM runs K31 and expects it); a bare `?;` is not clean
+either (the K4 caps make Hamlib retry with sleeps); flrig also sends `FT0;` at open (clearing
+split) and `PCX;`. Several line citations to our code in §4 are stale.
+
+**Link down (replaces §0's "close clients"):** Hamlib has no reconnect — a closed socket makes
+WSJT-X show its modal *Rig Control Error* and stop (behaviour of WSJT-X itself inferred, not read
+from source). So for an outage shorter than a grace period the server **keeps clients, answers
+from the last cache with `TQ0`, and drops their SETs**; only after the grace period does it close
+them.
+
+**Optimistic apply (§4.2):** Hamlib verifies a set frequency by reading it back up to three
+times, so the optimistic value would be confirmed even if the radio rejected it. → **Revert the
+optimistic field on the radio's `<cmd>?;`**, and **do not apply optimistically while
+transmitting** (the radio may ignore a retune mid-TX).
+
+**Phasing consequence:** phase A delivers **read + allowlisted non-keying SETs** only; all
+keying (with the seam-level opt-in) is phase B, after captures.
 
 ---
 
