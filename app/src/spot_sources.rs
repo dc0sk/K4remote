@@ -359,6 +359,70 @@ pub fn describe(status: &Status) -> (String, bool) {
 
 #[cfg(test)]
 mod tests {
+    /// FR-SPOT-14: no hostname is resolved unbounded anywhere a spot source connects from — every
+    /// k4-spot module, the TLS connector, the HTTP fetch and this worker. `to_socket_addrs` has no
+    /// timeout of its own, and all these run on (or block) the one thread every network is polled
+    /// from, so one hung resolver would stall them all. Resolution goes through
+    /// `k4_spot::dns::resolve_bounded`, the one place a bare call is allowed. Structural and
+    /// **banning the construct**, so a new connector cannot quietly add one back: the TLS connector
+    /// did exactly that after the fix for the plain ones. This module is sliced off this file so
+    /// the needles below do not find themselves.
+    /// trace: FR-SPOT-14
+    #[test]
+    fn fr_spot_14_no_spot_connection_resolves_unbounded() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        // Without a leading dot, so the fully qualified form (`ToSocketAddrs::to_socket_addrs(&a)`)
+        // is caught as well as the method call.
+        let needles = [concat!("to_socket", "_addrs("), concat!("lookup", "_host(")];
+        let mut scanned: Vec<(String, String)> = Vec::new();
+        let spot_src = root.join("crates/k4-spot/src");
+        for entry in std::fs::read_dir(&spot_src).expect("k4-spot sources") {
+            let path = entry.unwrap().path();
+            if path.extension().is_some_and(|e| e == "rs") {
+                let name = path.file_name().unwrap().to_string_lossy().into_owned();
+                scanned.push((name, std::fs::read_to_string(&path).unwrap()));
+            }
+        }
+        for rel in ["app/src/tls/mod.rs", "app/src/http_fetch.rs"] {
+            scanned.push((rel.into(), std::fs::read_to_string(root.join(rel)).unwrap()));
+        }
+        let this = include_str!("spot_sources.rs");
+        let this = &this[..this
+            .find(concat!("mod tests", " {"))
+            .expect("this test module")];
+        scanned.push(("app/src/spot_sources.rs".into(), this.to_string()));
+
+        // The scan reaches what it claims: every connector's file is in it, and the needle does
+        // find the one allowed call — so a miss below is a real absence, not a broken search.
+        for must in [
+            "dns.rs",
+            "telnet.rs",
+            "mqtt_source.rs",
+            "freedv_source.rs",
+            "app/src/tls/mod.rs",
+        ] {
+            assert!(
+                scanned.iter().any(|(n, _)| n == must),
+                "{must} was not scanned"
+            );
+        }
+        let dns = &scanned.iter().find(|(n, _)| n == "dns.rs").unwrap().1;
+        assert!(
+            dns.contains(needles[0]),
+            "the needle does not match the allowed call"
+        );
+
+        for (name, text) in scanned.iter().filter(|(n, _)| n != "dns.rs") {
+            for needle in needles {
+                assert!(
+                    !text.contains(needle),
+                    "{name} resolves a hostname unbounded (`{needle}`); use \
+                     k4_spot::dns::resolve_bounded"
+                );
+            }
+        }
+    }
+
     use super::*;
     use std::io::{BufRead, BufReader, Read, Write};
     use std::net::TcpListener;

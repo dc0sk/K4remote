@@ -99,7 +99,8 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
   rather than refusing it) would freeze status updates for every enabled
   network until it eventually gave up. Hostname lookups are now bounded the
   same way the OS-keychain read already is, and time out on their own
-  rather than blocking the others.
+  rather than blocking the others — including for encrypted connections
+  (PSK Reporter over TLS), which the first version of this fix missed.
 
 ### Fixed
 

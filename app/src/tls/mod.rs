@@ -25,7 +25,7 @@
 #[cfg(test)]
 pub(crate) mod test_certs;
 
-use std::net::{TcpStream, ToSocketAddrs};
+use std::net::TcpStream;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -254,10 +254,10 @@ fn connect(
     let name = ServerName::try_from(host.to_string())
         .map_err(|_| failed(format!("{host} is not a valid server name")))?;
 
-    let addrs: Vec<_> = (host, port)
-        .to_socket_addrs()
-        .map_err(|e| failed(format!("cannot resolve {host}: {e}")))?
-        .collect();
+    // Bounded (FR-SPOT-14), as the plain connectors are: resolution has no timeout of its own, and
+    // this runs on the thread every spot network is polled from.
+    let addrs = k4_spot::dns::resolve_bounded(host, port, timeout)
+        .map_err(|e| failed(format!("cannot resolve {host}: {e}")))?;
     let mut last = None;
     let mut tcp = None;
     for addr in addrs {
