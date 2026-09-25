@@ -87,7 +87,7 @@ cargo run -p k4remote --no-default-features --features audio-device
 
 All connection settings live in the **Settings** window — open it from the **Settings** button
 in the header. It has its own window, like Networks, KPA1500 and Diagnostics, and closes with
-the window's own controls or **ESC**.
+**Done** (bottom right, in the same place on every tab), the window's own controls or **ESC**.
 
 > 📷 **Screenshot needed — `screenshots/settings-connection.png`:** The Settings window open on
 > the **Connection** tab, showing the host / port / TLS fields.
@@ -417,7 +417,7 @@ The log keeps several thousand recent lines; the header shows how many are curre
 
 ## 10. Settings reference
 
-Open **Settings** from the header; press **ESC** (or **Close**) to dismiss it.
+Open **Settings** from the header; press **Done** or **ESC** to close it. Whatever you changed is saved when it closes.
 
 The dialog is organized into tabs, one per topic, so a setting is found by its tab rather than by
 scrolling:

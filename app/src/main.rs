@@ -7270,15 +7270,26 @@ impl App {
                 .push(self.backup_section_view())
                 .into(),
         };
-        // No in-content Close button: this is now a detached window (FR-UI-23), closed by
-        // the OS window chrome or ESC, like the KPA1500 and Networks windows. That also
-        // removes the reason for one: the button used to sit right after the tab content,
-        // so its position moved with each tab's height.
         let settings_inner = Column::new()
             .spacing(10)
             .push(settings_tabs)
             .push(settings_body);
-        Container::new(scrollable(
+        // Done, like the KPA1500 and Networks windows (FR-UI-23) — but outside the scrolled
+        // content, pinned to the window's bottom edge: the old Close button sat right after the
+        // tab content, so its position moved with each tab's height.
+        let done = Container::new(
+            Row::new()
+                .push(horizontal_space())
+                .push(small_btn("Done", Message::ToggleSettings)),
+        )
+        .width(Length::Fill)
+        .padding(iced::Padding {
+            top: 8.0,
+            right: 16.0,
+            bottom: 0.0,
+            left: 0.0,
+        });
+        let scrolled = scrollable(
             // Inset the content so the scrollbar doesn't overlap it.
             Container::new(settings_inner).padding(iced::Padding {
                 top: 0.0,
@@ -7286,12 +7297,15 @@ impl App {
                 bottom: 0.0,
                 left: 0.0,
             }),
-        ))
-        .style(panel_style)
-        .padding(18)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into()
+        )
+        .height(Length::Fill);
+        let body = Column::new().push(scrolled).push(done);
+        Container::new(body)
+            .style(panel_style)
+            .padding(18)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
     }
 
     fn kpa1500_config_view(&self) -> Element<'_, Message> {
@@ -11502,11 +11516,25 @@ mod settings_tabs_wiring_tests {
             code.contains("if Some(id) == self.settings_window {"),
             "closing the Settings window (e.g. via the OS chrome) is not handled"
         );
-        // No in-content Close button: that is the whole point of making this a real window —
-        // its position used to move with each tab's height, and a real window has its own close.
+        // A Done button like its sibling windows — but outside the scrolled tab content, so it
+        // stays put whichever tab is shown (the old Close sat after the content and moved with
+        // each tab's height).
+        let view = between(
+            "fn settings_window_view(&self)",
+            "fn kpa1500_config_view(&self)",
+        );
         assert!(
-            !code.contains(r#"small_btn("Close", Message::ToggleSettings)"#),
-            "an in-content Close button crept back in — the point of the window was to remove it"
+            view.contains(r#"small_btn("Done", Message::ToggleSettings)"#),
+            "the Settings window has no Done button:\n{view}"
+        );
+        assert!(
+            view.contains("let body = Column::new().push(scrolled).push(done);")
+                && view.contains("Container::new(body)"),
+            "Done is not pinned below the scrolled content:\n{view}"
+        );
+        assert!(
+            !view.contains(r#"small_btn("Close", Message::ToggleSettings)"#),
+            "a Close button is back inside the tab content, where it moves with each tab's height"
         );
     }
 }
