@@ -200,8 +200,7 @@ USB/serial path get their final validation against a live K4; most control paths
 are already confirmed.
 
 **Deferred, lower priority** — `SI`-based V/I metering (whose response format
-the K4 Programmer's Reference leaves for a future revision). Stored DTMF
-sequences are built and in review.
+the K4 Programmer's Reference leaves for a future revision).
 
 ## License
 

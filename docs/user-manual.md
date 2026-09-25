@@ -286,6 +286,12 @@ PL/CTCSS strip takes their place:
 
 ![RX frame in FM](screenshots/rx-fm.png)
 
+The **DTMF** button on that strip opens a keypad: each key sends one DTMF tone. Below the keys are
+six **stored sequences** — give each a name and its digits (`0`–`9`, `A`–`D`, `*`, `#`, up to 32),
+and **Send** plays it one tone at a time. The radio sends tones only while transmitting, so key up
+(PTT or XMIT) first. The sequences are saved when the keypad closes. They are kept by the app — the
+K4's own CMD1–6 memories cannot be reached over the link.
+
 **DATA** — a sub-mode selector (DATA A / AFSK A / FSK D / PSK D) plus text decode:
 
 ![RX frame in DATA](screenshots/rx-data.png)

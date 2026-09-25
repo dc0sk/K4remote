@@ -767,3 +767,32 @@ fn fr_fm_02_dtmf_encodes_valid_digits_only() {
     assert_eq!(send_dtmf(';'), None);
     assert_eq!(send_dtmf(' '), None);
 }
+
+/// FR-FM-03: a stored DTMF sequence becomes one `DM<digit>;` per digit, in order, and a sequence
+/// with any character that is not a DTMF digit — or none, or more than `DTMF_SEQ_MAX` — is refused
+/// whole, never sent in part. The maximum is a contract pin, written as a number.
+/// trace: FR-FM-03
+#[test]
+fn fr_fm_03_a_stored_sequence_is_one_dm_per_digit_or_refused_whole() {
+    use k4_protocol::cat::{dtmf_sequence, DTMF_SEQ_MAX};
+    assert_eq!(DTMF_SEQ_MAX, 32);
+    assert_eq!(
+        dtmf_sequence("12A#"),
+        Some(vec![
+            "DM1;".into(),
+            "DM2;".into(),
+            "DMA;".into(),
+            "DM#;".into()
+        ])
+    );
+    assert_eq!(
+        dtmf_sequence("*0D"),
+        Some(vec!["DM*;".into(), "DM0;".into(), "DMD;".into()])
+    );
+    for bad in ["", "12a", "1 2", "12E", "1;2", "DM1;", "１"] {
+        assert_eq!(dtmf_sequence(bad), None, "{bad:?}");
+    }
+    let longest = "1".repeat(DTMF_SEQ_MAX);
+    assert_eq!(dtmf_sequence(&longest).map(|v| v.len()), Some(32));
+    assert_eq!(dtmf_sequence(&"1".repeat(DTMF_SEQ_MAX + 1)), None);
+}
