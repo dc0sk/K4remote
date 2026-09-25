@@ -9,8 +9,8 @@ stakeholder needs down to individual tests, enforced by a build gate.
 
 ![K4 Remote main window](docs/screenshots/main.png)
 
-> **Status:** v0.9.0 — feature-complete; hardware bring-up in progress.
-> 326 hardware-free tests pass · clippy/fmt clean · traceability gate green · CI green on Linux/macOS/Windows.
+> **Status:** v0.10.0 — feature-complete; hardware bring-up in progress.
+> 508 hardware-free tests pass · clippy/fmt clean · traceability gate green · CI green on Linux/macOS/Windows.
 > VFO tuning, RIT/XIT, split, band, panadapter click-to-QSY, and the K-Pod (incl. F1–F8 tap/hold macros)
 > are validated against a real K4; audio / PTT / waterfall rendering / serial bring-up is ongoing.
 > 0.4.0 closed **four transmit-safety faults** found on a live K4 — most seriously, the transmitter
@@ -25,6 +25,12 @@ stakeholder needs down to individual tests, enforced by a build gate.
 > sense, a waterfall that scrolls with the VFO, and labelled frequency/level scales synced to the
 > radio — plus **ATU and TUNE control**, an About-box **update check**, and **switchable control
 > tooltips**.
+>
+> **New in 0.10.0:** **spot nameplates on the spectrum** — callsigns from the **Reverse Beacon
+> Network**, **DX clusters**, **PSK Reporter** (optionally over TLS), **POTA** and **FreeDV Reporter**
+> (optionally over wss), drawn at their frequency, coloured by source and fading with age; click one to
+> tune to it. Plus **KPA1500 amplifier support**, a smoother **GPU-drawn spectrum and waterfall** with
+> lower GPU load, a **spectrum afterglow**, **Settings in its own tabbed window**, and larger spectrum text.
 >
 > **New in 0.9.0:** an **automatic update check** — the app looks for a newer release once at
 > start-up and shows a clickable link in the top bar if there is one (on by default, opt-out in

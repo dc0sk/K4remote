@@ -12,6 +12,8 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-09-25
+
 ### Added
 
 - **KPA1500 amplifier support (opt-in).** A new **KPA1500** section in Settings
@@ -123,6 +125,8 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
   warning next to the password field naming the problem, so it is visible
   before you click Connect instead of looking like an unexplained connection
   failure.
+
+[0.10.0]: https://github.com/dc0sk/K4remote/releases/tag/v0.10.0
 
 ## [0.9.0] — 2026-07-27
 
