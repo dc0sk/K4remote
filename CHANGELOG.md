@@ -12,6 +12,14 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
 
 ## [Unreleased]
 
+### Fixed
+
+- **The RF power meter read QRP power ten times too high.** In the QRP range
+  the K4 reports power in tenths of a watt, but the meter showed the number as
+  watts — 5.0 W read as "50 W". It now follows the power range: watts in QRO,
+  tenths of a watt in QRP, and **milliwatts on a transverter band**, where the
+  radio itself switches its power scale to mW.
+
 ## [0.10.0] — 2026-09-25
 
 ### Added

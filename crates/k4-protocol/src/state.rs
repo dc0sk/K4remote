@@ -295,7 +295,7 @@ pub struct RadioState {
     /// TX metering (`TM`), delivered during transmit.
     pub tx_alc: Option<u16>, // ALC (bars)
     pub tx_cmp: Option<u16>,     // compression, dB
-    pub tx_fwd_w: Option<u16>,   // forward power (W in QRO)
+    pub tx_fwd_w: Option<u16>, // forward power, in the `PC` range's units (W in QRO, 0.1 W in QRP)
     pub tx_swr_x10: Option<u16>, // SWR in 1/10 units
     /// Text-decode mode (`TD`); 0 = off.
     pub decode_mode: Option<u8>,

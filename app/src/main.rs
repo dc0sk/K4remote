@@ -4050,6 +4050,7 @@ impl App {
                 alc: self.ui.radio.tx_alc.unwrap_or(0),
                 cmp: self.ui.radio.tx_cmp.unwrap_or(0),
                 fwd_w: self.ui.radio.tx_fwd_w.unwrap_or(0),
+                pwr_range: self.ui.radio.tx_power_range,
                 swr_x10: self.ui.radio.tx_swr_x10.unwrap_or(0),
                 show_cmp: matches!(
                     self.ui.mode_a,
