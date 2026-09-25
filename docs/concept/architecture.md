@@ -1,8 +1,8 @@
 ---
 title: "Architecture & Concept"
 status: Draft
-version: "0.13"
-updated: 2026-07-03
+version: "0.14"
+updated: 2026-09-25
 authors:
   - Simon Keimer (DC0SK)
 owns: [ARC, ADR]
@@ -77,6 +77,7 @@ and keeps strict traceability tractable.
 | `ARC-13` | **Diagnostics/logging** | Structured logs, redaction, optional raw CAT console. | FR-DIAG-*, NFR-MAINT-LOG |
 | `ARC-14` | **K4 protocol simulator (test)** | Mock server speaking the CAT/handshake protocol for hardware-free tests. | NFR-TEST-02 |
 | `ARC-15` | **UI view-model helpers** (`app/src/ui.rs`) | Pure, iced-free presentation logic: `ViewMode` (single-A/B/dual) cycling, dot-grouped frequency formatting, semantic-colour role selection, two-line button state derivation, shade palette + S-meter scale, and the connect-control phase mapping (`ConnPhase` → label/action). Keeps the iced view (`ARC-08`) a thin projection and makes the testable `FR-UI-*` items unit-testable. | FR-UI-08..19, NFR-USE-01 |
+| `ARC-16` | **CAT server core** (`crates/k4-catsrv`) | Pure, socket-free core of the CAT server for third-party software: per-client meta mode and AI, the command policy (local/cache answers, allowlisted SETs, stops, keying refused, everything else dropped), replies from `RadioState` via `k4_protocol::cat_resp`. The listener and worker wiring sit outside it. | FR-CATSRV-* |
 
 ## 3. Proposed crate / module layout
 
@@ -148,6 +149,7 @@ k4remote/
 | FR-UI-* | ARC-08, ARC-15 |
 | FR-CFG-* | ARC-12 |
 | FR-DIAG-* | ARC-13 |
+| FR-CATSRV-* | ARC-16, ARC-03, ARC-05, ARC-07 |
 | NFR-TEST-* | ARC-14, xtask |
 
 *Every v1 `M`/`S` requirement maps to at least one component (R5 satisfied at concept level;
@@ -180,3 +182,4 @@ per-test mapping is maintained in the traceability matrix.)*
 | 2026-07-02 | 0.11 | DC0SK | FR-UI-17 theme selector (dark/light/contrast/system) via `ThemeMode` + per-theme shade/role palettes in ARC-15; the iced view resolves colours against the active theme. FR-UI-18 About box (`about_lines`). Dual-pane spectrum height matched to single view. |
 | 2026-07-02 | 0.12 | DC0SK | FR-UI-19: primary softkey opens a K4 config screen (`menu_screen_synopsis`) in the spectrum frame only; controls box + lower panels untouched. Per-screen content pending definition. |
 | 2026-07-03 | 0.13 | DC0SK | ARC-02a TLS-PSK (`connect_tls`) realized + live-verified; ARC-05 `RadioState` extended for config-screen read-back and surfaced via the snapshot to seed the screens on connect (FR-UI-20). Keychain writes moved off the UI thread. |
+| 2026-09-25 | 0.14 | DC0SK | Added **ARC-16 (CAT server core, `k4-catsrv`)** for `FR-CATSRV-*`; design in `docs/concept/cat-server-plan.md` v0.2. |

@@ -2147,6 +2147,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "k4-catsrv"
+version = "0.10.0"
+dependencies = [
+ "k4-protocol",
+]
+
+[[package]]
 name = "k4-config"
 version = "0.10.0"
 dependencies = [
