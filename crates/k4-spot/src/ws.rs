@@ -174,6 +174,7 @@ fn header_safe(what: &str, v: &str) -> Result<(), String> {
 pub fn request(
     host: &str,
     port: u16,
+    tls: bool,
     path: &str,
     key: &str,
     user_agent: &str,
@@ -184,7 +185,9 @@ pub fn request(
     if host.contains(' ') || path.contains(' ') || !path.starts_with('/') {
         return Err("the host or path is not valid in a request".into());
     }
-    let host_header = if port == 80 {
+    // The port is written only when it is not the scheme's own (RFC 6455 §4.1).
+    let default_port = if tls { 443 } else { 80 };
+    let host_header = if port == default_port {
         host.to_string()
     } else {
         format!("{host}:{port}")
@@ -520,6 +523,7 @@ mod tests {
         let req = request(
             "qso.freedv.org",
             80,
+            false,
             "/socket.io/?EIO=4&transport=websocket",
             "KEY==",
             "K4remote/1",
@@ -530,10 +534,27 @@ mod tests {
             text,
             "GET /socket.io/?EIO=4&transport=websocket HTTP/1.1\r\nHost: qso.freedv.org\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: KEY==\r\nSec-WebSocket-Version: 13\r\nUser-Agent: K4remote/1\r\n\r\n"
         );
-        let other = request("h.example", 8080, "/p", "K", "u").unwrap();
+        let other = request("h.example", 8080, false, "/p", "K", "u").unwrap();
         assert!(String::from_utf8(other)
             .unwrap()
             .contains("Host: h.example:8080\r\n"));
+        // The port is left out of `Host` only when it is the scheme's own (RFC 6455 §4.1): 80 for
+        // `ws`, 443 for `wss`.
+        for (port, tls, host) in [
+            (80, false, "qso.freedv.org"),
+            (443, true, "qso.freedv.org"),
+            (443, false, "qso.freedv.org:443"),
+            (80, true, "qso.freedv.org:80"),
+            (8443, true, "qso.freedv.org:8443"),
+        ] {
+            let req = request("qso.freedv.org", port, tls, "/p", "K", "u").unwrap();
+            assert!(
+                String::from_utf8(req)
+                    .unwrap()
+                    .contains(&format!("\r\nHost: {host}\r\n")),
+                "port {port}, tls {tls}"
+            );
+        }
         for (h, p, u) in [
             ("h\r\nX: y", "/p", "u"),
             ("h", "/p\r\nX: y", "u"),
@@ -547,7 +568,10 @@ mod tests {
             ("h", "/p q", "u"),
             ("h\0", "/p", "u"),
         ] {
-            assert!(request(h, 80, p, "K", u).is_err(), "{h:?} {p:?} {u:?}");
+            assert!(
+                request(h, 80, false, p, "K", u).is_err(),
+                "{h:?} {p:?} {u:?}"
+            );
         }
     }
 

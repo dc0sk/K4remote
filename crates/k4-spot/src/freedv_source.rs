@@ -1,6 +1,7 @@
-//! A FreeDV Reporter spot source (FR-SPOT-08): connects to `qso.freedv.org` over a WebSocket,
-//! joins in the **read-only `view` role**, keeps a roster of who is on which frequency and delivers
-//! them as spots.
+//! A FreeDV Reporter spot source (FR-SPOT-08): connects to `qso.freedv.org` over a WebSocket —
+//! plain `ws`, or `wss` through the same encrypted connector and certificate approval as PSK
+//! Reporter (FR-SPOT-13) — joins in the **read-only `view` role**, keeps a roster of who is on
+//! which frequency and delivers them as spots.
 //!
 //! Built on [`crate::ws`] (the WebSocket), [`crate::sio`] (Engine.IO / Socket.IO packets),
 //! [`crate::freedv`] (the roster) and the [`SpotSource`] interface, and shaped like
@@ -25,7 +26,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::cluster::RateGate;
 use crate::freedv::Roster;
-use crate::mqtt_source::{plain_connector, ConnectError, Connector, Wire};
+use crate::mqtt_source::{plain_connector, CertInfo, ConnectError, Connector, Wire};
 use crate::sio::{self, Packet};
 use crate::telnet::{ConnState, Stats, Timing};
 use crate::ws::{self, FrameReader, Message, Rng};
@@ -55,6 +56,9 @@ pub struct FreeDvConfig {
     pub user_agent: String,
     /// Seconds between re-stamps of the stations still on the roster (see [`clamp_refresh`]).
     pub refresh_secs: u64,
+    /// Connect over `wss` through the encrypted connector (see [`FreeDvSource::set_tls_connector`])
+    /// instead of plain `ws`.
+    pub tls: bool,
 }
 
 enum Phase {
@@ -97,6 +101,9 @@ pub struct FreeDvSource {
     timing: Timing,
     refresh: Duration,
     connector: Connector,
+    tls: Option<Connector>,
+    /// The certificate the last attempt was refused for, while that is why it is not connected.
+    pending_cert: Option<CertInfo>,
     conn: Option<Conn>,
     next_attempt: Instant,
     backoff: Duration,
@@ -130,6 +137,8 @@ impl FreeDvSource {
             cfg,
             timing,
             connector: plain_connector(),
+            tls: None,
+            pending_cert: None,
             conn: None,
             next_attempt: now,
             window: None,
@@ -152,9 +161,27 @@ impl FreeDvSource {
         self.refresh
     }
 
-    /// Replace the connector (tests).
+    /// Replace the plain connector (tests).
     pub fn set_connector(&mut self, connector: Connector) {
         self.connector = connector;
+    }
+
+    /// The connector used when the configuration asks for TLS. Without one, asking for TLS is an
+    /// error, never a silent fall back to plain text.
+    pub fn set_tls_connector(&mut self, connector: Connector) {
+        self.tls = Some(connector);
+    }
+
+    /// The certificate the last attempt was refused for, if that is why it is not connected.
+    pub fn pending_cert(&self) -> Option<&CertInfo> {
+        self.pending_cert.as_ref()
+    }
+
+    /// Try again at the next poll instead of waiting out the backoff — for when the operator has
+    /// just approved a certificate.
+    pub fn retry_now(&mut self) {
+        self.next_attempt = Instant::now();
+        self.backoff = self.timing.initial_backoff;
     }
 
     /// Keep only spots between `lo` and `hi` Hz (`None` = all).
@@ -225,9 +252,35 @@ impl FreeDvSource {
             return Err(SourceError("no host is set".into()));
         }
         self.attempts += 1;
-        let stream = match (self.connector)(&host, self.cfg.port, self.timing.connect_timeout) {
+        let connector = if self.cfg.tls {
+            match self.tls.clone() {
+                Some(c) => c,
+                None => {
+                    self.next_attempt = now + self.timing.max_backoff;
+                    return Err(SourceError(
+                        "encrypted connections are not available".into(),
+                    ));
+                }
+            }
+        } else {
+            self.connector.clone()
+        };
+        let stream = match connector(&host, self.cfg.port, self.timing.connect_timeout) {
             Ok(s) => s,
             Err(ConnectError::Failed(why)) => return Err(self.fail(now, why)),
+            Err(ConnectError::Untrusted(info)) if self.cfg.tls => {
+                let msg = format!(
+                    "the server's certificate is not trusted ({}){}",
+                    info.reason,
+                    if info.changed {
+                        " — and it is not the one you approved"
+                    } else {
+                        ""
+                    }
+                );
+                self.pending_cert = Some(info);
+                return Err(self.fail(now, msg));
+            }
             Err(ConnectError::Untrusted(_)) => {
                 return Err(self.fail(
                     now,
@@ -235,9 +288,17 @@ impl FreeDvSource {
                 ))
             }
         };
+        self.pending_cert = None;
         let mut rng = Rng::seeded();
         let key = rng.key();
-        let request = match ws::request(&host, self.cfg.port, PATH, &key, &self.cfg.user_agent) {
+        let request = match ws::request(
+            &host,
+            self.cfg.port,
+            self.cfg.tls,
+            PATH,
+            &key,
+            &self.cfg.user_agent,
+        ) {
             Ok(r) => r,
             // A setting that cannot make a request: no point retrying quickly.
             Err(why) => {

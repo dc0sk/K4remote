@@ -153,14 +153,11 @@ fn cert_to_trust(
     })
 }
 
-/// The port buffer after the TLS switch is flipped: a default port follows the switch, so turning
-/// TLS on does not leave the plain-text port behind, and turning it off does not leave the TLS one.
-/// A port the operator chose is left alone.
-fn port_after_tls_switch(tls_on: bool, port: &str) -> String {
-    let (plain, encrypted) = (
-        k4_config::SPOT_PSK_DEFAULT_PORT.to_string(),
-        k4_config::SPOT_PSK_TLS_PORT.to_string(),
-    );
+/// The port buffer after a network's TLS switch is flipped: its default port follows the switch,
+/// so turning TLS on does not leave the plain-text port behind, and turning it off does not leave
+/// the TLS one. A port the operator chose is left alone.
+fn port_after_tls_switch(tls_on: bool, port: &str, plain: u16, encrypted: u16) -> String {
+    let (plain, encrypted) = (plain.to_string(), encrypted.to_string());
     match (tls_on, port) {
         (true, p) if p == plain => encrypted,
         (false, p) if p == encrypted => plain,
@@ -969,6 +966,8 @@ enum Message {
     SpotFreeDvRefreshChanged(String),
     /// Switch PSK Reporter between plain and encrypted (FR-SPOT-13).
     ToggleSpotTls,
+    /// Switch FreeDV Reporter between `ws` and `wss` (FR-SPOT-08).
+    ToggleFreeDvTls,
     /// Approve the certificate with this SHA-256 — the one the operator was shown.
     TrustSpotCert(String),
     /// Withdraw the approval at this position in the list.
@@ -1645,13 +1644,15 @@ impl App {
     /// (FR-SPOT-04).
     /// The question shown when the server's certificate is not trusted: what it is, why it was
     /// refused and its fingerprint, and one button to approve exactly that certificate.
-    fn spot_cert_prompt(&self) -> Element<'_, Message> {
-        let Some(cert) = self
-            .spot_status_ui
-            .psk_reporter
+    /// Shown under whichever network is waiting (PSK Reporter, FreeDV Reporter).
+    fn spot_cert_prompt<'a>(
+        status: &'a Option<spot_sources::Status>,
+        enabled: bool,
+    ) -> Element<'a, Message> {
+        let Some(cert) = status
             .as_ref()
             .and_then(|s| s.cert.as_ref())
-            .filter(|_| self.spot_networks.psk_reporter.enabled)
+            .filter(|_| enabled)
         else {
             return iced::widget::Space::with_height(0).into();
         };
@@ -3051,17 +3052,36 @@ impl App {
             Message::ToggleSpotTls => {
                 let n = &mut self.spot_networks.psk_reporter;
                 n.tls = !n.tls;
-                self.spot_psk_port = port_after_tls_switch(n.tls, &self.spot_psk_port);
+                self.spot_psk_port = port_after_tls_switch(
+                    n.tls,
+                    &self.spot_psk_port,
+                    k4_config::SPOT_PSK_DEFAULT_PORT,
+                    k4_config::SPOT_PSK_TLS_PORT,
+                );
+                self.save_config();
+            }
+            Message::ToggleFreeDvTls => {
+                let n = &mut self.spot_networks.freedv;
+                n.tls = !n.tls;
+                self.spot_freedv_port = port_after_tls_switch(
+                    n.tls,
+                    &self.spot_freedv_port,
+                    k4_config::SPOT_FREEDV_DEFAULT_PORT,
+                    k4_config::SPOT_FREEDV_TLS_PORT,
+                );
                 self.save_config();
             }
             Message::TrustSpotCert(sha256) => {
-                // Only the certificate that is on screen: if the server presented another one since
-                // it was drawn, the click does not approve it.
-                let shown = self
-                    .spot_status_ui
-                    .psk_reporter
-                    .as_ref()
-                    .and_then(|s| s.cert.as_ref());
+                // Only a certificate that is on screen: if the server presented another one since
+                // it was drawn, the click does not approve it. Each encrypted network has its own
+                // prompt; the click names the certificate, so it is looked for in each.
+                let shown = [
+                    &self.spot_status_ui.psk_reporter,
+                    &self.spot_status_ui.freedv,
+                ]
+                .into_iter()
+                .filter_map(|s| s.as_ref().and_then(|s| s.cert.as_ref()))
+                .find(|c| c.sha256 == sha256);
                 if let Some(cert) = cert_to_trust(shown, &sha256) {
                     if self.spot_networks.trust(cert) {
                         self.sync_spot_pins();
@@ -3400,6 +3420,7 @@ impl App {
                                 port: nets.freedv.port,
                                 user_agent: concat!("K4remote/", env!("CARGO_PKG_VERSION")).into(),
                                 refresh_secs: nets.freedv.refresh_secs(),
+                                tls: nets.freedv.tls,
                             });
                     let sent = SpotSent {
                         rbn,
@@ -7007,7 +7028,10 @@ impl App {
                 &self.spot_status_ui.psk_reporter,
                 nets.psk_reporter.enabled,
             ))
-            .push(self.spot_cert_prompt())
+            .push(Self::spot_cert_prompt(
+                &self.spot_status_ui.psk_reporter,
+                nets.psk_reporter.enabled,
+            ))
             .push(self.spot_trusted_list())
             .push(Text::new("Reverse Beacon Network").size(13))
             .push(
@@ -7110,6 +7134,21 @@ impl App {
                 90.0,
                 |v| Message::SpotPortChanged(SpotNet::FreeDv, v),
             ))
+            .push(small_btn_pair(
+                nets.freedv.tls,
+                "TLS: ON",
+                "TLS: OFF",
+                Message::ToggleFreeDvTls,
+            ))
+            .push(
+                Text::new(
+                    "TLS connects over wss (port 443), so what the reporter sends you cannot be \
+                     read or changed on the way. qso.freedv.org's certificate is publicly signed; \
+                     one that is not has to be approved below.",
+                )
+                .size(11)
+                .color(dim),
+            )
             .push(Self::spot_field(
                 "Refresh (s)",
                 "60",
@@ -7119,6 +7158,10 @@ impl App {
             ))
             .push(self.freedv_refresh_caution())
             .push(Self::spot_status_line(
+                &self.spot_status_ui.freedv,
+                nets.freedv.enabled,
+            ))
+            .push(Self::spot_cert_prompt(
                 &self.spot_status_ui.freedv,
                 nets.freedv.enabled,
             ))
@@ -11311,15 +11354,35 @@ mod spot_settings_tests {
     /// trace: FR-SPOT-13
     #[test]
     fn fr_spot_13_the_port_follows_the_tls_switch() {
-        assert_eq!(port_after_tls_switch(true, "1883"), "1884");
-        assert_eq!(port_after_tls_switch(false, "1884"), "1883");
-        // Already right, or chosen by the operator: unchanged.
-        assert_eq!(port_after_tls_switch(true, "1884"), "1884");
-        assert_eq!(port_after_tls_switch(false, "1883"), "1883");
-        for chosen in ["8883", "", "18830", "1"] {
-            assert_eq!(port_after_tls_switch(true, chosen), chosen);
-            assert_eq!(port_after_tls_switch(false, chosen), chosen);
+        // Each network's pair, as numbers: PSK Reporter 1883/1884, FreeDV Reporter 80/443.
+        for (plain, encrypted) in [(1883, 1884), (80, 443)] {
+            let (p, e) = (plain.to_string(), encrypted.to_string());
+            let flip = |on, port: &str| port_after_tls_switch(on, port, plain, encrypted);
+            assert_eq!(flip(true, &p), e);
+            assert_eq!(flip(false, &e), p);
+            // Already right, or chosen by the operator: unchanged.
+            assert_eq!(flip(true, &e), e);
+            assert_eq!(flip(false, &p), p);
+            for chosen in ["8883", "", "18830", "1", "8080"] {
+                assert_eq!(flip(true, chosen), chosen);
+                assert_eq!(flip(false, chosen), chosen);
+            }
         }
+        // The pairs are the ones the settings use.
+        assert_eq!(
+            (
+                k4_config::SPOT_PSK_DEFAULT_PORT,
+                k4_config::SPOT_PSK_TLS_PORT
+            ),
+            (1883, 1884)
+        );
+        assert_eq!(
+            (
+                k4_config::SPOT_FREEDV_DEFAULT_PORT,
+                k4_config::SPOT_FREEDV_TLS_PORT
+            ),
+            (80, 443)
+        );
     }
 
     /// FR-SPOT-13: the approval is wired end to end — the click goes through the check above, is
@@ -11372,17 +11435,51 @@ mod spot_settings_tests {
                 "forgetting does not call `{needed}`:\n{forget}"
             );
         }
-        let toggle = arm("Message::ToggleSpotTls => {", "Message::TrustSpotCert");
-        for needed in ["port_after_tls_switch(", "self.save_config()"] {
+        let toggle = arm("Message::ToggleSpotTls => {", "Message::ToggleFreeDvTls");
+        for needed in [
+            "port_after_tls_switch(",
+            "k4_config::SPOT_PSK_TLS_PORT",
+            "self.save_config()",
+        ] {
             assert!(
                 toggle.contains(needed),
                 "the switch does not call `{needed}`:\n{toggle}"
             );
         }
+        let freedv = arm("Message::ToggleFreeDvTls => {", "Message::TrustSpotCert");
+        for needed in [
+            "self.spot_networks.freedv;",
+            "self.spot_freedv_port = port_after_tls_switch(",
+            "k4_config::SPOT_FREEDV_TLS_PORT",
+            "self.save_config()",
+        ] {
+            assert!(
+                freedv.contains(needed),
+                "FreeDV's switch does not do `{needed}`:\n{freedv}"
+            );
+        }
         assert!(
-            src.contains("tls: nets.psk_reporter.tls,"),
-            "the TLS switch is not passed to the source"
+            src.contains("tls: nets.psk_reporter.tls,") && src.contains("tls: nets.freedv.tls,"),
+            "a TLS switch is not passed to its source"
         );
+        // A certificate from either encrypted network can be approved, and each has its prompt.
+        for needed in [
+            "&self.spot_status_ui.psk_reporter,\n                    &self.spot_status_ui.freedv,",
+            ".find(|c| c.sha256 == sha256);",
+        ] {
+            assert!(
+                trust.contains(needed),
+                "approving does not look at `{needed}`:\n{trust}"
+            );
+        }
+        for network in ["psk_reporter", "freedv"] {
+            assert!(
+                src.contains(&format!(
+                    ".push(Self::spot_cert_prompt(\n                &self.spot_status_ui.{network},\n                nets.{network}.enabled,"
+                )),
+                "no certificate prompt for {network}"
+            );
+        }
         assert!(
             src.contains("*p = tls::pins_from(&spot_networks.trusted());"),
             "the saved approvals are not given to the worker at start-up"
@@ -11679,6 +11776,10 @@ mod freedv_wiring_tests {
             (
                 "the worker is given the refresh",
                 "refresh_secs: nets.freedv.refresh_secs(),",
+            ),
+            (
+                "the window has its TLS switch",
+                "Message::ToggleFreeDvTls,",
             ),
             (
                 "the window warns when the refresh outlasts the age limit",
