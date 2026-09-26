@@ -37,6 +37,7 @@ fn cache(s: &RadioState) -> Cache<'_> {
         rvd: Some("RVD02.34"),
         id_text: Some("DC0SK"),
         link_up: true,
+        tx_fallback: false,
     }
 }
 
@@ -461,4 +462,40 @@ fn fr_catsrv_02_empty_and_junk_commands_are_harmless() {
             "{junk:?}: {acts:?}"
         );
     }
+}
+
+/// `TQ` is always answered while the link is up (Hamlib's open needs it): from the radio's own
+/// report when there is one, else from the session's transmit state.
+/// trace: FR-CATSRV-06
+#[test]
+fn fr_catsrv_06_tq_falls_back_to_the_sessions_transmit_state() {
+    let s = RadioState {
+        transmitting: None,
+        ..state()
+    };
+    let mut c = Client::new();
+    let idle = cache(&s);
+    assert_eq!(reply(&mut c, "TQ;", &idle).as_deref(), Some("TQ0;"));
+    let keyed = Cache {
+        tx_fallback: true,
+        ..cache(&s)
+    };
+    assert_eq!(reply(&mut c, "TQ;", &keyed).as_deref(), Some("TQ1;"));
+    // The radio's own report wins over the fallback.
+    let reported = RadioState {
+        transmitting: Some(false),
+        ..state()
+    };
+    assert_eq!(
+        reply(
+            &mut c,
+            "TQ;",
+            &Cache {
+                tx_fallback: true,
+                ..cache(&reported)
+            }
+        )
+        .as_deref(),
+        Some("TQ0;")
+    );
 }

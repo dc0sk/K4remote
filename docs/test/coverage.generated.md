@@ -41,6 +41,7 @@ Legend: ✅ test-traced · 🟡 waived (see r3-waivers.md) · ⚪ not test-requi
 | `FR-CATSRV-06` | S | T | ✅ |
 | `FR-CATSRV-07` | S | S | ✅ |
 | `FR-CATSRV-08` | S | T | ✅ |
+| `FR-CATSRV-09` | C | T/D | ⚪ |
 | `FR-CFG-01` | S | T | ✅ |
 | `FR-CFG-02` | S | T | ✅ |
 | `FR-CFG-03` | M | I/T | ✅ |

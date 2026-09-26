@@ -503,6 +503,32 @@ To see the display without connecting anything, start the app with `--demo`: it 
 > 📷 **Screenshot needed — `screenshots/settings-backup.png`:** The **K4 settings backup** section
 > with the Export / Import controls.
 
+### CAT server (logging and digital-mode software)
+
+Settings → **CAT SERVER** lets software on the same computer — WSJT-X, JTDX, fldigi, flrig,
+Log4OM, CQRLOG, N1MM Logger+ — follow and set the radio's frequency and mode **through this app**,
+while the app keeps the one connection to the K4. The app answers like a K4 on the network, so
+set the software up exactly as for one:
+
+- **Rig / radio:** Elecraft K4, connected over the network (TCP).
+- **Address:** `127.0.0.1` · **Port:** `9200` (the defaults here).
+
+Turn it on with **CAT server: ON**; the status line then says where it listens and how many
+programs are connected. What the software can do:
+
+- **Read and set** frequency (VFO A and B), mode, bandwidth, DATA sub-mode, split and RIT/XIT.
+  Its reads are answered by the app at once, without asking the radio again.
+- **Not transmit.** Keying commands from the software (PTT, CW text, message play, tune, and every
+  front-panel switch code) are refused and logged under `catsrv` in the diagnostics console. An
+  unkey (`RX`) always goes through. Transmitting from the software, behind **ARM TX** and an extra
+  opt-in, is planned.
+- **If the link to the radio drops,** connected programs keep getting the last known values for
+  30 seconds (so a short reconnect doesn't throw them into an error), their changes are ignored,
+  and after that they are disconnected until the link is back.
+
+The address should stay `127.0.0.1`. Another address makes the port reachable from other
+computers, and the CAT protocol has no password — the Settings warn you if you change it.
+
 ---
 
 ## 11. Keyboard shortcuts

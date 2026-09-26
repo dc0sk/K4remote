@@ -202,6 +202,13 @@ fn lock_flag(arg: &str) -> Option<bool> {
 pub struct RadioState {
     /// VFO A frequency, Hz.
     pub vfo_a_hz: Option<u64>,
+    /// The radio's `OM` reply as sent (option modules, e.g. `OM AP-S----4---`) — FR-CATSRV-06.
+    pub option_modules: Option<String>,
+    /// The radio's `RVM` / `RVD` replies as sent (firmware revisions) — FR-CATSRV-06.
+    pub fw_rvm: Option<String>,
+    pub fw_rvd: Option<String>,
+    /// The radio's ID text (the K41 form of `ID`, "0" by default) — FR-CATSRV-06.
+    pub id_text: Option<String>,
     /// VFO B frequency, Hz.
     pub vfo_b_hz: Option<u64>,
     /// Main-RX operating mode.
@@ -466,6 +473,28 @@ impl RadioState {
         // pending-request map is needed (FR-CAT-03).
         if let Some(mnemonic) = cmd.strip_suffix('?') {
             self.last_error = Some(mnemonic.to_string());
+            return *self != before;
+        }
+
+        // Replies a CAT server hands its clients verbatim (FR-CATSRV-06): kept as sent.
+        if cmd.starts_with("OM ") {
+            self.option_modules = Some(cmd.to_string());
+            return *self != before;
+        }
+        if cmd.starts_with("RVM") || cmd.starts_with("RVD") {
+            let slot = if cmd.as_bytes()[2] == b'M' {
+                &mut self.fw_rvm
+            } else {
+                &mut self.fw_rvd
+            };
+            *slot = Some(cmd.to_string());
+            return *self != before;
+        }
+        if let Some(text) = cmd.strip_prefix("ID") {
+            // The K41 form (our link runs K41): the radio's ID text, "0" by default.
+            if !text.is_empty() {
+                self.id_text = Some(text.to_string());
+            }
             return *self != before;
         }
 
@@ -1066,7 +1095,9 @@ pub fn connect_state_seed() -> &'static [&'static str] {
         "AT;", "ACM;", "ACS;", // ATU mode + RX/sub antenna access masks
         "ACN1;", "ACN2;", "ACN3;", "ACN4;", "ACN5;", // antenna names (FR-ANT-02)
         "SN;",   // K4 serial number (for config-export filenames)
-        "RO;",   // RIT/XIT offset (Hz) — bare `RO` is the main VFO's
+        "OM;", "RVM;", "RVD;",
+        "ID;", // identity, handed verbatim to CAT clients (FR-CATSRV-06)
+        "RO;", // RIT/XIT offset (Hz) — bare `RO` is the main VFO's
         "ML0;", "ML1;", "ML2;", // monitor levels (CW / AF-data / voice)
         "VGV;", "VI;", // VOX gain (voice) + anti-VOX level
         "VT;", "VT$;", // VFO tuning step (for optimistic ◄► stepping)

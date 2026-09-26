@@ -165,6 +165,54 @@ pub struct Prefs {
     /// CAT. Read through [`Prefs::dtmf_sequences`], which always gives six cleaned slots.
     #[serde(default)]
     pub dtmf_sequences: Vec<DtmfSequence>,
+    /// The CAT server for third-party software (FR-CATSRV-01). Off by default.
+    #[serde(default)]
+    pub cat_server: CatServerPrefs,
+}
+
+/// Default CAT server port: the K4's own network CAT port, so a logger is set up exactly as for
+/// a K4 on the LAN (FR-CATSRV-01).
+pub const CATSRV_DEFAULT_PORT: u16 = 9200;
+
+fn default_catsrv_bind() -> String {
+    "127.0.0.1".to_string()
+}
+
+fn default_catsrv_port() -> u16 {
+    CATSRV_DEFAULT_PORT
+}
+
+/// The CAT server's settings (FR-CATSRV-01): off by default, on loopback when on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CatServerPrefs {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Address to listen on. Loopback unless the operator deliberately types another — the
+    /// protocol has no authentication.
+    #[serde(default = "default_catsrv_bind")]
+    pub bind: String,
+    #[serde(default = "default_catsrv_port")]
+    pub port: u16,
+}
+
+impl Default for CatServerPrefs {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            bind: default_catsrv_bind(),
+            port: CATSRV_DEFAULT_PORT,
+        }
+    }
+}
+
+/// Whether a CAT server bind address keeps it on this computer (a loopback address, or
+/// `localhost`). Anything else — including `0.0.0.0` — exposes an unauthenticated control port
+/// to the network, and the Settings say so (FR-CATSRV-01).
+pub fn catsrv_bind_is_loopback(bind: &str) -> bool {
+    let b = bind.trim();
+    b.eq_ignore_ascii_case("localhost")
+        || b.parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
 }
 
 /// One stored DTMF sequence (FR-FM-03): a short name and its digits.
@@ -897,6 +945,7 @@ impl Default for Prefs {
             kpod_enabled: false,
             kpod_buttons: default_kpod_buttons(),
             dtmf_sequences: Vec::new(),
+            cat_server: CatServerPrefs::default(),
         }
     }
 }

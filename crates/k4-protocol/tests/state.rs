@@ -843,3 +843,31 @@ fn fr_xvtr_01_setup_readback_parses() {
     );
     assert_eq!(s.xvtr_mode, before.xvtr_mode);
 }
+
+/// FR-CATSRV-06: the replies a CAT server hands its clients verbatim are kept as the radio sent
+/// them — `OM` (option modules, fixed 15 characters), `RVM`/`RVD` (firmware), and the K41 form of
+/// `ID` (the radio's ID text) — and module-revision lines (`RV.` form) do not overwrite them.
+/// trace: FR-CATSRV-06
+#[test]
+fn fr_catsrv_06_om_rvm_rvd_and_id_text_are_kept_verbatim() {
+    let mut s = RadioState::default();
+    for line in [
+        "OM AP-S----4---",
+        "RVM01.23",
+        "RVD02.34",
+        "IDDC0SK",
+        "RV.FP-01.23",
+    ] {
+        s.apply_cat(line);
+    }
+    assert_eq!(s.option_modules.as_deref(), Some("OM AP-S----4---"));
+    assert_eq!(s.fw_rvm.as_deref(), Some("RVM01.23"));
+    assert_eq!(s.fw_rvd.as_deref(), Some("RVD02.34"));
+    assert_eq!(s.id_text.as_deref(), Some("DC0SK"));
+    // An error reply is not a value.
+    let mut t = s.clone();
+    t.apply_cat("OM?");
+    t.apply_cat("ID?");
+    assert_eq!(t.option_modules, s.option_modules);
+    assert_eq!(t.id_text, s.id_text);
+}

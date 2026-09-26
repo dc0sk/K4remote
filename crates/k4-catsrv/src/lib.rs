@@ -74,6 +74,9 @@ pub struct Cache<'a> {
     pub id_text: Option<&'a str>,
     /// The app's link to the radio is up.
     pub link_up: bool,
+    /// The session's own transmit state, answered for `TQ` when the radio has not reported one
+    /// (Hamlib's open needs `TQ` answered either way).
+    pub tx_fallback: bool,
 }
 
 /// What to do for one client command.
@@ -202,7 +205,7 @@ pub fn handle(client: &mut Client, raw: &str, cache: &Cache) -> Vec<Action> {
             "FT" => resp::ft(s),
             "FR" => Some(resp::fr().to_string()),
             "TQ" if !cache.link_up => Some("TQ0;".to_string()),
-            "TQ" => resp::tq(s),
+            "TQ" => resp::tq(s).or_else(|| Some(format!("TQ{};", u8::from(cache.tx_fallback)))),
             "IF" => resp::if_(s, client.k31()),
             _ => return drop("GET not answered by the server"),
         };
