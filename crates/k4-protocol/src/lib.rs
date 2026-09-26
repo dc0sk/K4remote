@@ -10,6 +10,7 @@
 
 pub mod auth;
 pub mod cat;
+pub mod cat_resp;
 pub mod cw;
 pub mod frame;
 pub mod state;
