@@ -1,0 +1,12 @@
+[package]
+name = "k4-catsrv"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+publish = false
+description = "CAT server core for third-party software: per-client state, command policy and replies from the cached radio state (FR-CATSRV)."
+
+[dependencies]
+# Pure core — no sockets, no threads; the listener and the worker wiring live elsewhere.
+k4-protocol = { path = "../k4-protocol" }
