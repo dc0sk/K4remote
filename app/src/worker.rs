@@ -2658,10 +2658,29 @@ mod catsrv_e2e_tests {
             closed(&mut logger, 5),
             "the client outlived the grace period"
         );
+        // A client arriving now is turned away before it is served: its first command, sent at
+        // once, gets no answer from the cache — it is closed, not merely closed on the next pass.
         let mut late = TcpStream::connect(addr).expect("connect after grace");
+        late.write_all(b"FA;").unwrap();
+        late.set_read_timeout(Some(Duration::from_millis(100)))
+            .unwrap();
+        let t0 = Instant::now();
+        let mut seen = Vec::new();
+        let mut buf = [0u8; 256];
+        let closed_late = loop {
+            match late.read(&mut buf) {
+                Ok(0) => break true,
+                Ok(n) => seen.extend_from_slice(&buf[..n]),
+                Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => break true,
+                Err(_) if t0.elapsed() > Duration::from_secs(5) => break false,
+                Err(_) => {}
+            }
+        };
+        assert!(closed_late, "a client was taken while the link is down");
         assert!(
-            closed(&mut late, 5),
-            "a client was taken while the link is down"
+            seen.is_empty(),
+            "a client turned away was served first: {:?}",
+            String::from_utf8_lossy(&seen)
         );
 
         // Turning the server off stops the listener.
