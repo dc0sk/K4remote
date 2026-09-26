@@ -261,6 +261,9 @@ pub enum WorkerCmd {
     SendRawCat(String),
     /// Play a stored DTMF sequence (FR-FM-03): its `DM` commands, paced by [`DTMF_GAP`].
     DtmfSequence(Vec<String>),
+    /// Start (or restart) the CAT server for third-party software, or stop it (`None`) —
+    /// FR-CATSRV-01.
+    CatServer(Option<CatServerConfig>),
     /// AF recorder (FR-AUD-REC-01): the radio's own 90 s buffer.
     AfRecord,
     AfPlay,
@@ -302,6 +305,12 @@ pub enum WorkerCmd {
 #[derive(Debug, Clone, Default)]
 pub struct UiSnapshot {
     pub connected: bool,
+    /// Where the CAT server listens, when it does (FR-CATSRV-01).
+    pub catsrv_addr: Option<std::net::SocketAddr>,
+    /// CAT clients connected now.
+    pub catsrv_clients: usize,
+    /// Why the CAT server could not start, if it could not.
+    pub catsrv_error: Option<String>,
     /// Connection lifecycle phase, driving the connect/cancel control (FR-UI-16).
     pub phase: ConnPhase,
     pub transmitting: bool,
@@ -532,6 +541,171 @@ fn open_tcp(
 }
 
 /// Worker-owned state across connection lifetimes.
+/// The CAT server's settings as the worker needs them (FR-CATSRV-01).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CatServerConfig {
+    pub bind: String,
+    pub port: u16,
+    /// How long clients are kept, answered from the cache, while the radio link is down, before
+    /// they are closed (FR-CATSRV-08).
+    pub grace: Duration,
+}
+
+/// Most CAT clients at once (a logger, a digital-mode program, a panel or two).
+pub(crate) const CATSRV_MAX_CLIENTS: usize = 8;
+
+/// Default grace period while the radio link is down (FR-CATSRV-08): long enough to ride out a
+/// reconnect, short enough that a logger is told before the operator wonders.
+pub const CATSRV_GRACE: Duration = Duration::from_secs(30);
+
+/// The running CAT server and its clients' own state (FR-CATSRV).
+struct CatSrv {
+    server: k4_catsrv::server::Server,
+    clients: std::collections::HashMap<k4_catsrv::server::ClientId, k4_catsrv::Client>,
+    /// When the radio link was found down, while it stays down.
+    link_down_since: Option<Instant>,
+    /// The radio state as it was when the session went away, answered from during the grace
+    /// period (FR-CATSRV-08).
+    last_state: Option<k4_protocol::state::RadioState>,
+    grace: Duration,
+}
+
+/// Keep the radio state for CAT clients before the session goes away (FR-CATSRV-08): they are
+/// answered from it during the grace period. Only when the server is on, and only at teardown.
+fn keep_catsrv_cache(ws: &mut WorkerState) {
+    if let (Some(cs), Some(s)) = (ws.catsrv.as_mut(), ws.session.as_ref()) {
+        cs.last_state = Some(s.state().clone());
+    }
+}
+
+/// Serve CAT clients once (FR-CATSRV): drain the listener, run each command through the core's
+/// policy against the live radio state, and apply what it decides — replies to the client,
+/// allowlisted SETs and stops to the radio **through the session** (so its arm gate and
+/// fail-safes apply as to anything else), `RX` through `end_tx`. While the link is down clients
+/// are answered from the cache; after the grace period they are closed, and new ones turned away.
+fn service_catsrv(ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnapshot>>) {
+    let WorkerState {
+        catsrv,
+        session,
+        diag,
+        ..
+    } = ws;
+    let Some(cs) = catsrv.as_mut() else {
+        return;
+    };
+    let now = Instant::now();
+    let link_up = session.as_ref().is_some_and(|s| s.is_connected());
+    if link_up {
+        cs.link_down_since = None;
+    } else {
+        cs.link_down_since.get_or_insert(now);
+    }
+    let expired = cs
+        .link_down_since
+        .is_some_and(|t| now.duration_since(t) >= cs.grace);
+    if expired && !cs.clients.is_empty() {
+        cs.server.close_all();
+        cs.clients.clear();
+        diag.log(Level::Info, "catsrv", "radio link down: CAT clients closed");
+    }
+    let empty = k4_protocol::state::RadioState::default();
+    for ev in cs.server.poll() {
+        use k4_catsrv::server::Event;
+        match ev {
+            Event::Connected(id, from) => {
+                if expired {
+                    cs.server.close(id);
+                    diag.log(
+                        Level::Info,
+                        "catsrv",
+                        &format!("CAT client {from} turned away: the radio link is down"),
+                    );
+                } else {
+                    cs.clients.insert(id, k4_catsrv::Client::new());
+                    diag.log(
+                        Level::Info,
+                        "catsrv",
+                        &format!("CAT client {from} connected"),
+                    );
+                }
+            }
+            Event::Disconnected(id) => {
+                if cs.clients.remove(&id).is_some() {
+                    diag.log(Level::Info, "catsrv", "CAT client disconnected");
+                }
+            }
+            Event::Line(id, line) => {
+                let Some(client) = cs.clients.get_mut(&id) else {
+                    continue;
+                };
+                let actions = {
+                    let state = session
+                        .as_ref()
+                        .map(|s| s.state())
+                        .or(cs.last_state.as_ref())
+                        .unwrap_or(&empty);
+                    let cache = k4_catsrv::Cache {
+                        state,
+                        om: state.option_modules.as_deref(),
+                        rvm: state.fw_rvm.as_deref(),
+                        rvd: state.fw_rvd.as_deref(),
+                        id_text: state.id_text.as_deref(),
+                        link_up,
+                        tx_fallback: session.as_ref().is_some_and(|s| s.is_transmitting()),
+                    };
+                    k4_catsrv::handle(client, &line, &cache)
+                };
+                diag.log(Level::Debug, "catsrv", &format!("client: {}", line.trim()));
+                for action in actions {
+                    use k4_catsrv::Action;
+                    match action {
+                        Action::Reply(r) => cs.server.send(id, &r),
+                        Action::Forward(cmd) => {
+                            if let Some(s) = session.as_mut() {
+                                let _ = s.send(&cmd);
+                                // Optimistic, so an immediate read-back answers the new value —
+                                // but not while transmitting, when the radio may ignore it.
+                                if !s.is_transmitting() {
+                                    s.apply_local(&cmd);
+                                }
+                            }
+                        }
+                        Action::Stop(cmd) => {
+                            if let Some(s) = session.as_mut() {
+                                let _ = s.send(&cmd);
+                            }
+                        }
+                        Action::Unkey => {
+                            // A stop is sent unconditionally: through `end_tx` when the app keyed
+                            // (so its own transmit state and mic path follow), and as a plain
+                            // `RX;` otherwise — the radio may be transmitting by other means.
+                            if let Some(s) = session.as_mut() {
+                                if s.is_transmitting() {
+                                    let _ = s.end_tx();
+                                } else {
+                                    let _ = s.send("RX;");
+                                }
+                            }
+                        }
+                        Action::Refused(cmd) => diag.log(
+                            Level::Warn,
+                            "catsrv",
+                            &format!("{cmd} from a CAT client refused: clients cannot transmit"),
+                        ),
+                        Action::Dropped(cmd, why) => {
+                            diag.log(Level::Debug, "catsrv", &format!("{cmd} dropped: {why}"))
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let count = cs.clients.len();
+    if let Ok(mut s) = snapshot.lock() {
+        s.catsrv_clients = count;
+    }
+}
+
 /// Gap between the commands of a stored DTMF sequence (FR-FM-03). Whether the K4 queues
 /// back-to-back `DM` commands is not documented, so digits are paced — enough for a tone and a
 /// pause at the usual DTMF timing; to be confirmed on a radio.
@@ -578,6 +752,8 @@ impl PacedQueue {
 struct WorkerState {
     /// A stored DTMF sequence being played (FR-FM-03).
     dtmf: PacedQueue,
+    /// The CAT server for third-party software, when it is on (FR-CATSRV).
+    catsrv: Option<CatSrv>,
     session: Option<Link>,
     rx_audio: JitterBuffer,
     rx_decoder: Option<OpusDecoder>,
@@ -663,6 +839,7 @@ impl WorkerState {
             #[cfg(feature = "kpod")]
             kpod: kpod::KpodState::new(),
             dtmf: PacedQueue::new(DTMF_GAP),
+            catsrv: None,
             session: None,
             rx_audio: JitterBuffer::new(8),
             rx_decoder: None,
@@ -1084,7 +1261,10 @@ fn run(rx: Receiver<WorkerCmd>, snapshot: Arc<Mutex<UiSnapshot>>, pan: PanHandle
             None => ws.dtmf.clear(),
         }
 
-        // 4. Service the link, start a scheduled (re)connect, or idle.
+        // 4. Serve CAT clients (FR-CATSRV): their commands, through the same session seam.
+        service_catsrv(&mut ws, &snapshot);
+
+        // 5. Service the link, start a scheduled (re)connect, or idle.
         if ws.session.is_some() {
             service(&mut ws, &snapshot);
             poll_digital_audio(&mut ws);
@@ -1384,6 +1564,7 @@ fn service(ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnapshot>>) {
     }
     ws.report_worker_rate();
     if !connected {
+        keep_catsrv_cache(ws);
         ws.session = None;
         // Auto-reconnect unless the user explicitly disconnected (params cleared).
         if ws.connect_params.is_some() {
@@ -1422,6 +1603,7 @@ fn handle_cmd(cmd: WorkerCmd, ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnaps
             if let Some(s) = ws.session.as_mut() {
                 let _ = s.disconnect();
             }
+            keep_catsrv_cache(ws);
             ws.session = None;
             ws.dtmf.clear();
             ws.pending_connect = None;
@@ -1568,6 +1750,47 @@ fn handle_cmd(cmd: WorkerCmd, ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnaps
         WorkerCmd::RxEqFlat => {
             if let Some(s) = ws.session.as_mut() {
                 let _ = s.send(k4_protocol::cat::rx_eq_flat());
+            }
+        }
+        WorkerCmd::CatServer(cfg) => {
+            // Dropping the old server closes its listener and clients before a new one binds.
+            ws.catsrv = None;
+            let (addr, error) = match cfg {
+                None => {
+                    ws.diag.log(Level::Info, "catsrv", "CAT server off");
+                    (None, None)
+                }
+                Some(cfg) => {
+                    match k4_catsrv::server::Server::start(&cfg.bind, cfg.port, CATSRV_MAX_CLIENTS)
+                    {
+                        Ok(server) => {
+                            let addr = server.addr();
+                            ws.diag.log(
+                                Level::Info,
+                                "catsrv",
+                                &format!("CAT server listening on {addr}"),
+                            );
+                            ws.catsrv = Some(CatSrv {
+                                server,
+                                clients: std::collections::HashMap::new(),
+                                link_down_since: None,
+                                last_state: None,
+                                grace: cfg.grace,
+                            });
+                            (Some(addr), None)
+                        }
+                        Err(e) => {
+                            let msg = format!("cannot listen on {}:{}: {e}", cfg.bind, cfg.port);
+                            ws.diag.log(Level::Warn, "catsrv", &msg);
+                            (None, Some(msg))
+                        }
+                    }
+                }
+            };
+            if let Ok(mut s) = snapshot.lock() {
+                s.catsrv_addr = addr;
+                s.catsrv_error = error;
+                s.catsrv_clients = 0;
             }
         }
         WorkerCmd::DtmfSequence(cmds) => {
@@ -2264,5 +2487,206 @@ mod paced_tests {
         assert_eq!(q.due(ms(30_000)).as_deref(), Some("DM7;"));
         q.clear();
         assert_eq!(q.due(ms(40_000)), None, "cleared");
+    }
+}
+
+#[cfg(test)]
+mod catsrv_e2e_tests {
+    //! The CAT server end to end (FR-CATSRV-01/05/06/07/08): a real worker thread connected to the
+    //! protocol simulator as the radio, the CAT server on a loopback port, and a TCP "logger"
+    //! sending what Hamlib sends. Nothing is mocked between the logger's socket and the radio's.
+    use super::{spawn, CatServerConfig, ConnectTarget, PanHandle, UiSnapshot, WorkerCmd};
+    use k4_sim::{SimServer, SIM_OM, SIM_RVM};
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+    use std::sync::{mpsc, Arc, Mutex};
+    use std::time::{Duration, Instant};
+
+    fn wait(what: &str, secs: u64, mut ok: impl FnMut() -> bool) {
+        let t0 = Instant::now();
+        while !ok() {
+            assert!(
+                t0.elapsed() < Duration::from_secs(secs),
+                "timed out: {what}"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// Read from the logger's socket until `want` has arrived; `None` if the socket closed.
+    fn read_until(c: &mut TcpStream, want: &str) -> Option<String> {
+        c.set_read_timeout(Some(Duration::from_millis(100)))
+            .unwrap();
+        let t0 = Instant::now();
+        let mut got = String::new();
+        let mut buf = [0u8; 1024];
+        while !got.contains(want) {
+            assert!(
+                t0.elapsed() < Duration::from_secs(5),
+                "timed out waiting for {want:?}; got {got:?}"
+            );
+            match c.read(&mut buf) {
+                Ok(0) => return None,
+                Ok(n) => got.push_str(&String::from_utf8_lossy(&buf[..n])),
+                Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => return None,
+                Err(_) => {}
+            }
+        }
+        Some(got)
+    }
+
+    fn closed(c: &mut TcpStream, secs: u64) -> bool {
+        c.set_read_timeout(Some(Duration::from_millis(100)))
+            .unwrap();
+        let t0 = Instant::now();
+        let mut buf = [0u8; 256];
+        while t0.elapsed() < Duration::from_secs(secs) {
+            match c.read(&mut buf) {
+                Ok(0) => return true,
+                Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => return true,
+                _ => {}
+            }
+        }
+        false
+    }
+
+    /// FR-CATSRV-08: every place the worker drops the session first keeps the radio state for CAT
+    /// clients, so a lost link (not only an explicit disconnect) is answered from the last cache.
+    /// Structural, over the code above this module.
+    /// trace: FR-CATSRV-08
+    #[test]
+    fn fr_catsrv_08_every_session_drop_keeps_the_cache() {
+        let whole = include_str!("worker.rs");
+        let code = &whole[..whole
+            .find(concat!("mod catsrv_e2e", "_tests {"))
+            .expect("this module")];
+        let drops: Vec<usize> = code
+            .match_indices("ws.session = None;")
+            .map(|(i, _)| i)
+            .collect();
+        assert!(
+            drops.len() >= 2,
+            "expected the disconnect and link-loss drops"
+        );
+        for at in drops {
+            let before = code[..at].trim_end();
+            assert!(
+                before.ends_with("keep_catsrv_cache(ws);"),
+                "a session drop does not keep the CAT cache first:\n{}",
+                &code[at.saturating_sub(200)..at + 20]
+            );
+        }
+    }
+
+    /// trace: FR-CATSRV-01, FR-CATSRV-05, FR-CATSRV-06, FR-CATSRV-07, FR-CATSRV-08
+    #[test]
+    fn fr_catsrv_01_a_logger_drives_the_radio_through_the_worker() {
+        let sim = SimServer::start("pw", 14_074_000).expect("simulator");
+        let snapshot: Arc<Mutex<UiSnapshot>> = Arc::default();
+        let (tx, rx) = mpsc::channel();
+        let pan: PanHandle = Arc::default();
+        spawn(rx, Arc::clone(&snapshot), pan);
+        tx.send(WorkerCmd::Connect(ConnectTarget::Tcp {
+            host: "127.0.0.1".into(),
+            port: sim.addr().port(),
+            password: "pw".into(),
+            use_tls: false,
+        }))
+        .unwrap();
+        wait("connected to the simulator", 10, || {
+            snapshot.lock().unwrap().connected
+        });
+        // The identity the worker fetched at connect is in the cache before a logger asks.
+        wait("OM fetched", 5, || {
+            sim.received().iter().any(|c| c == "OM;")
+        });
+        tx.send(WorkerCmd::CatServer(Some(CatServerConfig {
+            bind: "127.0.0.1".into(),
+            port: 0,
+            grace: Duration::from_millis(1500),
+        })))
+        .unwrap();
+        wait("the CAT server listens", 5, || {
+            snapshot.lock().unwrap().catsrv_addr.is_some()
+        });
+        let addr = snapshot.lock().unwrap().catsrv_addr.unwrap();
+        assert!(addr.ip().is_loopback());
+
+        // Hamlib's opening moves, answered from the cache.
+        let mut logger = TcpStream::connect(addr).expect("logger connects");
+        wait("the client is counted", 5, || {
+            snapshot.lock().unwrap().catsrv_clients == 1
+        });
+        logger.write_all(b"PS;K40;ID;OM;RVM;FA;MD;FT;TQ;").unwrap();
+        let got = read_until(&mut logger, "TQ0;").expect("replies");
+        let want = format!("PS1;ID017;{SIM_OM}{SIM_RVM}FA00014074000;MD2;FT0;TQ0;");
+        assert_eq!(got, want);
+
+        // A frequency SET reaches the radio, and the next read answers the new value at once.
+        logger.write_all(b"FA00014075000;FA;").unwrap();
+        assert_eq!(
+            read_until(&mut logger, ";").as_deref(),
+            Some("FA00014075000;")
+        );
+        wait("the SET reached the radio", 5, || {
+            sim.received().iter().any(|c| c == "FA00014075000;")
+        });
+
+        // Keying and hazardous commands never reach the radio; RX does (through the session).
+        logger.write_all(b"TX;SW17;RRC0;KY CQ;RX;").unwrap();
+        wait("RX reached the radio", 5, || {
+            sim.received().iter().any(|c| c == "RX;")
+        });
+        let sent = sim.received();
+        for never in ["TX;", "SW17;", "RRC0;", "KY CQ;"] {
+            assert!(
+                !sent.iter().any(|c| c == never),
+                "{never} reached the radio"
+            );
+        }
+
+        // The link drops: GETs still come from the cache, TQ reads 0, SETs are dropped …
+        tx.send(WorkerCmd::Disconnect).unwrap();
+        wait("disconnected", 5, || !snapshot.lock().unwrap().connected);
+        logger.write_all(b"TQ;FA;").unwrap();
+        assert_eq!(
+            read_until(&mut logger, "FA").map(|s| s.contains("TQ0;")),
+            Some(true)
+        );
+        // … and after the grace period the client is closed, and a new one is turned away.
+        assert!(
+            closed(&mut logger, 5),
+            "the client outlived the grace period"
+        );
+        // A client arriving now is turned away before it is served: its first command, sent at
+        // once, gets no answer from the cache — it is closed, not merely closed on the next pass.
+        let mut late = TcpStream::connect(addr).expect("connect after grace");
+        late.write_all(b"FA;").unwrap();
+        late.set_read_timeout(Some(Duration::from_millis(100)))
+            .unwrap();
+        let t0 = Instant::now();
+        let mut seen = Vec::new();
+        let mut buf = [0u8; 256];
+        let closed_late = loop {
+            match late.read(&mut buf) {
+                Ok(0) => break true,
+                Ok(n) => seen.extend_from_slice(&buf[..n]),
+                Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => break true,
+                Err(_) if t0.elapsed() > Duration::from_secs(5) => break false,
+                Err(_) => {}
+            }
+        };
+        assert!(closed_late, "a client was taken while the link is down");
+        assert!(
+            seen.is_empty(),
+            "a client turned away was served first: {:?}",
+            String::from_utf8_lossy(&seen)
+        );
+
+        // Turning the server off stops the listener.
+        tx.send(WorkerCmd::CatServer(None)).unwrap();
+        wait("the CAT server stops", 5, || {
+            snapshot.lock().unwrap().catsrv_addr.is_none()
+        });
     }
 }

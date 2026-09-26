@@ -14,6 +14,15 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
 
 ### Added
 
+- **CAT server for logging and digital-mode software.** Turn it on under
+  Settings → **CAT SERVER** and WSJT-X, JTDX, fldigi, flrig, Log4OM, CQRLOG or
+  N1MM Logger+ on the same computer can follow and set the radio's frequency and
+  mode through the app — set them up as for an Elecraft K4 on the network at
+  `127.0.0.1`, port `9200`. The app answers their polls itself, without extra
+  traffic to the radio. Off by default; the software **cannot transmit** yet
+  (keying commands are refused and logged); a short loss of the radio link is
+  ridden out for 30 seconds.
+
 - **Stored DTMF sequences.** The DTMF keypad (FM) now has six stored
   sequences — a name and up to 32 digits each — played one tone at a time with
   **Send** while you are transmitting. They are saved with your settings. (The

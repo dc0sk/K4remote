@@ -91,7 +91,7 @@ fn handle_client(
         for payload in decoder.push(&buf[..n]) {
             if let Some(text) = decode_cat_text(&payload) {
                 received.lock().expect("sim mutex").push(text.clone());
-                if let Some(reply) = response_for(&text, vfo_a_hz) {
+                for reply in response_for(&text, vfo_a_hz) {
                     stream.write_all(&server_cat_frame(&reply))?;
                 }
             }
@@ -100,13 +100,30 @@ fn handle_client(
     Ok(())
 }
 
-fn response_for(command: &str, vfo_a_hz: u64) -> Option<String> {
+/// The simulated radio's identity replies (what the app fetches once per connect for its CAT
+/// server, FR-CATSRV-06).
+pub const SIM_OM: &str = "OM AP-S----4---;";
+pub const SIM_RVM: &str = "RVM99.01;";
+pub const SIM_RVD: &str = "RVD99.02;";
+pub const SIM_ID_TEXT: &str = "SIM";
+
+fn response_for(command: &str, vfo_a_hz: u64) -> Vec<String> {
     let cmd = command.strip_suffix(';').unwrap_or(command);
-    if cmd == "FA" {
-        Some(set_vfo_a_hz(vfo_a_hz))
-    } else if cmd.starts_with("PING") {
-        Some("PONG;".to_string())
-    } else {
-        None // RDY/K41/ER1/EM/SL and unknown: recorded, acknowledged silently
+    match cmd {
+        "FA" => vec![set_vfo_a_hz(vfo_a_hz)],
+        // The state dump a real K4 sends after `RDY`, in brief: VFOs, mode, split, receive.
+        "RDY" => vec![
+            set_vfo_a_hz(vfo_a_hz),
+            format!("FB{:011};", vfo_a_hz + 2_500),
+            "MD2;".to_string(),
+            "FT0;".to_string(),
+            "BW0280;".to_string(),
+        ],
+        "OM" => vec![SIM_OM.to_string()],
+        "RVM" => vec![SIM_RVM.to_string()],
+        "RVD" => vec![SIM_RVD.to_string()],
+        "ID" => vec![format!("ID{SIM_ID_TEXT};")],
+        c if c.starts_with("PING") => vec!["PONG;".to_string()],
+        _ => Vec::new(), // K41/ER1/EM/SL and unknown: recorded, acknowledged silently
     }
 }

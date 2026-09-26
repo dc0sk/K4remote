@@ -78,6 +78,7 @@ k4-config = { path = "../crates/k4-config" }
 k4-diag = { path = "../crates/k4-diag" }
 k4-kpa = { path = "../crates/k4-kpa" }
 k4-spot = { path = "../crates/k4-spot" }
+k4-catsrv = { path = "../crates/k4-catsrv" }
 iced = { version = "0.13", features = ["tokio", "canvas", "image", "advanced"] }
 # Casting the f32 bin rows to bytes for the GPU waterfall upload (FR-PAN-12).
 bytemuck = "1"
@@ -93,3 +94,7 @@ tokio = { version = "1.53.0", default-features = false, features = ["rt"] }
 # Embed the app icon into the Windows .exe (NFR-PKG-01); no-op elsewhere.
 [target.'cfg(windows)'.build-dependencies]
 winresource = "0.1"
+
+[dev-dependencies]
+# The protocol simulator stands in for the radio in end-to-end worker tests.
+k4-sim = { path = "../crates/k4-sim" }

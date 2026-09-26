@@ -936,3 +936,44 @@ fn fr_fm_03_six_stored_dtmf_sequences_persist_and_are_cleaned() {
     assert_eq!(s.name, "avery long name ");
     assert_eq!(s.digits, "12");
 }
+
+/// FR-CATSRV-01: the CAT server is off by default, listening on 127.0.0.1:9200 when turned on
+/// (the K4's own CAT port, so loggers are set up as for a K4 on the LAN); its settings round-trip
+/// and a config from before them loads the defaults. Whether a bind address is loopback decides
+/// the warning: only loopback addresses and `localhost` are; anything else, including `0.0.0.0`
+/// and junk, is not. Defaults are contract pins, written as literals.
+/// trace: FR-CATSRV-01
+#[test]
+fn fr_catsrv_01_cat_server_settings_default_off_on_loopback_and_persist() {
+    use k4_config::catsrv_bind_is_loopback;
+    let def = Prefs::default().cat_server;
+    assert!(!def.enabled);
+    assert_eq!((def.bind.as_str(), def.port), ("127.0.0.1", 9200));
+    let older: Prefs = toml::from_str("tune_step_hz = 100\n").expect("a config from before");
+    assert_eq!(older.cat_server, def);
+    let mut p = Prefs::default();
+    p.cat_server.enabled = true;
+    p.cat_server.port = 9300;
+    let back: Prefs = toml::from_str(&toml::to_string(&p).expect("serialize")).expect("parse");
+    assert_eq!(back.cat_server, p.cat_server);
+    for lo in [
+        "127.0.0.1",
+        "127.1.2.3",
+        "::1",
+        "localhost",
+        " 127.0.0.1 ",
+        "LOCALHOST",
+    ] {
+        assert!(catsrv_bind_is_loopback(lo), "{lo:?}");
+    }
+    for not in [
+        "0.0.0.0",
+        "192.168.1.10",
+        "::",
+        "",
+        "example.org",
+        "127.0.0.1x",
+    ] {
+        assert!(!catsrv_bind_is_loopback(not), "{not:?}");
+    }
+}

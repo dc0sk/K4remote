@@ -171,6 +171,28 @@ fn refresh_outlasts_age_limit(refresh_secs: u64, max_age_secs: u64) -> bool {
     refresh_secs >= max_age_secs
 }
 
+/// The CAT server's status line (FR-CATSRV-01) and whether it is a problem: off, listening with
+/// how many clients, or why it could not start.
+fn catsrv_status_text(
+    enabled: bool,
+    addr: Option<std::net::SocketAddr>,
+    clients: usize,
+    error: Option<&str>,
+) -> (String, bool) {
+    match (enabled, addr, error) {
+        (false, _, _) => ("Off.".into(), false),
+        (true, _, Some(e)) => (format!("Not running: {e}"), true),
+        (true, Some(a), None) => (
+            format!(
+                "Listening on {a} — {clients} client{} connected.",
+                if clients == 1 { "" } else { "s" }
+            ),
+            false,
+        ),
+        (true, None, None) => ("Starting…".into(), false),
+    }
+}
+
 /// Keep only the characters a callsign login can hold — letters, digits and `/`
 /// — upper-cased and bounded, so the field can never carry a control or
 /// look-alike character into a login line (FR-SPOT-04).
@@ -235,6 +257,12 @@ struct App {
     spot_status_ui: spot_sources::Statuses,
     /// What the worker was last told to run and keep, so a tick sends only a change.
     spot_sent: SpotSent,
+    /// The CAT server's settings (FR-CATSRV-01); bind and port as typed.
+    cat_server: k4_config::CatServerPrefs,
+    catsrv_bind: String,
+    catsrv_port: String,
+    /// What the worker was last told, so only a change is sent.
+    catsrv_sent: Option<worker::CatServerConfig>,
     spot_window_sent: Option<(u64, u64)>,
     /// Draw the waterfall on the GPU (false = the CPU rasteriser, when there is no wgpu adapter).
     gpu_waterfall: bool,
@@ -686,6 +714,7 @@ enum SettingsTab {
     Audio,
     Kpod,
     Kpa1500,
+    CatServer,
     Backup,
 }
 
@@ -834,6 +863,10 @@ enum Message {
     /// DTMF keypad (FR-FM-02): open/close, and send one digit.
     ToggleDtmf,
     DtmfDigit(char),
+    /// CAT server settings (FR-CATSRV-01).
+    ToggleCatServer,
+    CatServerBind(String),
+    CatServerPort(String),
     /// Edit a stored DTMF sequence's name / digits, or play it (FR-FM-03).
     DtmfSeqName(usize, String),
     DtmfSeqDigits(usize, String),
@@ -1211,6 +1244,10 @@ impl App {
             spot_status,
             spot_status_ui: spot_sources::Statuses::default(),
             spot_sent: SpotSent::default(),
+            catsrv_bind: prefs.cat_server.bind.clone(),
+            catsrv_port: prefs.cat_server.port.to_string(),
+            cat_server: prefs.cat_server.clone(),
+            catsrv_sent: None,
             spot_window_sent: None,
             gpu_waterfall: waterfall_gpu::gpu_available(),
             ui: initial,
@@ -1765,6 +1802,105 @@ impl App {
         }
     }
 
+    /// The CAT server settings as they will be saved: the typed bind address (empty = the
+    /// loopback default) and port (unusable = 9200) resolved (FR-CATSRV-01).
+    fn cat_server_for_save(&self) -> k4_config::CatServerPrefs {
+        let bind = self.catsrv_bind.trim();
+        k4_config::CatServerPrefs {
+            enabled: self.cat_server.enabled,
+            bind: if bind.is_empty() {
+                k4_config::CatServerPrefs::default().bind
+            } else {
+                bind.to_string()
+            },
+            port: self
+                .catsrv_port
+                .parse::<u16>()
+                .ok()
+                .filter(|p| *p > 0)
+                .unwrap_or(k4_config::CATSRV_DEFAULT_PORT),
+        }
+    }
+
+    /// Tell the worker to start, restart or stop the CAT server when its settings change
+    /// (FR-CATSRV-01). Only a change is sent.
+    fn sync_cat_server(&mut self) {
+        let prefs = self.cat_server_for_save();
+        let want = prefs.enabled.then(|| worker::CatServerConfig {
+            bind: prefs.bind.clone(),
+            port: prefs.port,
+            grace: worker::CATSRV_GRACE,
+        });
+        if want != self.catsrv_sent {
+            self.send(WorkerCmd::CatServer(want.clone()));
+            self.catsrv_sent = want;
+        }
+    }
+
+    /// The Settings tab for the CAT server (FR-CATSRV-01): the switch, where it listens, a
+    /// warning when that is not this computer, what it is doing, and how to point software at it.
+    fn cat_server_settings_view(&self) -> Element<'_, Message> {
+        let dim = role_color(ui::ColorRole::Inactive);
+        let caution = role_color(ui::ColorRole::Caution);
+        let prefs = self.cat_server_for_save();
+        let mut col = Column::new()
+            .spacing(10)
+            .push(
+                Text::new(
+                    "Lets logging and digital-mode software on this computer — WSJT-X, JTDX, \
+                     fldigi, flrig, Log4OM, CQRLOG, N1MM Logger+ — follow and set the radio's \
+                     frequency and mode through this app. It looks like a K4 on the network: in \
+                     the software, choose the Elecraft K4 over the network (TCP), address \
+                     127.0.0.1, port 9200. Clients cannot transmit.",
+                )
+                .size(11)
+                .color(dim),
+            )
+            .push(small_btn_pair(
+                prefs.enabled,
+                "CAT server: ON",
+                "CAT server: OFF",
+                Message::ToggleCatServer,
+            ))
+            .push(Self::spot_field(
+                "Address",
+                "127.0.0.1",
+                &self.catsrv_bind,
+                180.0,
+                Message::CatServerBind,
+            ))
+            .push(Self::spot_field(
+                "Port",
+                "9200",
+                &self.catsrv_port,
+                90.0,
+                Message::CatServerPort,
+            ));
+        if !k4_config::catsrv_bind_is_loopback(&prefs.bind) {
+            col = col.push(
+                Text::new(
+                    "This address is reachable from other computers. The CAT protocol has no \
+                     password: anyone who can reach it can change your radio's frequency and \
+                     mode. Use 127.0.0.1 unless you know you need otherwise.",
+                )
+                .size(12)
+                .color(caution),
+            );
+        }
+        let status = catsrv_status_text(
+            prefs.enabled,
+            self.ui.catsrv_addr,
+            self.ui.catsrv_clients,
+            self.ui.catsrv_error.as_deref(),
+        );
+        col.push(
+            Text::new(status.0)
+                .size(12)
+                .color(if status.1 { caution } else { dim }),
+        )
+        .into()
+    }
+
     fn spot_networks_for_save(&self) -> k4_config::SpotNetworks {
         let mut nets = self.spot_networks.clone();
         nets.psk_reporter.port =
@@ -1833,6 +1969,7 @@ impl App {
                     kpod_enabled: self.kpod_enabled,
                     kpod_buttons: self.kpod_buttons.clone(),
                     dtmf_sequences: self.dtmf_seqs.clone(),
+                    cat_server: self.cat_server_for_save(),
                     ..Default::default()
                 },
             };
@@ -2553,6 +2690,16 @@ impl App {
             Message::KpodButtonsReset => {
                 self.kpod_buttons = k4_config::default_kpod_buttons();
                 self.push_kpod_buttons();
+            }
+            Message::ToggleCatServer => {
+                self.cat_server.enabled = !self.cat_server.enabled;
+                self.save_config();
+            }
+            Message::CatServerBind(v) => {
+                self.catsrv_bind = v.chars().filter(|c| !c.is_whitespace()).take(64).collect();
+            }
+            Message::CatServerPort(v) => {
+                self.catsrv_port = v.chars().filter(char::is_ascii_digit).take(5).collect();
             }
             Message::ToggleDtmf => {
                 self.dtmf_open = !self.dtmf_open;
@@ -3476,6 +3623,7 @@ impl App {
                         });
                         self.spot_sent = sent;
                     }
+                    self.sync_cat_server();
                     let win = spots::spot_window(self.ui.vfo_a_hz, self.ui.vfo_b_hz);
                     if spots::window_needs_update(self.spot_window_sent, win) {
                         self.spot_window_sent = Some(win);
@@ -7344,6 +7492,7 @@ impl App {
             .push(settings_tab_btn(SettingsTab::Audio, "AUDIO"))
             .push(settings_tab_btn(SettingsTab::Kpod, "K-POD"))
             .push(settings_tab_btn(SettingsTab::Kpa1500, "KPA1500"))
+            .push(settings_tab_btn(SettingsTab::CatServer, "CAT SERVER"))
             .push(settings_tab_btn(SettingsTab::Backup, "BACKUP"));
         let settings_body: Element<Message> = match self.settings_tab {
             SettingsTab::Connection => Column::new()
@@ -7391,6 +7540,15 @@ impl App {
                         ))
                         .push(small_btn("Configuration…", Message::ToggleKpa1500Window)),
                 )
+                .into(),
+            SettingsTab::CatServer => Column::new()
+                .spacing(10)
+                .push(
+                    Text::new("CAT server for logging software")
+                        .size(12)
+                        .color(dim),
+                )
+                .push(self.cat_server_settings_view())
                 .into(),
             SettingsTab::Backup => Column::new()
                 .spacing(10)
@@ -11686,6 +11844,7 @@ mod settings_tabs_wiring_tests {
             "Audio",
             "Kpod",
             "Kpa1500",
+            "CatServer",
             "Backup",
         ] {
             assert!(
@@ -11704,6 +11863,7 @@ mod settings_tabs_wiring_tests {
             "self.audio_section_view()",
             "self.kpod_buttons_view()",
             "self.backup_section_view()",
+            "self.cat_server_settings_view()",
             "Message::ToggleKpa1500Window", // KPA1500 configuration entry point
         ] {
             assert!(
@@ -11954,5 +12114,85 @@ mod dtmf_seq_wiring_tests {
         kept.sort_unstable();
         want.sort_unstable();
         assert_eq!(kept, want);
+    }
+}
+
+#[cfg(test)]
+mod catsrv_ui_tests {
+    use super::catsrv_status_text;
+
+    /// FR-CATSRV-01: the status line says whether the server is off, listening (with how many
+    /// clients) or not running and why — the last in the caution colour.
+    /// trace: FR-CATSRV-01
+    #[test]
+    fn fr_catsrv_01_status_line_says_what_the_server_is_doing() {
+        let a: std::net::SocketAddr = "127.0.0.1:9200".parse().unwrap();
+        assert_eq!(
+            catsrv_status_text(false, Some(a), 3, None),
+            ("Off.".into(), false)
+        );
+        assert_eq!(
+            catsrv_status_text(true, Some(a), 1, None),
+            (
+                "Listening on 127.0.0.1:9200 — 1 client connected.".into(),
+                false
+            )
+        );
+        assert_eq!(
+            catsrv_status_text(true, Some(a), 2, None).0,
+            "Listening on 127.0.0.1:9200 — 2 clients connected."
+        );
+        let (text, problem) = catsrv_status_text(
+            true,
+            None,
+            0,
+            Some("cannot listen on 127.0.0.1:9200: address in use"),
+        );
+        assert!(problem && text.contains("address in use"), "{text}");
+        assert_eq!(catsrv_status_text(true, None, 0, None).0, "Starting…");
+    }
+
+    /// FR-CATSRV-01: the settings are carried through every hand-off — loaded, saved (the save
+    /// ends in `..Default::default()`, so a forgotten field would silently turn the server off),
+    /// sent to the worker on the tick when they change, shown in their own tab with the loopback
+    /// warning. Structural, over the code above this module.
+    /// trace: FR-CATSRV-01
+    #[test]
+    fn fr_catsrv_01_settings_are_wired_end_to_end() {
+        let whole = include_str!("main.rs");
+        let code = &whole[..whole
+            .find(concat!("mod catsrv_ui", "_tests {"))
+            .expect("this module")];
+        let squash = |t: &str| t.split_whitespace().collect::<String>();
+        let code = squash(code);
+        for (what, needle) in [
+            ("loaded", "cat_server: prefs.cat_server.clone(),"),
+            ("saved", "cat_server: self.cat_server_for_save(),"),
+            (
+                "synced on the tick",
+                "self.sync_cat_server(); let win = spots::spot_window(",
+            ),
+            (
+                "only a change is sent",
+                "if want != self.catsrv_sent { self.send(WorkerCmd::CatServer(want.clone()));",
+            ),
+            (
+                "the switch persists",
+                "self.cat_server.enabled = !self.cat_server.enabled; self.save_config();",
+            ),
+            (
+                "the tab shows it",
+                "SettingsTab::CatServer => Column::new()",
+            ),
+            (
+                "the warning",
+                "if !k4_config::catsrv_bind_is_loopback(&prefs.bind) {",
+            ),
+        ] {
+            assert!(
+                code.contains(&squash(needle)),
+                "CAT server settings: {what}"
+            );
+        }
     }
 }
