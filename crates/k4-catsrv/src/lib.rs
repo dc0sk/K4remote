@@ -25,6 +25,8 @@
 //!    not throw a logger into its error dialog), `TQ` reads 0, `PS` gets no reply, and SETs are
 //!    dropped rather than queued.
 
+pub mod server;
+
 use k4_protocol::cat::keys_transmitter;
 use k4_protocol::cat_resp as resp;
 use k4_protocol::state::RadioState;
