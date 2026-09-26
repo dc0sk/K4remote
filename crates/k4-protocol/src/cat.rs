@@ -13,32 +13,35 @@ const MAX_LINE_BUFFER: usize = 64 * 1024;
 #[derive(Debug, Default)]
 pub struct LineDecoder {
     buf: Vec<u8>,
+    /// Input overran [`MAX_LINE_BUFFER`] without a `;`: skip to the next `;` before decoding
+    /// again, so the junk's tail is not glued onto the next command.
+    discarding: bool,
 }
 
 impl LineDecoder {
     /// Create an empty decoder.
     pub fn new() -> Self {
-        Self { buf: Vec::new() }
+        Self::default()
     }
 
     /// Append `data` and return every complete `;`-terminated command (each
-    /// including its trailing `;`), leaving any partial command buffered.
+    /// including its trailing `;`), leaving any partial command buffered. A run
+    /// of more than 64 KiB without a `;` is discarded up to the next `;`.
     pub fn push(&mut self, data: &[u8]) -> Vec<String> {
-        self.buf.extend_from_slice(data);
-        if self.buf.len() > MAX_LINE_BUFFER {
-            self.buf.clear();
-            return Vec::new();
-        }
         let mut out = Vec::new();
-        let mut start = 0;
-        for i in 0..self.buf.len() {
-            if self.buf[i] == b';' {
-                out.push(self.buf[start..=i].iter().map(|&b| b as char).collect());
-                start = i + 1;
+        for &b in data {
+            if self.discarding {
+                self.discarding = b != b';';
+                continue;
             }
-        }
-        if start > 0 {
-            self.buf.drain(..start);
+            self.buf.push(b);
+            if b == b';' {
+                out.push(self.buf.iter().map(|&b| b as char).collect());
+                self.buf.clear();
+            } else if self.buf.len() > MAX_LINE_BUFFER {
+                self.buf.clear();
+                self.discarding = true;
+            }
         }
         out
     }
