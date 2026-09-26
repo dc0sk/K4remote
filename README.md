@@ -104,11 +104,13 @@ and the VFO frames support click-to-tune digits, a clickable mode cycle, and opt
 | **Control** | VFO A/B with **per-digit click tuning** + optimistic stepping, band, clickable **mode cycle**, bandwidth, LO/HI filter edges, AGC, NB/NR, preamp, attenuator, RIT/XIT, split. |
 | **Mode-adaptive UI** | Per-mode control emphasis + mode strips (CW / voice / DATA / AM / FM), switchable in Settings; follows the active RX and the transmit VFO. |
 | **Metering** | S-meter (bar count + dBm) with S-unit mapping; TX RF/ALC/SWR/COMP bars while transmitting. |
-| **Spectrum** | Decodes the K4 dB/bin stream → live spectrum trace + scrolling waterfall + mini-pan (GPU canvas), with click-to-QSY and wheel tuning. |
+| **Spectrum** | Decodes the K4 dB/bin stream → live spectrum trace + scrolling waterfall + mini-pan, **GPU-drawn** and paced to the radio's own row rate (low GPU load), with click-to-QSY, wheel tuning, and a configurable **afterglow** that lets a brief signal linger and fade. |
+| **Spot nameplates** | Callsigns from the **Reverse Beacon Network**, a **DX cluster**, **PSK Reporter** (optionally TLS), **POTA** and **FreeDV Reporter** (optionally wss) drawn on the spectrum at their frequency — coloured by source, fading with age, stacked when crowded; **click one to tune to it**. Each network is chosen and configured in Settings (all off by default), receive-only, with an age limit; an untrusted TLS certificate is shown for approval. |
 | **Audio** | Full-duplex 12 kHz **Opus** — jitter buffer, resampling, cpal device I/O (L=Main, R=Sub). |
 | **Transmit** | PTT, voice, and CW keying — all behind an explicit **TX arm**, with an emergency stop, link-loss fail-safe, and a configurable **PTT keyboard hotkey** (toggle or hold). |
 | **K-Pod** | Optional Elecraft **K-Pod** USB control surface (`--features kpod`): the rocker assigns the knob to VFO A / VFO B / RIT-XIT (with indicator LEDs) and the encoder tunes it. The **F1–F8 switches** (tap + hold) run configurable CAT macros — set them in Settings → *K-Pod function switches* from a preset list or a free-form command string, seeded from the Elecraft sample macros. |
-| **Operability** | Persisted connection profiles, **OS-keychain** password storage (secrets never written to config), **K4 settings export/import** (SHA-256-stamped `.cfg`), an optional separate **diagnostics window** with a **filterable** log + raw-CAT console, and **ESC** to close dialogs. |
+| **Amplifier** | Optional **Elecraft KPA1500** support over the amp's own Ethernet control server: a live top-bar indicator (Operate/Standby, forward power, SWR, faults), and a KPA1500 window with full telemetry, Operate/Standby, ATU in/bypass, antenna selection and a one-touch **ATU TUNE** (arm-gated, like every transmit action). |
+| **Operability** | **Settings** in its own tabbed window (Connection, Peers, Spotting, Audio, K-Pod, KPA1500, Backup), persisted connection profiles, **OS-keychain** password storage (secrets never written to config), **K4 settings export/import** (SHA-256-stamped `.cfg`), an optional separate **diagnostics window** with a **filterable** log + raw-CAT console, and **ESC** to close dialogs. |
 
 ## Quick start
 
@@ -169,11 +171,20 @@ Windows on every push and pull request; **release** builds are in `release.yml`.
 
 ## Roadmap
 
-The rig-control **operating backlog is essentially complete** as of 0.8.0 —
+The rig-control **operating backlog is essentially complete** —
 VFO/mode/filter control, metering, panadapter, memories, transmit (voice + CW),
-the audio path, K-Pod, on-screen macros, DTMF, and transverter setup are all in.
-Most of it has been validated against a real K4; what's left is a short,
-honest list.
+the audio path, K-Pod, on-screen macros, DTMF, and transverter setup are all in,
+and 0.10.0 added spot nameplates and KPA1500 support. Most of it has been
+validated against a real K4; what's left is a short, honest list.
+
+**In progress — a CAT server for logging and digital-mode software.** WSJT-X /
+JTDX, fldigi / flrig, Log4OM, CQRLOG and N1MM Logger+ will be able to drive the
+remote K4 *through* K4 Remote, which emulates the K4's own network CAT service on
+`127.0.0.1:9200` — so the software is set up exactly as for a K4 on the LAN.
+Clients will see and set frequency and mode; transmitting from them will need TX
+armed in the app *and* an explicit opt-in. The design, checked against Hamlib's
+and flrig's source, is in [`docs/concept/cat-server-plan.md`](docs/concept/cat-server-plan.md);
+the first parts are in review.
 
 **Blocked on hardware answers** (each unblocks a feature that is otherwise
 guesswork):
@@ -188,12 +199,9 @@ guesswork):
 USB/serial path get their final validation against a live K4; most control paths
 are already confirmed.
 
-**Deferred, lower priority** — the mW power scale while operating on a
-transverter band, stored DTMF sequences, and `SI`-based V/I metering (whose
-response format the K4 Programmer's Reference leaves for a future revision).
-
-**Possible Phase 2/3** — an embedded CAT server so WSJT-X, loggers and other
-software can share the remote link.
+**Deferred, lower priority** — `SI`-based V/I metering (whose response format
+the K4 Programmer's Reference leaves for a future revision). The mW power scale
+on transverter bands and stored DTMF sequences are built and in review.
 
 ## License
 

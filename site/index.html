@@ -178,7 +178,7 @@
     <span class="kicker">Elecraft K4 · remote control panel</span>
     <h1>Operate your K4 from anywhere.</h1>
     <p class="lead">A fast, cross-platform control panel for the <b>Elecraft&nbsp;K4</b> transceiver —
-      rig control, spectrum&nbsp;+&nbsp;waterfall, full-duplex audio, and transmit — over Ethernet or
+      rig control, spectrum&nbsp;+&nbsp;waterfall with live spot nameplates, full-duplex audio, and transmit — over Ethernet or
       USB/serial. Written in Rust, requirements-first and test-driven.</p>
     <div class="cta">
       <a class="btn btn-primary" href="#download">Download</a>
@@ -264,12 +264,14 @@
       <div class="card"><h3><span class="dot"></span>Connect</h3><p>Plaintext Ethernet (SHA-384 auth), <b>TLS-PSK</b>, or <b>USB/serial</b> CAT — selectable in the UI, with auto-reconnect and bounded backoff.</p></div>
       <div class="card"><h3><span class="dot"></span>Full rig control</h3><p>VFO A/B with <b>per-digit click tuning</b>, band, clickable mode cycle, bandwidth, filter edges, AGC, NB/NR, preamp, attenuator, RIT/XIT, and split.</p></div>
       <div class="card"><h3><span class="dot"></span>Mode-adaptive UI</h3><p>Controls the current mode doesn't use dim away; per-mode strips (CW / voice / DATA / AM / FM) surface the ones it does. Lean, and it never jumps around.</p></div>
-      <div class="card"><h3><span class="dot"></span>Spectrum &amp; waterfall</h3><p>Decodes the K4 dB/bin stream into a live spectrum trace, scrolling waterfall, and mini-pan (GPU-drawn) — with click-to-QSY and mouse-wheel tuning.</p></div>
+      <div class="card"><h3><span class="dot"></span>Spectrum &amp; waterfall</h3><p>Decodes the K4 dB/bin stream into a live spectrum trace, scrolling waterfall, and mini-pan — <b>GPU-drawn</b> at the radio's own pace for a light GPU load, with click-to-QSY, mouse-wheel tuning, and an <b>afterglow</b> that lets a brief signal linger and fade.</p></div>
+      <div class="card"><h3><span class="dot"></span>Spot nameplates</h3><p>Who's on the band, on the spectrum: callsigns from the <b>Reverse Beacon Network</b>, a <b>DX cluster</b>, <b>PSK Reporter</b>, <b>POTA</b> and <b>FreeDV Reporter</b> at their frequency, coloured by source and fading with age. <b>Click one to tune to it.</b> Each network is opt-in and receive-only, with TLS where the network offers it.</p></div>
       <div class="card"><h3><span class="dot"></span>Metering</h3><p>S-meter with S-unit mapping (bars + dBm), and TX RF / ALC / SWR / COMP bars while transmitting.</p></div>
       <div class="card"><h3><span class="dot"></span>Full-duplex audio</h3><p>12&nbsp;kHz <b>Opus</b> both ways — jitter buffer, resampling, and device selection (left = Main RX, right = Sub RX).</p></div>
       <div class="card amber"><h3><span class="dot"></span>Transmit — safely</h3><p>PTT, voice, and CW keying behind an explicit <b>TX arm</b>, with an emergency stop, a link-loss fail-safe, and a configurable PTT keyboard hotkey (toggle or hold).</p></div>
+      <div class="card amber"><h3><span class="dot"></span>KPA1500 amplifier</h3><p>Optional support for the Elecraft <b>KPA1500</b> over its own Ethernet control server: a live top-bar indicator, and a window with full telemetry, Operate/Standby, ATU and antenna controls, and a one-touch <b>ATU TUNE</b> behind the TX arm.</p></div>
       <div class="card amber"><h3><span class="dot"></span>Elecraft K-Pod</h3><p>Optional USB control surface: the rocker assigns the knob to VFO&nbsp;A / B / RIT-XIT, and the <b>F1–F8 switches</b> (tap + hold) run configurable CAT macros.</p></div>
-      <div class="card"><h3><span class="dot"></span>Built to last</h3><p>Saved connection profiles, OS-keychain passwords (never in config), K4 settings export/import, and a filterable, copyable diagnostics console.</p></div>
+      <div class="card"><h3><span class="dot"></span>Built to last</h3><p>Settings in their own tabbed window, saved connection profiles, OS-keychain passwords (never in config), K4 settings export/import, an automatic update check, and a filterable, copyable diagnostics console.</p></div>
     </div>
   </div>
 </section>
