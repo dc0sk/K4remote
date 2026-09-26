@@ -298,32 +298,25 @@ fn fr_catsrv_06_hazardous_and_unknown_commands_never_reach_the_radio() {
     }
 }
 
-/// Every mnemonic the Programmer's Reference defines, with a few argument shapes: the only ones
-/// that ever reach the radio are the allowlist, the stops and `RX` — a sweep from the document,
-/// not a hand list, so a command the policy forgot is dropped by default rather than forwarded.
-/// trace: FR-CATSRV-05, FR-CATSRV-06, FR-CATSRV-07
-#[test]
-fn fr_catsrv_06_only_the_allowlist_reaches_the_radio_over_every_prg_mnemonic() {
-    let prg = include_str!("../../../docs/references/external/K4ProgrammersReferencerev.D12.html");
-    let text: String = {
-        let mut out = String::new();
-        let mut tag = false;
-        for ch in prg.chars() {
-            match ch {
-                '<' => tag = true,
-                '>' => {
-                    tag = false;
-                    out.push(' ');
-                }
-                c if !tag => out.push(c),
-                _ => {}
+/// The command headings of the Programmer's Reference HTML: every "<2–3 capitals/digits,
+/// optional `$`> (" after tags are stripped and `&nbsp;` decoded.
+fn extract_mnemonics(html: &str) -> Vec<String> {
+    let mut text = String::new();
+    let mut tag = false;
+    for ch in html.chars() {
+        match ch {
+            '<' => tag = true,
+            '>' => {
+                tag = false;
+                text.push(' ');
             }
+            c if !tag => text.push(c),
+            _ => {}
         }
-        out.replace("&nbsp;", " ").replace("&amp;", "&")
-    };
-    // A command heading: 2–3 capitals (plus an optional `$`), then " (".
+    }
+    let text = text.replace("&nbsp;", " ").replace("&amp;", "&");
     let words: Vec<&str> = text.split_whitespace().collect();
-    let mut mnemonics: Vec<String> = Vec::new();
+    let mut out: Vec<String> = Vec::new();
     for w in words.windows(2) {
         let (m, next) = (w[0], w[1]);
         let core = m.trim_end_matches('$');
@@ -333,11 +326,53 @@ fn fr_catsrv_06_only_the_allowlist_reaches_the_radio_over_every_prg_mnemonic() {
                 .chars()
                 .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
             && core.chars().next().is_some_and(|c| c.is_ascii_uppercase())
-            && !mnemonics.iter().any(|x| x == m)
+            && !out.iter().any(|x| x == m)
         {
-            mnemonics.push(m.to_string());
+            out.push(m.to_string());
         }
     }
+    out
+}
+
+/// The committed list of the PRG's command names (`prg_mnemonics.txt`) — the vendor document
+/// itself is not in the repository (see `.gitignore`), so the sweep runs from this derived list.
+fn committed_mnemonics() -> Vec<String> {
+    include_str!("prg_mnemonics.txt")
+        .lines()
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .map(str::to_string)
+        .collect()
+}
+
+/// The committed list is what the Programmer's Reference says — checked wherever the local copy
+/// of the document is present (it is not redistributed, so CI says it skipped rather than
+/// pretending to have checked).
+/// trace: FR-CATSRV-06
+#[test]
+fn fr_catsrv_06_the_committed_mnemonic_list_matches_the_prg() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../docs/references/external/K4ProgrammersReferencerev.D12.html"
+    );
+    let Ok(html) = std::fs::read_to_string(path) else {
+        eprintln!("SKIPPED: the K4 Programmer's Reference is not present at {path}");
+        return;
+    };
+    assert_eq!(
+        extract_mnemonics(&html),
+        committed_mnemonics(),
+        "prg_mnemonics.txt is out of date with the Programmer's Reference"
+    );
+}
+
+/// Every mnemonic the Programmer's Reference defines, with a few argument shapes: the only ones
+/// that ever reach the radio are the allowlist, the stops and `RX` — a sweep from the document's
+/// own command list, not a hand list, so a command the policy forgot is dropped by default rather
+/// than forwarded.
+/// trace: FR-CATSRV-05, FR-CATSRV-06, FR-CATSRV-07
+#[test]
+fn fr_catsrv_06_only_the_allowlist_reaches_the_radio_over_every_prg_mnemonic() {
+    let mnemonics = committed_mnemonics();
     assert!(
         mnemonics.len() > 100,
         "the sweep found only {} mnemonics",
