@@ -12,6 +12,14 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
 
 ## [Unreleased]
 
+### Added
+
+- **Stored DTMF sequences.** The DTMF keypad (FM) now has six stored
+  sequences — a name and up to 32 digits each — played one tone at a time with
+  **Send** while you are transmitting. They are saved with your settings. (The
+  K4's own CMD1–6 memories can't be reached over the link, so the app keeps
+  its own.)
+
 ### Fixed
 
 - **The RF power meter read QRP power ten times too high.** In the QRP range

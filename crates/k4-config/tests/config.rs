@@ -878,3 +878,61 @@ fn fr_spot_08_freedv_tls_default_off_and_persists() {
     assert!(!older.spot_networks.freedv.tls);
     assert_eq!(older.spot_networks.freedv.port, 80);
 }
+
+/// FR-FM-03: six stored DTMF sequences, each a name and its digits. Read through
+/// `Prefs::dtmf_sequences`, there are always exactly six slots (padded, or the first six kept),
+/// digits are upper-cased and keep only DTMF characters up to 32, names keep printable characters
+/// up to 16; they round-trip, and a config from before them loads six empty slots. Counts and
+/// limits are contract pins, written as numbers.
+/// trace: FR-FM-03
+#[test]
+fn fr_fm_03_six_stored_dtmf_sequences_persist_and_are_cleaned() {
+    use k4_config::{sanitise_dtmf_digits, DtmfSequence, DTMF_SEQ_COUNT};
+    assert_eq!(DTMF_SEQ_COUNT, 6);
+    let def = Prefs::default();
+    assert_eq!(def.dtmf_sequences().len(), 6);
+    assert!(def
+        .dtmf_sequences()
+        .iter()
+        .all(|s| s.name.is_empty() && s.digits.is_empty()));
+
+    let older: Prefs = toml::from_str("tune_step_hz = 100\n").expect("a config from before");
+    assert_eq!(older.dtmf_sequences(), def.dtmf_sequences());
+
+    let mut p = Prefs {
+        dtmf_sequences: vec![DtmfSequence {
+            name: "Link on".into(),
+            digits: "*12#".into(),
+        }],
+        ..Default::default()
+    };
+    let back: Prefs = toml::from_str(&toml::to_string(&p).expect("serialize")).expect("parse");
+    let seqs = back.dtmf_sequences();
+    assert_eq!(seqs.len(), 6);
+    assert_eq!(
+        (seqs[0].name.as_str(), seqs[0].digits.as_str()),
+        ("Link on", "*12#")
+    );
+
+    // More than six in a hand-edited file: the first six are kept.
+    p.dtmf_sequences = (0..9)
+        .map(|i| DtmfSequence {
+            name: format!("S{i}"),
+            digits: format!("{i}"),
+        })
+        .collect();
+    let seqs = p.dtmf_sequences();
+    assert_eq!(seqs.len(), 6);
+    assert_eq!(seqs[5].name, "S5");
+
+    // Cleaning: upper-case, DTMF characters only, at most 32; names printable, at most 16.
+    assert_eq!(sanitise_dtmf_digits(" 1a b*#x9 "), "1AB*#9");
+    assert_eq!(sanitise_dtmf_digits(&"7".repeat(40)).len(), 32);
+    p.dtmf_sequences = vec![DtmfSequence {
+        name: "a\u{7}very long name for a slot".into(),
+        digits: "12e".into(),
+    }];
+    let s = &p.dtmf_sequences()[0];
+    assert_eq!(s.name, "avery long name ");
+    assert_eq!(s.digits, "12");
+}

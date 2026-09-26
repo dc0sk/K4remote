@@ -259,6 +259,8 @@ pub enum WorkerCmd {
     AtuToggle,
     /// Send an arbitrary raw CAT command (diagnostics console, FR-DIAG-02).
     SendRawCat(String),
+    /// Play a stored DTMF sequence (FR-FM-03): its `DM` commands, paced by [`DTMF_GAP`].
+    DtmfSequence(Vec<String>),
     /// AF recorder (FR-AUD-REC-01): the radio's own 90 s buffer.
     AfRecord,
     AfPlay,
@@ -530,7 +532,52 @@ fn open_tcp(
 }
 
 /// Worker-owned state across connection lifetimes.
+/// Gap between the commands of a stored DTMF sequence (FR-FM-03). Whether the K4 queues
+/// back-to-back `DM` commands is not documented, so digits are paced — enough for a tone and a
+/// pause at the usual DTMF timing; to be confirmed on a radio.
+pub(crate) const DTMF_GAP: Duration = Duration::from_millis(200);
+
+/// Commands sent one at a time, a gap apart (FR-FM-03): the first at once, then at most one per
+/// gap however late the loop runs, so a slow iteration never bursts them out together.
+pub(crate) struct PacedQueue {
+    items: VecDeque<String>,
+    next: Instant,
+    gap: Duration,
+}
+
+impl PacedQueue {
+    pub(crate) fn new(gap: Duration) -> Self {
+        Self {
+            items: VecDeque::new(),
+            next: Instant::now(),
+            gap,
+        }
+    }
+
+    /// Start a sequence now, replacing any still in progress (never interleaving two).
+    pub(crate) fn start(&mut self, cmds: Vec<String>, now: Instant) {
+        self.items = cmds.into();
+        self.next = now;
+    }
+
+    /// The next command if one is due, and the gap restarts from `now`.
+    pub(crate) fn due(&mut self, now: Instant) -> Option<String> {
+        if self.items.is_empty() || now < self.next {
+            return None;
+        }
+        self.next = now + self.gap;
+        self.items.pop_front()
+    }
+
+    /// Stop: nothing more is sent.
+    pub(crate) fn clear(&mut self) {
+        self.items.clear();
+    }
+}
+
 struct WorkerState {
+    /// A stored DTMF sequence being played (FR-FM-03).
+    dtmf: PacedQueue,
     session: Option<Link>,
     rx_audio: JitterBuffer,
     rx_decoder: Option<OpusDecoder>,
@@ -615,6 +662,7 @@ impl WorkerState {
         Self {
             #[cfg(feature = "kpod")]
             kpod: kpod::KpodState::new(),
+            dtmf: PacedQueue::new(DTMF_GAP),
             session: None,
             rx_audio: JitterBuffer::new(8),
             rx_decoder: None,
@@ -1025,7 +1073,18 @@ fn run(rx: Receiver<WorkerCmd>, snapshot: Arc<Mutex<UiSnapshot>>, pan: PanHandle
         // 2. Collect any finished connect attempt (FR-UI-16).
         poll_pending(&mut ws, &snapshot);
 
-        // 3. Service the link, start a scheduled (re)connect, or idle.
+        // 3. Send the next digit of a stored DTMF sequence when it is due (FR-FM-03); a sequence
+        // does not outlive the link it was started on.
+        match ws.session.as_mut() {
+            Some(s) => {
+                if let Some(cmd) = ws.dtmf.due(Instant::now()) {
+                    let _ = s.send(&cmd);
+                }
+            }
+            None => ws.dtmf.clear(),
+        }
+
+        // 4. Service the link, start a scheduled (re)connect, or idle.
         if ws.session.is_some() {
             service(&mut ws, &snapshot);
             poll_digital_audio(&mut ws);
@@ -1364,6 +1423,7 @@ fn handle_cmd(cmd: WorkerCmd, ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnaps
                 let _ = s.disconnect();
             }
             ws.session = None;
+            ws.dtmf.clear();
             ws.pending_connect = None;
             ws.connect_params = None; // stop auto-reconnect / retry
             ws.next_attempt = None;
@@ -1444,6 +1504,7 @@ fn handle_cmd(cmd: WorkerCmd, ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnaps
             }
         }
         WorkerCmd::EmergencyStop => {
+            ws.dtmf.clear();
             if let Some(s) = ws.session.as_mut() {
                 let _ = s.emergency_stop();
             }
@@ -1507,6 +1568,11 @@ fn handle_cmd(cmd: WorkerCmd, ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnaps
         WorkerCmd::RxEqFlat => {
             if let Some(s) = ws.session.as_mut() {
                 let _ = s.send(k4_protocol::cat::rx_eq_flat());
+            }
+        }
+        WorkerCmd::DtmfSequence(cmds) => {
+            if ws.session.is_some() {
+                ws.dtmf.start(cmds, Instant::now());
             }
         }
         WorkerCmd::Cat(cmd) => {
@@ -2155,5 +2221,48 @@ mod rejection_tests {
             None,
             "clearing is not an event"
         );
+    }
+}
+
+#[cfg(test)]
+mod paced_tests {
+    use super::{PacedQueue, DTMF_GAP};
+    use std::time::{Duration, Instant};
+
+    /// FR-FM-03: a stored DTMF sequence is sent one command per gap — the first at once, the next
+    /// only after the gap, and never two in one go even when the loop runs late (no burst of
+    /// tones); a new sequence replaces one in progress rather than interleaving; clearing stops
+    /// it. The gap is a contract pin (to be confirmed on a radio), written as a number.
+    /// trace: FR-FM-03
+    #[test]
+    fn fr_fm_03_a_sequence_is_sent_one_digit_per_gap() {
+        assert_eq!(DTMF_GAP, Duration::from_millis(200));
+        let t0 = Instant::now();
+        let ms = |n: u64| t0 + Duration::from_millis(n);
+        let mut q = PacedQueue::new(DTMF_GAP);
+        assert_eq!(q.due(t0), None, "nothing queued");
+        q.start(vec!["DM1;".into(), "DM2;".into(), "DM3;".into()], t0);
+        assert_eq!(q.due(t0).as_deref(), Some("DM1;"));
+        assert_eq!(q.due(t0), None, "the second waits for the gap");
+        assert_eq!(q.due(ms(199)), None);
+        assert_eq!(q.due(ms(200)).as_deref(), Some("DM2;"));
+        // Late by seconds: still one, and the gap restarts from now.
+        assert_eq!(q.due(ms(5000)).as_deref(), Some("DM3;"));
+        assert_eq!(q.due(ms(9000)), None, "done");
+
+        q.start(vec!["DM4;".into(), "DM5;".into()], ms(10_000));
+        assert_eq!(q.due(ms(10_000)).as_deref(), Some("DM4;"));
+        q.start(vec!["DM6;".into()], ms(10_050));
+        assert_eq!(
+            q.due(ms(10_050)).as_deref(),
+            Some("DM6;"),
+            "the new one replaces the old"
+        );
+        assert_eq!(q.due(ms(20_000)), None, "DM5 was dropped, not interleaved");
+
+        q.start(vec!["DM7;".into(), "DM8;".into()], ms(30_000));
+        assert_eq!(q.due(ms(30_000)).as_deref(), Some("DM7;"));
+        q.clear();
+        assert_eq!(q.due(ms(40_000)), None, "cleared");
     }
 }

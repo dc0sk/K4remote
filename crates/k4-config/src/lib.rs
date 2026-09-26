@@ -161,6 +161,45 @@ pub struct Prefs {
     /// built-in Elecraft sample macros (FR-KPOD-06).
     #[serde(default = "default_kpod_buttons")]
     pub kpod_buttons: Vec<KpodButton>,
+    /// Stored DTMF sequences (FR-FM-03), app-side — the K4's own CMD1–6 are not reachable over
+    /// CAT. Read through [`Prefs::dtmf_sequences`], which always gives six cleaned slots.
+    #[serde(default)]
+    pub dtmf_sequences: Vec<DtmfSequence>,
+}
+
+/// One stored DTMF sequence (FR-FM-03): a short name and its digits.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DtmfSequence {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub digits: String,
+}
+
+/// How many DTMF sequences are stored, like the K4's own CMD1–6 (FR-FM-03).
+pub const DTMF_SEQ_COUNT: usize = 6;
+/// Longest sequence, digits; mirrors `k4_protocol::cat::DTMF_SEQ_MAX` (the app tests they agree).
+pub const DTMF_SEQ_DIGITS_MAX: usize = 32;
+/// Longest sequence name, characters.
+pub const DTMF_SEQ_NAME_MAX: usize = 16;
+
+/// Keep only DTMF characters (`0`–`9`, `A`–`D`, `*`, `#`), upper-cased, at most 32.
+pub fn sanitise_dtmf_digits(input: &str) -> String {
+    input
+        .chars()
+        .map(|c| c.to_ascii_uppercase())
+        .filter(|c| c.is_ascii_digit() || matches!(c, 'A'..='D' | '*' | '#'))
+        .take(DTMF_SEQ_DIGITS_MAX)
+        .collect()
+}
+
+/// Keep only printable characters of a sequence name, at most 16.
+pub fn sanitise_dtmf_name(input: &str) -> String {
+    input
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(DTMF_SEQ_NAME_MAX)
+        .collect()
 }
 
 /// One K-Pod function-switch assignment (FR-KPOD-06): a short display `label`
@@ -797,6 +836,22 @@ impl SpotNetworks {
 }
 
 impl Prefs {
+    /// The stored DTMF sequences (FR-FM-03): always exactly [`DTMF_SEQ_COUNT`] slots — the first
+    /// six in the file, padded with empty ones — each cleaned, whatever the file says.
+    pub fn dtmf_sequences(&self) -> Vec<DtmfSequence> {
+        let mut out: Vec<DtmfSequence> = self
+            .dtmf_sequences
+            .iter()
+            .take(DTMF_SEQ_COUNT)
+            .map(|s| DtmfSequence {
+                name: sanitise_dtmf_name(&s.name),
+                digits: sanitise_dtmf_digits(&s.digits),
+            })
+            .collect();
+        out.resize(DTMF_SEQ_COUNT, DtmfSequence::default());
+        out
+    }
+
     /// The spectrum afterglow in milliseconds, `0` (off) or within
     /// [`AFTERGLOW_MIN_MS`]`..=`[`AFTERGLOW_MAX_MS`] (FR-PAN-14).
     pub fn spectrum_afterglow_ms(&self) -> u32 {
@@ -841,6 +896,7 @@ impl Default for Prefs {
             spot_networks: SpotNetworks::default(),
             kpod_enabled: false,
             kpod_buttons: default_kpod_buttons(),
+            dtmf_sequences: Vec::new(),
         }
     }
 }

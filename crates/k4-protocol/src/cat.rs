@@ -617,6 +617,23 @@ pub fn send_dtmf(digit: char) -> Option<String> {
     DTMF_DIGITS.contains(&digit).then(|| format!("DM{digit};"))
 }
 
+/// Longest stored DTMF sequence, digits (`FR-FM-03`).
+pub const DTMF_SEQ_MAX: usize = 32;
+
+/// A stored DTMF sequence as the commands that play it: one `DM<digit>;` per digit, in order
+/// (`FR-FM-03`). `None` if the sequence is empty, longer than [`DTMF_SEQ_MAX`], or holds anything
+/// that is not a DTMF digit — a sequence is sent whole or not at all, never in part. The caller
+/// paces them: whether the K4 queues back-to-back `DM` commands is not documented.
+///
+/// trace: FR-FM-03
+pub fn dtmf_sequence(digits: &str) -> Option<Vec<String>> {
+    let n = digits.chars().count();
+    if n == 0 || n > DTMF_SEQ_MAX {
+        return None;
+    }
+    digits.chars().map(send_dtmf).collect()
+}
+
 /// DVR voice-message playback (`PB`): message 1–8, or 0 to cancel play/record.
 ///
 /// trace: FR-DVR-01

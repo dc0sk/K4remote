@@ -296,6 +296,8 @@ struct App {
     xvtr_loaded_band: Option<u8>,
     /// DTMF keypad popup open (FR-FM-02).
     dtmf_open: bool,
+    /// Stored DTMF sequences as edited (FR-FM-03); always six slots.
+    dtmf_seqs: Vec<k4_config::DtmfSequence>,
     memory_name: String,
     // Peer cache + settings window (FR-CFG-04, FR-UI-23).
     peers: k4_config::PeerCache,
@@ -832,6 +834,10 @@ enum Message {
     /// DTMF keypad (FR-FM-02): open/close, and send one digit.
     ToggleDtmf,
     DtmfDigit(char),
+    /// Edit a stored DTMF sequence's name / digits, or play it (FR-FM-03).
+    DtmfSeqName(usize, String),
+    DtmfSeqDigits(usize, String),
+    DtmfSeqSend(usize),
     /// Edit a K-Pod slot's free-form CAT macro string (slot index, text).
     KpodButtonCatChanged(usize, String),
     /// Apply a preset (by label) to a K-Pod slot, filling its label + CAT.
@@ -1108,6 +1114,7 @@ impl App {
         let kpod_enabled = prefs.kpod_enabled;
         let _ = cmd_tx.send(WorkerCmd::SetKpodEnabled(kpod_enabled));
         let kpod_buttons = prefs.kpod_buttons.clone();
+        let dtmf_seqs = prefs.dtmf_sequences();
         let _ = cmd_tx.send(WorkerCmd::SetKpodButtons(
             kpod_buttons.iter().map(|b| b.cat.clone()).collect(),
         ));
@@ -1336,6 +1343,7 @@ impl App {
             auto_update_check,
             kpod_enabled,
             kpod_buttons,
+            dtmf_seqs,
             capturing_hotkey: false,
             hotkey_down: false,
             hotkey_keyed: false,
@@ -1824,6 +1832,7 @@ impl App {
                     spot_networks: self.spot_networks_for_save(),
                     kpod_enabled: self.kpod_enabled,
                     kpod_buttons: self.kpod_buttons.clone(),
+                    dtmf_sequences: self.dtmf_seqs.clone(),
                     ..Default::default()
                 },
             };
@@ -2545,7 +2554,34 @@ impl App {
                 self.kpod_buttons = k4_config::default_kpod_buttons();
                 self.push_kpod_buttons();
             }
-            Message::ToggleDtmf => self.dtmf_open = !self.dtmf_open,
+            Message::ToggleDtmf => {
+                self.dtmf_open = !self.dtmf_open;
+                if !self.dtmf_open {
+                    // Closing the keypad keeps what was typed into the stored sequences.
+                    self.save_config();
+                }
+            }
+            Message::DtmfSeqName(i, v) => {
+                if let Some(s) = self.dtmf_seqs.get_mut(i) {
+                    s.name = k4_config::sanitise_dtmf_name(&v);
+                }
+            }
+            Message::DtmfSeqDigits(i, v) => {
+                if let Some(s) = self.dtmf_seqs.get_mut(i) {
+                    s.digits = k4_config::sanitise_dtmf_digits(&v);
+                }
+            }
+            Message::DtmfSeqSend(i) => {
+                // The whole sequence or nothing (FR-FM-03); the worker paces the digits.
+                if let Some(cmds) = self
+                    .dtmf_seqs
+                    .get(i)
+                    .and_then(|s| k4_protocol::cat::dtmf_sequence(&s.digits))
+                {
+                    self.send(WorkerCmd::DtmfSequence(cmds));
+                }
+                self.save_config();
+            }
             Message::DtmfDigit(d) => {
                 // FM-only, SET-only. The encoder refuses a non-DTMF char, so a
                 // stray key sends nothing.
@@ -2639,6 +2675,7 @@ impl App {
                     }
                     if self.dtmf_open {
                         self.dtmf_open = false;
+                        self.save_config();
                         return Task::none();
                     }
                     if self.about_open {
@@ -9653,6 +9690,35 @@ impl App {
             }
             grid = grid.push(row);
         }
+        // Stored sequences (FR-FM-03): name, digits, Send — Send only when there is something to
+        // send.
+        let mut seqs = Column::new().spacing(4);
+        for (i, sq) in self.dtmf_seqs.iter().enumerate() {
+            let send = Button::new(Text::new("Send").size(12))
+                .style(btn_style(BtnKind::Plain))
+                .padding([4, 10])
+                .on_press_maybe(
+                    k4_protocol::cat::dtmf_sequence(&sq.digits).map(|_| Message::DtmfSeqSend(i)),
+                );
+            seqs = seqs.push(
+                Row::new()
+                    .spacing(6)
+                    .align_y(Alignment::Center)
+                    .push(
+                        TextInput::new(&format!("CMD{}", i + 1), &sq.name)
+                            .on_input(move |v| Message::DtmfSeqName(i, v))
+                            .size(12)
+                            .width(Length::Fixed(90.0)),
+                    )
+                    .push(
+                        TextInput::new("digits", &sq.digits)
+                            .on_input(move |v| Message::DtmfSeqDigits(i, v))
+                            .size(12)
+                            .width(Length::Fixed(140.0)),
+                    )
+                    .push(send),
+            );
+        }
         let card = Container::new(
             Column::new()
                 .spacing(10)
@@ -9669,11 +9735,21 @@ impl App {
                         .size(11)
                         .color(dim),
                 )
-                .push(grid),
+                .push(grid)
+                .push(Text::new("STORED SEQUENCES").size(11).color(dim))
+                .push(seqs)
+                .push(
+                    Text::new(
+                        "Send plays a sequence one tone at a time. The radio sends tones only \
+                         while transmitting: key up (PTT or XMIT) first.",
+                    )
+                    .size(11)
+                    .color(dim),
+                ),
         )
         .style(panel_style)
         .padding(18)
-        .width(Length::Fixed(260.0));
+        .width(Length::Fixed(340.0));
         modal_scrim(card.into())
     }
 
@@ -11808,5 +11884,75 @@ mod freedv_wiring_tests {
         );
         assert!(outlasts(300, 60), "5 min refresh, 1 min age limit");
         assert!(!outlasts(300, 301));
+    }
+}
+
+#[cfg(test)]
+mod dtmf_seq_wiring_tests {
+    /// FR-FM-03: stored DTMF sequences are carried through every hand-off — loaded cleaned from the
+    /// settings, cleaned on every edit, played whole through the worker's paced queue, saved (the
+    /// save builds `Prefs` field by field, so a forgotten field would silently reset) on Send and
+    /// on both ways the keypad closes; and the worker stops a sequence on an emergency stop, a
+    /// disconnect or a lost link. The config's limits agree with the protocol's. Structural,
+    /// reading only the code above this module.
+    /// trace: FR-FM-03
+    #[test]
+    fn fr_fm_03_stored_sequences_are_wired_end_to_end() {
+        let whole = include_str!("main.rs");
+        let code = &whole[..whole
+            .find(concat!("mod dtmf_seq_wiring", "_tests {"))
+            .expect("the test module")];
+        let squash = |t: &str| t.split_whitespace().collect::<String>();
+        let code = squash(code);
+        for (what, needle) in [
+            ("loaded cleaned", "let dtmf_seqs = prefs.dtmf_sequences();"),
+            ("saved", "dtmf_sequences: self.dtmf_seqs.clone(),"),
+            ("names cleaned", "s.name = k4_config::sanitise_dtmf_name(&v);"),
+            ("digits cleaned", "s.digits = k4_config::sanitise_dtmf_digits(&v);"),
+            (
+                "played whole through the worker",
+                ".and_then(|s| k4_protocol::cat::dtmf_sequence(&s.digits)) { self.send(WorkerCmd::DtmfSequence(cmds));",
+            ),
+            (
+                "the Close button saves",
+                "if !self.dtmf_open { // Closing the keypad keeps what was typed into the stored sequences. self.save_config();",
+            ),
+            (
+                "ESC saves",
+                "if self.dtmf_open { self.dtmf_open = false; self.save_config(); return Task::none(); }",
+            ),
+            ("the keypad shows the slots", ".push(seqs)"),
+        ] {
+            assert!(code.contains(&squash(needle)), "DTMF sequences: {what}");
+        }
+
+        let worker = squash(include_str!("worker.rs"));
+        for (what, needle) in [
+            (
+                "e-stop stops it",
+                "WorkerCmd::EmergencyStop => { ws.dtmf.clear();",
+            ),
+            ("disconnect stops it", "ws.session = None; ws.dtmf.clear();"),
+            ("a lost link stops it", "None => ws.dtmf.clear(),"),
+            (
+                "it is sent when due",
+                "if let Some(cmd) = ws.dtmf.due(Instant::now()) { let _ = s.send(&cmd);",
+            ),
+            ("it is started", "ws.dtmf.start(cmds, Instant::now());"),
+        ] {
+            assert!(worker.contains(&squash(needle)), "DTMF sequences: {what}");
+        }
+
+        assert_eq!(
+            k4_config::DTMF_SEQ_DIGITS_MAX,
+            k4_protocol::cat::DTMF_SEQ_MAX
+        );
+        // The config keeps exactly the characters the protocol accepts.
+        let all: String = k4_protocol::cat::DTMF_DIGITS.iter().collect();
+        let mut kept: Vec<char> = k4_config::sanitise_dtmf_digits(&all).chars().collect();
+        let mut want = k4_protocol::cat::DTMF_DIGITS.to_vec();
+        kept.sort_unstable();
+        want.sort_unstable();
+        assert_eq!(kept, want);
     }
 }
