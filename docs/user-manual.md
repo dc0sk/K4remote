@@ -522,6 +522,11 @@ programs are connected. What the software can do:
   front-panel switch code) are refused and logged under `catsrv` in the diagnostics console. An
   unkey (`RX`) always goes through. Transmitting from the software, behind **ARM TX** and an extra
   opt-in, is planned.
+
+  > ⚠️ **Don't set the software's PTT to "CAT" yet.** Hamlib-based programs (WSJT-X, JTDX,
+  > fldigi, Log4OM, CQRLOG) report a CAT PTT as successful even when the radio refuses it, so the
+  > program would believe it is transmitting while the radio is not. Use PTT *None* or *VOX* for
+  > now, and key with the app's own PTT.
 - **If the link to the radio drops,** connected programs keep getting the last known values for
   30 seconds (so a short reconnect doesn't throw them into an error), their changes are ignored,
   and after that they are disconnected until the link is back.

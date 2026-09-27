@@ -25,6 +25,7 @@ fn state() -> RadioState {
         rit_offset: Some(0),
         rit_on: Some(false),
         xit_on: Some(false),
+        keyer_speed: Some(25),
         ..RadioState::default()
     }
 }
@@ -86,6 +87,9 @@ fn fr_catsrv_06_hamlibs_k4_open_is_answered_locally_in_the_forms_it_checks() {
         ("FR;", Some(3), "FR0;"),
         ("FT;", Some(3), "FT0;"),
         ("TQ;", Some(3), "TQ0;"),
+        // Asked at open for the keyer speed (live capture, Hamlib 4.7.2); unanswered it cost a
+        // 1 s timeout on every open.
+        ("KS;", Some(5), "KS025;"),
         ("FA;", Some(13), "FA00014074000;"),
         ("FB;", Some(13), "FB00014076500;"),
         ("IF;", Some(37), "IF00014074000     +000000 0006000001 ;"),

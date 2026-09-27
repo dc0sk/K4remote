@@ -60,6 +60,11 @@ pub fn fr() -> &'static str {
     "FR0;"
 }
 
+/// `KSnnn;` — keyer speed, WPM, 3 digits (Hamlib asks at open).
+pub fn ks(s: &RadioState) -> Option<String> {
+    s.keyer_speed.map(|w| format!("KS{w:03};"))
+}
+
 /// `TQn;` — transmit state.
 pub fn tq(s: &RadioState) -> Option<String> {
     s.transmitting.map(|tx| format!("TQ{};", u8::from(tx)))
