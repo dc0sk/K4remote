@@ -204,6 +204,7 @@ pub fn handle(client: &mut Client, raw: &str, cache: &Cache) -> Vec<Action> {
             "DT$" => resp::dt(s, true),
             "FT" => resp::ft(s),
             "FR" => Some(resp::fr().to_string()),
+            "KS" => resp::ks(s),
             "TQ" if !cache.link_up => Some("TQ0;".to_string()),
             "TQ" => resp::tq(s).or_else(|| Some(format!("TQ{};", u8::from(cache.tx_fallback)))),
             "IF" => resp::if_(s, client.k31()),

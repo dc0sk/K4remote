@@ -22,6 +22,7 @@ fn seeded() -> RadioState {
         rit_offset: Some(-150),
         rit_on: Some(true),
         xit_on: Some(false),
+        keyer_speed: Some(25),
         ..RadioState::default()
     }
 }
@@ -43,6 +44,7 @@ fn fr_catsrv_03_simple_replies_are_exact_and_round_trip() {
         (resp::dt(&s, true), "DT$3;"),
         (resp::ft(&s), "FT1;"),
         (resp::tq(&s), "TQ0;"),
+        (resp::ks(&s), "KS025;"),
     ];
     for (got, want) in &cases {
         assert_eq!(got.as_deref(), Some(*want));
@@ -66,6 +68,7 @@ fn fr_catsrv_03_simple_replies_are_exact_and_round_trip() {
         (s.data_submode, s.sub_data_submode)
     );
     assert_eq!(back.split, s.split);
+    assert_eq!(back.keyer_speed, s.keyer_speed);
     // (`TQ` is a GET-only query the radio never pushes, so the parser has no `TQ` arm; its bytes
     // are pinned above and the TX flag round-trips through `IF` below.)
 }

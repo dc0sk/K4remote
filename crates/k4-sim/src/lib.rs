@@ -123,6 +123,7 @@ fn response_for(command: &str, vfo_a_hz: u64) -> Vec<String> {
         "RVM" => vec![SIM_RVM.to_string()],
         "RVD" => vec![SIM_RVD.to_string()],
         "ID" => vec![format!("ID{SIM_ID_TEXT};")],
+        "KS" => vec!["KS025;".to_string()],
         c if c.starts_with("PING") => vec!["PONG;".to_string()],
         _ => Vec::new(), // K41/ER1/EM/SL and unknown: recorded, acknowledged silently
     }

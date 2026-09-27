@@ -166,6 +166,28 @@ transmitting** (the radio may ignore a retune mid-TX).
 **Phasing consequence:** phase A delivers **read + allowlisted non-keying SETs** only; all
 keying (with the seam-level opt-in) is phase B, after captures.
 
+### 0.2 Live capture — Hamlib 4.7.2 `rigctl -m 2047` against the built server (2026-09-27)
+
+Run against the app's real worker with `k4-sim` as the radio (a temporary probe; the radio side
+is simulated, the client is the real Hamlib K4 backend). Findings:
+
+- **The open succeeds** and matches §0 finding 2: `PS; K40; ID; K2; K2; K22; OM; K2; K3; RVM;
+  RVD; AI; AI0; ID; FR; FT; TQ;` — plus one command the source reading missed: **`KS;`** (keyer
+  speed, expected `KSnnn`, from the morse handler). Unanswered, it cost **a 1 s timeout on every
+  open**; `KS` is now answered from the cache (the connect seed already fetches it).
+- **Reads work:** `f m v s t` → 14074000, USB, 2800, VFOA, split 0.
+- **Sets work:** `F 14075000` and `M USB 2400` reach the radio as exactly `FA00014075000;`,
+  `MD2;`, `BW0240;` — the allowlist, nothing else; the app's own polling (`DA;`, `PING`) aside.
+- **PTT is refused, and Hamlib hides it.** `T 1` sends `TX;` (refused, logged), then polls `TQ;`
+  five times — answered `TQ0;` each time — logs `ptt=0, expected=1`, and **returns success
+  anyway**; `t` then answers `1` from Hamlib's own cache without asking. So a Hamlib program
+  (WSJT-X…) using **CAT PTT believes it is transmitting while the radio is not keyed.** Until
+  phase B, users must not use CAT PTT (the manual says so). Phase B must make `TQ` truthful in
+  both directions and consider how a refused key should surface to Hamlib.
+- On close Hamlib restores `K20;` as the source said.
+
+Not yet captured: WSJT-X's own poll set, N1MM, flrig, DXLab — and anything against the real K4.
+
 ---
 
 ## 1. Summary + recommendation
