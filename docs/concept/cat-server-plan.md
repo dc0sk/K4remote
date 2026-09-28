@@ -244,6 +244,40 @@ a vanished PTT owner must not leave the transmitter on).
   (unkey when any keyed client vanishes); a `catsrv` log line per client key/unkey with its
   address; a new requirement row and client-path acceptance for FR-TX-SAFE-03/06.
 
+### 0.3.1 Revised phase B design (2026-09-28, after the review and DC0SK's decisions)
+
+**Decided by DC0SK:** a client-held transmit is bounded at **3 min by default, configurable**; a
+client's TX audio comes from a **separate "CAT TX audio" input device** (none chosen = client keying
+refused), never the operator's mic; the opt-in is **one-shot** — disarm or emergency stop clears it.
+
+1. **Scope: PTT only** — exactly `TX` (not `TX$`, not `TXn`) keys; `RX` unkeys. Every other keying
+   form stays refused (`KY` text, `KZ`, every `SW`, `TS1`, `TU1–4`, `PB1–8`, `DA` actions, `VX1`).
+2. **The session owns both gates.** `Session::set_cat_may_transmit(bool)` stores the opt-in;
+   `Session::begin_tx_for_client() -> io::Result<bool>` (no argument) keys only if the opt-in, the
+   arm and the connection all hold, and records that the transmit is **client-held**.
+3. **One-shot and revocable, inside the session.** Disarm, `emergency_stop` and `fail_safe` clear
+   the opt-in. Turning the opt-in off, or disarming, while a client holds TX **ends the transmit**.
+   The UI shows the opt-in cleared.
+4. **Bounded.** The worker ends a client-held transmit after the configured maximum (default
+   3 min, 1–10 min), logging it; client sockets get TCP keepalive so a vanished peer is eventually
+   noticed. A per-client `keyed` bit: when a keyed client disconnects, the transmit ends.
+5. **Separate CAT audio.** A "CAT TX audio" input device setting next to the opt-in. While a
+   transmit is client-held, the worker streams that device and **not** the mic; when the operator
+   keys, the mic as today. No CAT device chosen, or it cannot be opened → the key is refused
+   (logged, ARM flash) before the session is asked.
+6. **`TQ` from what the app knows:** `TQ1` iff the session is transmitting (app- or client-keyed),
+   tuning, or holding a raw on-air command; `RadioState::transmitting` is not used (stale by
+   construction — set only from the seed's `IF`). During the grace period `TQ0` (unchanged).
+7. **Refusals and logging.** A refused client `TX` (opt-in off, disarmed, no CAT device) is
+   wire-silent, logged under `catsrv` with the client's address and the reason, and flashes ARM TX.
+   Every client key and unkey is logged with the address.
+8. **Order:** `TX` while the link is down is dropped before any keying decision. Operator PTT and
+   client PTT share one transmit: whoever unkeys ends it (a stop is never gated); when the operator
+   keys while a client holds TX, the transmit becomes the operator's (mic, no client time limit).
+
+Requirements: a new row **`FR-CATSRV-10` (client PTT)** replaces the "not in this phase" part of
+`FR-CATSRV-07`; `FR-TX-SAFE-03/06` acceptance extends to the client path.
+
 ---
 
 ## 1. Summary + recommendation
