@@ -518,15 +518,25 @@ programs are connected. What the software can do:
 
 - **Read and set** frequency (VFO A and B), mode, bandwidth, DATA sub-mode, split and RIT/XIT.
   Its reads are answered by the app at once, without asking the radio again.
-- **Not transmit.** Keying commands from the software (PTT, CW text, message play, tune, and every
-  front-panel switch code) are refused and logged under `catsrv` in the diagnostics console. An
-  unkey (`RX`) always goes through. Transmitting from the software, behind **ARM TX** and an extra
-  opt-in, is planned.
+- **Transmit with CAT PTT — only when you allow it.** Other keying commands from the software (CW
+  text, message play, tune, and every front-panel switch code) are always refused and logged under
+  `catsrv` in the diagnostics console, and an unkey (`RX`) always goes through. For PTT:
 
-  > ⚠️ **Don't set the software's PTT to "CAT" yet.** Hamlib-based programs (WSJT-X, JTDX,
-  > fldigi, Log4OM, CQRLOG) report a CAT PTT as successful even when the radio refuses it, so the
-  > program would believe it is transmitting while the radio is not. Use PTT *None* or *VOX* for
-  > now, and key with the app's own PTT.
+  1. Choose the **CAT audio** device — the input the software's transmit audio arrives on, e.g.
+     the virtual audio cable WSJT-X plays into. A client's transmit sends **only** this device,
+     **never your mic**.
+  2. Arm TX, then press **CAT clients may transmit: ON**.
+
+  Now the software's PTT keys the radio. The permission is **one-shot**: disarming, an emergency
+  stop, or losing the radio link switches it off, and it is never saved — you turn it on again
+  each time. A client's transmit is ended after **Max TX** minutes (3 by default, 1–10) even if the
+  software never says so, and when a keyed program disconnects. If you key yourself while a
+  program transmits, the transmit is yours (your mic, no time limit); a program cannot key over
+  your own transmit. A refused key flashes **ARM TX** and is logged with the program's address.
+
+  > ⚠️ With the permission **off**, don't set the software's PTT to "CAT": Hamlib-based programs
+  > (WSJT-X, JTDX, fldigi, Log4OM, CQRLOG) report a refused CAT PTT as successful, so the program
+  > would believe it is transmitting while the radio is not.
 - **If the link to the radio drops,** connected programs keep getting the last known values for
   30 seconds (so a short reconnect doesn't throw them into an error), their changes are ignored,
   and after that they are disconnected until the link is back.

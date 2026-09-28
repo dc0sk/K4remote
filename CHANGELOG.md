@@ -19,9 +19,16 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
   N1MM Logger+ on the same computer can follow and set the radio's frequency and
   mode through the app — set them up as for an Elecraft K4 on the network at
   `127.0.0.1`, port `9200`. The app answers their polls itself, without extra
-  traffic to the radio. Off by default; the software **cannot transmit** yet
-  (keying commands are refused and logged); a short loss of the radio link is
+  traffic to the radio. Off by default; a short loss of the radio link is
   ridden out for 30 seconds.
+- **CAT PTT from logging software — only when you allow it.** Choose a
+  **CAT audio** device (the software's transmit audio, e.g. a virtual cable),
+  arm TX and turn on **CAT clients may transmit**: the software's PTT then keys
+  the radio, sending only that device — never your mic. The permission is
+  one-shot (disarm, emergency stop or a lost link turns it off; it is never
+  saved), a program's transmit ends after **Max TX** minutes (3 by default) or
+  when it disconnects, and your own PTT always wins. Every other keying
+  command from the software is still refused.
 
 - **Stored DTMF sequences.** The DTMF keypad (FM) now has six stored
   sequences — a name and up to 32 digits each — played one tone at a time with
@@ -31,6 +38,10 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
 
 ### Fixed
 
+- **The first moment of a transmission could be audio from before you keyed.**
+  The microphone was captured all the time but read only while transmitting, so
+  a transmission could begin with up to a second of sound recorded beforehand.
+  The buffer is now cleared when a transmission begins.
 - **A CW stop could be refused.** Stopping a CW message (`KY @`, and `KY |`
   for FSK/PSK) was treated as a transmit command: with TX disarmed it was
   refused, and with TX armed it marked the radio as on air. It is now a stop,

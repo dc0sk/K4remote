@@ -193,6 +193,36 @@ pub struct CatServerPrefs {
     pub bind: String,
     #[serde(default = "default_catsrv_port")]
     pub port: u16,
+    /// How long a CAT client may hold the transmitter, minutes (FR-CATSRV-10); read through
+    /// [`CatServerPrefs::tx_limit_min`], always within 1–10.
+    #[serde(default = "default_catsrv_tx_limit")]
+    pub tx_limit_min: u8,
+    /// The input device a CAT client's transmit audio comes from (e.g. the virtual cable from
+    /// WSJT-X) — never the operator's mic. `None` = client keying refused (FR-CATSRV-10).
+    /// ("CAT clients may transmit" itself is one-shot and deliberately not a setting.)
+    #[serde(default)]
+    pub tx_audio_device: Option<String>,
+}
+
+/// Default and bounds of the CAT client transmit limit, minutes (FR-CATSRV-10); mirrors
+/// `k4_session::CLIENT_TX_LIMIT_DEFAULT` (the app tests they agree).
+pub const CATSRV_TX_LIMIT_DEFAULT_MIN: u8 = 3;
+pub const CATSRV_TX_LIMIT_MIN_MIN: u8 = 1;
+pub const CATSRV_TX_LIMIT_MAX_MIN: u8 = 10;
+
+fn default_catsrv_tx_limit() -> u8 {
+    CATSRV_TX_LIMIT_DEFAULT_MIN
+}
+
+impl CatServerPrefs {
+    /// The client transmit limit in minutes, in bounds whatever the file says (else the default).
+    pub fn tx_limit_min(&self) -> u8 {
+        if (CATSRV_TX_LIMIT_MIN_MIN..=CATSRV_TX_LIMIT_MAX_MIN).contains(&self.tx_limit_min) {
+            self.tx_limit_min
+        } else {
+            CATSRV_TX_LIMIT_DEFAULT_MIN
+        }
+    }
 }
 
 impl Default for CatServerPrefs {
@@ -201,6 +231,8 @@ impl Default for CatServerPrefs {
             enabled: false,
             bind: default_catsrv_bind(),
             port: CATSRV_DEFAULT_PORT,
+            tx_limit_min: CATSRV_TX_LIMIT_DEFAULT_MIN,
+            tx_audio_device: None,
         }
     }
 }

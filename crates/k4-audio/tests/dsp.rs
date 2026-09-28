@@ -64,3 +64,17 @@ fn fr_aud_rx_01_resampler_is_continuous_across_blocks() {
         "non-monotonic output"
     );
 }
+
+/// FR-AUD-TX-01: a capture ring can be cleared, so a transmit starts with fresh audio rather than
+/// up to a second of whatever was captured before the key (the ring runs all the time).
+/// trace: FR-AUD-TX-01
+#[test]
+fn fr_aud_tx_01_the_capture_ring_can_be_cleared() {
+    let mut r = SampleRing::new(8);
+    r.push_slice(&[1.0, 2.0, 3.0]);
+    assert_eq!(r.len(), 3);
+    r.clear();
+    assert!(r.is_empty());
+    r.push_slice(&[4.0]);
+    assert_eq!(r.pop(), Some(4.0), "the ring works after a clear");
+}
