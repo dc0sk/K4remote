@@ -135,6 +135,29 @@ pub enum SessionEvent {
     PingSent,
     /// The link was declared lost (fail-safe applied).
     LinkLost,
+    /// A CAT client's transmit reached its time limit and was ended (FR-CATSRV-10).
+    ClientTxExpired,
+}
+
+/// How long a CAT client may hold the transmitter by default (FR-CATSRV-10): 3 minutes, like
+/// the K4's own CW fail-safe default. Settable 1–10 minutes.
+pub const CLIENT_TX_LIMIT_DEFAULT: Duration = Duration::from_secs(180);
+const CLIENT_TX_LIMIT_MIN: Duration = Duration::from_secs(60);
+const CLIENT_TX_LIMIT_MAX: Duration = Duration::from_secs(600);
+
+/// The outcome of a CAT client's request to key (FR-CATSRV-10).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClientKey {
+    /// Keyed (or already keyed by a client): the transmit is client-held.
+    Keyed,
+    /// The operator is transmitting: the client's request is ignored.
+    OperatorHolds,
+    /// "CAT clients may transmit" is off.
+    RefusedOptIn,
+    /// Transmit is not armed.
+    RefusedDisarmed,
+    /// The link to the radio is down.
+    RefusedLinkDown,
 }
 
 /// Session over a CAT link with an injected clock.
@@ -154,6 +177,13 @@ pub struct Session<L: CatLink, C: Clock> {
     /// let through. The radio is on air because of it, but no local method
     /// tracked that — see `Session::send`.
     raw_tx: bool,
+    /// "CAT clients may transmit" (FR-CATSRV-10): owned here, beside the arm, so no caller can
+    /// bypass it. One-shot — disarm, emergency stop and link loss clear it; never persisted.
+    cat_may_transmit: bool,
+    /// When a CAT client keyed, while the transmit is client-held (`None` = not client-held).
+    client_tx_since: Option<Instant>,
+    /// How long a client may hold the transmitter (FR-CATSRV-10).
+    client_tx_limit: Duration,
     last_rx: Instant,
     last_ping: Instant,
 }
@@ -172,6 +202,9 @@ impl<L: CatLink, C: Clock> Session<L, C> {
             transmitting: false,
             tuning: false,
             raw_tx: false,
+            cat_may_transmit: false,
+            client_tx_since: None,
+            client_tx_limit: CLIENT_TX_LIMIT_DEFAULT,
             last_rx: t0,
             last_ping: t0,
         }
@@ -236,6 +269,15 @@ impl<L: CatLink, C: Clock> Session<L, C> {
             return Ok(SessionEvent::LinkLost);
         }
 
+        // The bound on a client-held transmit (FR-CATSRV-10) — the only bound there is: a client
+        // that crashed or hung may never be seen to disconnect.
+        if let Some(since) = self.client_tx_since {
+            if now.saturating_duration_since(since) >= self.client_tx_limit {
+                self.end_tx()?;
+                return Ok(SessionEvent::ClientTxExpired);
+            }
+        }
+
         if now.saturating_duration_since(self.last_ping) >= self.cfg.ping_interval {
             self.last_ping = now;
             self.link
@@ -264,20 +306,89 @@ impl<L: CatLink, C: Clock> Session<L, C> {
         self.tx_armed = true;
     }
 
-    /// Disarm transmit.
+    /// Disarm transmit. Also clears "CAT clients may transmit" (one-shot, FR-CATSRV-10) and ends a
+    /// client-held transmit; the operator's own transmit is left alone, as before.
     pub fn disarm_tx(&mut self) {
         self.tx_armed = false;
+        self.cat_may_transmit = false;
+        let _ = self.end_client_tx();
     }
 
     /// Begin transmit. Returns `false` (and sends nothing) unless armed and
-    /// connected (FR-TX-01, FR-TX-SAFE-03).
+    /// connected (FR-TX-01, FR-TX-SAFE-03). If a CAT client holds the transmit, it becomes the
+    /// operator's: the client's claim and time limit are cleared (FR-CATSRV-10, operator wins).
     pub fn begin_tx(&mut self) -> io::Result<bool> {
         if !self.tx_armed || !self.connected {
             return Ok(false);
         }
+        self.client_tx_since = None;
         self.transmitting = true;
         self.link.send_cat("TX;")?;
         Ok(true)
+    }
+
+    /// Set "CAT clients may transmit" (FR-CATSRV-10). Turning it off while a client holds the
+    /// transmit ends that transmit.
+    pub fn set_cat_may_transmit(&mut self, on: bool) {
+        self.cat_may_transmit = on;
+        if !on {
+            let _ = self.end_client_tx();
+        }
+    }
+
+    /// Whether CAT clients may transmit now.
+    pub fn cat_may_transmit(&self) -> bool {
+        self.cat_may_transmit
+    }
+
+    /// Set how long a client may hold the transmitter, clamped to 1–10 minutes (FR-CATSRV-10).
+    pub fn set_client_tx_limit(&mut self, limit: Duration) {
+        self.client_tx_limit = limit.clamp(CLIENT_TX_LIMIT_MIN, CLIENT_TX_LIMIT_MAX);
+    }
+
+    /// How long a client may hold the transmitter.
+    pub fn client_tx_limit(&self) -> Duration {
+        self.client_tx_limit
+    }
+
+    /// A CAT client asks to key (FR-CATSRV-10). Keys only with "CAT clients may transmit", the
+    /// arm and the link all present, and never over the operator's own transmit.
+    pub fn begin_tx_for_client(&mut self) -> io::Result<ClientKey> {
+        if !self.cat_may_transmit {
+            return Ok(ClientKey::RefusedOptIn);
+        }
+        if !self.tx_armed {
+            return Ok(ClientKey::RefusedDisarmed);
+        }
+        if !self.connected {
+            return Ok(ClientKey::RefusedLinkDown);
+        }
+        if self.transmitting {
+            return Ok(if self.client_tx_since.is_some() {
+                ClientKey::Keyed
+            } else {
+                ClientKey::OperatorHolds
+            });
+        }
+        self.transmitting = true;
+        self.client_tx_since = Some(self.clock.now());
+        self.link.send_cat("TX;")?;
+        Ok(ClientKey::Keyed)
+    }
+
+    /// End the transmit if — and only if — a CAT client holds it (a keyed client left, or its
+    /// claim is revoked). Returns whether it ended one.
+    pub fn end_client_tx(&mut self) -> io::Result<bool> {
+        if self.client_tx_since.is_some() {
+            self.end_tx()?;
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    /// Whether the transmit is held by a CAT client.
+    pub fn is_client_tx(&self) -> bool {
+        self.client_tx_since.is_some()
     }
 
     /// Send a CW keying stream (`KZ`). Gated by the TX arm exactly like voice
@@ -355,6 +466,7 @@ impl<L: CatLink, C: Clock> Session<L, C> {
 
     /// End transmit (sends `RX;` if currently transmitting).
     pub fn end_tx(&mut self) -> io::Result<()> {
+        self.client_tx_since = None;
         if self.transmitting {
             self.transmitting = false;
             self.link.send_cat("RX;")?;
@@ -366,6 +478,8 @@ impl<L: CatLink, C: Clock> Session<L, C> {
     pub fn emergency_stop(&mut self) -> io::Result<()> {
         self.transmitting = false;
         self.tx_armed = false;
+        self.cat_may_transmit = false;
+        self.client_tx_since = None;
         self.raw_tx = false;
         self.tuning = false;
         // Every stop is sent **unconditionally**, and that is the whole point.
@@ -398,6 +512,8 @@ impl<L: CatLink, C: Clock> Session<L, C> {
     /// cannot resume without an explicit re-arm (FR-TX-SAFE-01). The `RX;` send
     /// is best-effort — the link may already be down.
     fn fail_safe(&mut self) {
+        self.cat_may_transmit = false;
+        self.client_tx_since = None;
         if self.transmitting {
             self.transmitting = false;
             let _ = self.link.send_cat("RX;");

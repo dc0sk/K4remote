@@ -579,3 +579,205 @@ fn fr_tx_safe_04_emergency_stop_sends_every_stop_unconditionally() {
     // `RX;` last, so the radio ends on receive whatever else happened.
     assert_eq!(sent.last().map(String::as_str), Some("RX;"));
 }
+
+// --- FR-CATSRV-10: PTT from CAT clients, gated at the session seam ---------------------------
+
+use k4_session::ClientKey;
+
+fn sent_tx(link: &MockLink) -> usize {
+    link.sent().iter().filter(|c| c.as_str() == "TX;").count()
+}
+fn sent_rx(link: &MockLink) -> usize {
+    link.sent().iter().filter(|c| c.as_str() == "RX;").count()
+}
+
+/// FR-CATSRV-10: a client keys **only** with the opt-in, the arm and the link all present — the
+/// full truth table; each missing conjunct is refused, named, and puts nothing on the wire.
+/// trace: FR-CATSRV-10, FR-TX-SAFE-03
+#[test]
+fn fr_catsrv_10_a_client_keys_only_with_opt_in_arm_and_link() {
+    for opt_in in [false, true] {
+        for armed in [false, true] {
+            for connected in [false, true] {
+                let (link, clock, mut s) = build();
+                if armed {
+                    s.arm_tx();
+                }
+                s.set_cat_may_transmit(opt_in);
+                if !connected {
+                    // Silence past the link timeout: the session declares the link lost (which
+                    // also disarms and clears the opt-in — re-apply them to isolate the conjunct).
+                    clock.advance(Duration::from_secs(6));
+                    let _ = s.tick();
+                    if armed {
+                        s.arm_tx();
+                    }
+                    s.set_cat_may_transmit(opt_in);
+                }
+                let before = sent_tx(&link);
+                let got = s.begin_tx_for_client().unwrap();
+                let want = if !opt_in {
+                    ClientKey::RefusedOptIn
+                } else if !armed {
+                    ClientKey::RefusedDisarmed
+                } else if !connected {
+                    ClientKey::RefusedLinkDown
+                } else {
+                    ClientKey::Keyed
+                };
+                assert_eq!(
+                    got, want,
+                    "opt_in {opt_in} armed {armed} connected {connected}"
+                );
+                let keyed = want == ClientKey::Keyed;
+                assert_eq!(sent_tx(&link) - before, usize::from(keyed));
+                assert_eq!(s.is_transmitting(), keyed);
+                assert_eq!(s.is_client_tx(), keyed);
+            }
+        }
+    }
+}
+
+/// FR-CATSRV-10: the opt-in is one-shot — disarming, the emergency stop and the link-loss
+/// fail-safe clear it, and a new session starts with it off. Each of the first three, while a
+/// client holds TX, also ends the transmit.
+/// trace: FR-CATSRV-10, FR-TX-SAFE-01, FR-TX-SAFE-04
+#[test]
+fn fr_catsrv_10_the_opt_in_is_one_shot_and_its_loss_unkeys_a_client() {
+    let (_l, _c, s) = build();
+    assert!(
+        !s.cat_may_transmit(),
+        "a new session starts with the opt-in off"
+    );
+    type Act = fn(&mut Session<MockLink, SharedClock>, &FakeClock);
+    let acts: [(&str, Act); 4] = [
+        ("disarm", |s, _| s.disarm_tx()),
+        ("emergency stop", |s, _| {
+            s.emergency_stop().unwrap();
+        }),
+        ("link loss", |s, c| {
+            c.advance(Duration::from_secs(6));
+            let _ = s.tick();
+        }),
+        ("opt-in revoked", |s, _| s.set_cat_may_transmit(false)),
+    ];
+    for (what, act) in acts {
+        let (link, clock, mut s) = build();
+        s.arm_tx();
+        s.set_cat_may_transmit(true);
+        assert_eq!(s.begin_tx_for_client().unwrap(), ClientKey::Keyed);
+        let rx = sent_rx(&link);
+        act(&mut s, &clock);
+        assert!(!s.cat_may_transmit(), "{what} must clear the opt-in");
+        assert!(
+            !s.is_transmitting() && !s.is_client_tx(),
+            "{what} must end the client's TX"
+        );
+        assert!(sent_rx(&link) > rx, "{what} must send RX");
+    }
+}
+
+/// FR-CATSRV-10: the operator wins. A client's key while the operator transmits is ignored
+/// (nothing sent); when the operator keys while a client holds TX, the transmit becomes the
+/// operator's, so ending the client's claim — its disconnect, or its time limit — no longer
+/// unkeys anything.
+/// trace: FR-CATSRV-10
+#[test]
+fn fr_catsrv_10_the_operator_wins() {
+    let (link, clock, mut s) = build();
+    s.arm_tx();
+    s.set_cat_may_transmit(true);
+    assert!(s.begin_tx().unwrap());
+    let tx = sent_tx(&link);
+    assert_eq!(s.begin_tx_for_client().unwrap(), ClientKey::OperatorHolds);
+    assert_eq!(
+        sent_tx(&link),
+        tx,
+        "a client key during the operator's TX sends nothing"
+    );
+    assert!(!s.is_client_tx());
+
+    let (link, clock2, mut s) = build();
+    let _ = clock;
+    s.arm_tx();
+    s.set_cat_may_transmit(true);
+    assert_eq!(s.begin_tx_for_client().unwrap(), ClientKey::Keyed);
+    assert!(s.begin_tx().unwrap(), "the operator takes over");
+    assert!(!s.is_client_tx(), "the client's claim is cleared");
+    let rx = sent_rx(&link);
+    assert!(
+        !s.end_client_tx().unwrap(),
+        "the client's leaving ends nothing"
+    );
+    // Ten minutes with the link kept alive (so only a client time limit could act).
+    for _ in 0..600 {
+        clock2.advance(Duration::from_secs(1));
+        link.queue(&["PONG;"]);
+        s.pump().unwrap();
+        let _ = s.tick();
+    }
+    assert!(
+        s.is_transmitting(),
+        "no client time limit on the operator's TX"
+    );
+    assert_eq!(sent_rx(&link), rx);
+}
+
+/// FR-CATSRV-10: a client-held transmit is bounded — default 3 minutes, settable 1–10 — and the
+/// session's own `tick` ends it on its clock (`ClientTxExpired`), sending `RX;`.
+/// trace: FR-CATSRV-10
+#[test]
+fn fr_catsrv_10_a_client_held_transmit_is_bounded_in_time() {
+    assert_eq!(
+        k4_session::CLIENT_TX_LIMIT_DEFAULT,
+        Duration::from_secs(180)
+    );
+    let (link, clock, mut s) = build();
+    s.arm_tx();
+    s.set_cat_may_transmit(true);
+    assert_eq!(s.begin_tx_for_client().unwrap(), ClientKey::Keyed);
+    // Keep the link alive (inbound traffic) while time passes, so only the bound can act.
+    for _ in 0..179 {
+        clock.advance(Duration::from_secs(1));
+        link.queue(&["PONG;"]);
+        s.pump().unwrap();
+        assert_ne!(s.tick().unwrap(), SessionEvent::ClientTxExpired);
+    }
+    assert!(s.is_client_tx(), "still keyed just before the limit");
+    clock.advance(Duration::from_secs(1));
+    link.queue(&["PONG;"]);
+    s.pump().unwrap();
+    let rx = sent_rx(&link);
+    assert_eq!(s.tick().unwrap(), SessionEvent::ClientTxExpired);
+    assert!(!s.is_transmitting() && !s.is_client_tx());
+    assert_eq!(sent_rx(&link), rx + 1);
+    // The limit is settable within 1–10 minutes, clamped.
+    s.set_client_tx_limit(Duration::from_secs(5));
+    assert_eq!(s.client_tx_limit(), Duration::from_secs(60));
+    s.set_client_tx_limit(Duration::from_secs(3600));
+    assert_eq!(s.client_tx_limit(), Duration::from_secs(600));
+}
+
+/// FR-CATSRV-10: ending the client's claim unkeys only a client-held transmit; an operator `end_tx`
+/// ends either; disarming leaves the operator's own transmit alone (as before).
+/// trace: FR-CATSRV-10
+#[test]
+fn fr_catsrv_10_ending_a_client_claim_touches_only_client_transmit() {
+    let (link, _c, mut s) = build();
+    s.arm_tx();
+    s.set_cat_may_transmit(true);
+    assert!(!s.end_client_tx().unwrap(), "nothing to end");
+    assert_eq!(s.begin_tx_for_client().unwrap(), ClientKey::Keyed);
+    let rx = sent_rx(&link);
+    assert!(s.end_client_tx().unwrap());
+    assert_eq!(sent_rx(&link), rx + 1);
+
+    let (_l, _c, mut s) = build();
+    s.arm_tx();
+    assert!(s.begin_tx().unwrap());
+    s.disarm_tx();
+    assert!(
+        s.is_transmitting(),
+        "disarm leaves the operator's transmit alone"
+    );
+}
