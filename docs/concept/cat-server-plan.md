@@ -188,6 +188,124 @@ is simulated, the client is the real Hamlib K4 backend). Findings:
 
 Not yet captured: WSJT-X's own poll set, N1MM, flrig, DXLab — and anything against the real K4.
 
+### 0.3 Phase B design — PTT from clients (proposed 2026-09-28, for review)
+
+1. **Scope: PTT only** — a client's `TX` / `RX`, as WSJT-X, JTDX and fldigi use for CAT PTT. Every
+   other keying form stays refused: `KY` text (and `<` TX TEST in it), `KZ`, every `SW` code,
+   `TS1`, `TU1–4`, `PB1–8`, `DA` actions, `VX1`.
+2. **Two gates, both at the session seam.** A new setting **"CAT clients may transmit"** (default
+   off, per client-independent) *and* the existing TX arm (`FR-TX-SAFE-03`). The core emits a new
+   `Action::KeyRequest` for `TX` (instead of `Refused`); the worker calls a new
+   `Session::begin_tx_for_client(cat_may_transmit: bool) -> io::Result<bool>`, which refuses unless
+   both hold and otherwise is `begin_tx` — so the opt-in lives in the session crate, beside the arm
+   check, with no path around it in the server.
+3. **Keying goes through `begin_tx`**, so the TX-audio path (the operator routes the software's
+   audio to the app's TX input device), the emergency stop (unkeys *and disarms* — a later client
+   `TX` is refused until re-armed) and the link-loss fail-safe apply exactly as to the app's own PTT.
+4. **A refused client `TX`** (opt-in off, or disarmed) is logged under `catsrv` and **flashes ARM
+   TX** (the `tx_refusals` counter), like a refused PTT button. It stays wire-silent (a SET has no
+   reply). Hamlib will still report success from its cache (§0.2) — the flash is the operator's
+   signal; the manual keeps advising against CAT PTT unless the opt-in is on and TX is armed.
+5. **`TQ` tells the truth both ways:** `TQ1` if the app keyed (`Session::is_transmitting`) **or**
+   the radio reports transmit (`RadioState::transmitting`), else `TQ0`.
+6. **`RX` from a client** unkeys through `end_tx` when the app keyed, else sends `RX;` (unchanged).
+   A client's `RX` also ends a transmit the operator started (a stop is never gated) — intended.
+7. Frequency/mode changes while transmitting stay allowed (§0 decision). `TX` while the link is
+   down is dropped with the other SETs.
+
+Open for the review: whether per-client ownership of a keyed state matters (client A keys,
+client B unkeys); whether a client that disconnects while it keyed should unkey (proposal: yes —
+a vanished PTT owner must not leave the transmitter on).
+
+**Adversarial review of §0.3 (2026-09-28) — adopted; §0.3 is revised before any code:**
+
+- **HIGH — no bound on a client-held transmit.** A half-open TCP peer (crash, cable, suspend)
+  never produces a disconnect, and the server writes nothing unsolicited, so "unkey on
+  disconnect" can never fire. The radio does not cover it: `KZF` bounds only `KZ`, and the PRG
+  lists no PTT timeout. → a **maximum client-keyed time** enforced by the worker via `end_tx`,
+  plus TCP keepalive on client sockets. (It also found that **`KZF` is never sent**: FR-TX-SAFE-02's
+  "set on connect" is untrue — fixed separately.)
+- **HIGH — the opt-in must be owned by the session**, not passed as an argument
+  (`set_cat_may_transmit`, an argument-less `begin_tx_for_client`), so a session-level test proves
+  the gate; **revoking the opt-in or disarming must `end_tx`** when a client keyed.
+- **MEDIUM — `RadioState::transmitting` is stale by construction** (set only from `IF`, sent once at
+  seed; no `TQ` reply applied): it cannot be a truth source for `TQ` until verified on the radio;
+  consider polling `TQX;` while a client is keyed.
+- **MEDIUM — the phase-A `KY @` stop is arm-gated** by `Session::send`'s classifier (and sets
+  `raw_tx` when armed) — fixed separately.
+- **MEDIUM — hot mic:** a client's PTT keys whatever TX input device is selected — with a physical
+  mic, the room. → the design must decide (refuse client keying without a chosen TX device, or make
+  the opt-in's wording explicit).
+- **MEDIUM — after a refused `TX` Hamlib believes PTT=1**; a later re-arm makes the client's next
+  `TX` key at a moment the operator did not choose → consider a **one-shot opt-in** cleared by
+  disarm/e-stop.
+- **LOW:** `KeyRequest` exact-`TX` only (`TX$` must not match); `TX` while the link is down must
+  be dropped before the keying branch (today keying is classified first); a per-client `keyed` bit
+  (unkey when any keyed client vanishes); a `catsrv` log line per client key/unkey with its
+  address; a new requirement row and client-path acceptance for FR-TX-SAFE-03/06.
+
+### 0.3.1 Revised phase B design (2026-09-28, after the review and DC0SK's decisions)
+
+**Decided by DC0SK:** a client-held transmit is bounded at **3 min by default, configurable**; a
+client's TX audio comes from a **separate "CAT TX audio" input device** (none chosen = client keying
+refused), never the operator's mic; the opt-in is **one-shot** — disarm or emergency stop clears it.
+
+1. **Scope: PTT only** — exactly `TX` (not `TX$`, not `TXn`) keys; `RX` unkeys. Every other keying
+   form stays refused (`KY` text, `KZ`, every `SW`, `TS1`, `TU1–4`, `PB1–8`, `DA` actions, `VX1`).
+2. **The session owns both gates.** `Session::set_cat_may_transmit(bool)` stores the opt-in;
+   `Session::begin_tx_for_client() -> io::Result<bool>` (no argument) keys only if the opt-in, the
+   arm and the connection all hold, and records that the transmit is **client-held**.
+3. **One-shot and revocable, inside the session.** Disarm, `emergency_stop` and `fail_safe` clear
+   the opt-in. Turning the opt-in off, or disarming, while a client holds TX **ends the transmit**.
+   The UI shows the opt-in cleared.
+4. **Bounded.** The worker ends a client-held transmit after the configured maximum (default
+   3 min, 1–10 min), logging it; client sockets get TCP keepalive so a vanished peer is eventually
+   noticed. A per-client `keyed` bit: when a keyed client disconnects, the transmit ends.
+5. **Separate CAT audio.** A "CAT TX audio" input device setting next to the opt-in. While a
+   transmit is client-held, the worker streams that device and **not** the mic; when the operator
+   keys, the mic as today. No CAT device chosen, or it cannot be opened → the key is refused
+   (logged, ARM flash) before the session is asked.
+6. **`TQ` from what the app knows:** `TQ1` iff the session is transmitting (app- or client-keyed),
+   tuning, or holding a raw on-air command; `RadioState::transmitting` is not used (stale by
+   construction — set only from the seed's `IF`). During the grace period `TQ0` (unchanged).
+7. **Refusals and logging.** A refused client `TX` (opt-in off, disarmed, no CAT device) is
+   wire-silent, logged under `catsrv` with the client's address and the reason, and flashes ARM TX.
+   Every client key and unkey is logged with the address.
+8. **Order:** `TX` while the link is down is dropped before any keying decision. Operator PTT and
+   client PTT share one transmit: whoever unkeys ends it (a stop is never gated); when the operator
+   keys while a client holds TX, the transmit becomes the operator's (mic, no client time limit).
+
+Requirements: a new row **`FR-CATSRV-10` (client PTT)** replaces the "not in this phase" part of
+`FR-CATSRV-07`; `FR-TX-SAFE-03/06` acceptance extends to the client path.
+
+### 0.3.2 Re-review of §0.3.1 (2026-09-28) — adopted, overriding §0.3.1 where they differ
+
+- **Operator wins.** A client `TX` while the operator transmits is ignored and logged. When the
+  operator keys while a client holds TX, the transmit becomes the operator's and the client's
+  claim (its `keyed` bit and the time bound) is cleared — so that client's later disconnect or the
+  bound cannot end the operator's transmit.
+- **The time bound lives in the session**, on its injected clock: `tick()` ends a client-held
+  transmit when the limit passes (`SessionEvent::ClientTxExpired`), mock-clock testable and at the
+  seam. It is **the** bound: TCP keepalive is dropped (std has no API, and it never fires for a
+  hung-but-alive program, the likely failure). Whether the K4 unkeys when `PING`s stop is a
+  hardware question.
+- **The opt-in is never persisted** (a saved opt-in would re-enable at start-up — FR-CATSRV-09's
+  "allow-TX … persist" is corrected), and the UI holds no copy: it renders from the worker
+  snapshot, as `tx_armed` is. A new session starts with it off. A toggle sent while disconnected is
+  dropped, and the UI shows off.
+- **Stale audio.** Capture rings buffer about 1 s and drop the oldest; the newly selected source
+  is flushed at every key and switch, so neither pre-key CAT audio nor room audio bursts out. The
+  CAT device is opened when the opt-in is turned on (the operator's moment) and closed when it
+  clears — no per-key open latency.
+- **`TQ` gap, documented:** `TQ0` during the app's own CW (`send_cw` sets no TX flag) and during
+  front-panel transmit.
+- **Exact `TX`:** the core's `KeyRequest` tests the whole command (`TX$` must not match).
+- **Tests required:** a session truth table over opt-in × arm × connected with each conjunct
+  sabotaged; revoke / disarm / e-stop / fail-safe while client-held → `RX;` and the opt-in off;
+  expiry under the mock clock; a keyed client's disconnect → `RX;`; operator takeover then that
+  disconnect → no `RX;`; a worker end-to-end proving a client `TX` without the opt-in puts no
+  `TX;` on the wire; a source scan that `service_catsrv` never calls `begin_tx(`.
+
 ---
 
 ## 1. Summary + recommendation
