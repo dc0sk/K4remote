@@ -188,6 +188,62 @@ is simulated, the client is the real Hamlib K4 backend). Findings:
 
 Not yet captured: WSJT-X's own poll set, N1MM, flrig, DXLab — and anything against the real K4.
 
+### 0.3 Phase B design — PTT from clients (proposed 2026-09-28, for review)
+
+1. **Scope: PTT only** — a client's `TX` / `RX`, as WSJT-X, JTDX and fldigi use for CAT PTT. Every
+   other keying form stays refused: `KY` text (and `<` TX TEST in it), `KZ`, every `SW` code,
+   `TS1`, `TU1–4`, `PB1–8`, `DA` actions, `VX1`.
+2. **Two gates, both at the session seam.** A new setting **"CAT clients may transmit"** (default
+   off, per client-independent) *and* the existing TX arm (`FR-TX-SAFE-03`). The core emits a new
+   `Action::KeyRequest` for `TX` (instead of `Refused`); the worker calls a new
+   `Session::begin_tx_for_client(cat_may_transmit: bool) -> io::Result<bool>`, which refuses unless
+   both hold and otherwise is `begin_tx` — so the opt-in lives in the session crate, beside the arm
+   check, with no path around it in the server.
+3. **Keying goes through `begin_tx`**, so the TX-audio path (the operator routes the software's
+   audio to the app's TX input device), the emergency stop (unkeys *and disarms* — a later client
+   `TX` is refused until re-armed) and the link-loss fail-safe apply exactly as to the app's own PTT.
+4. **A refused client `TX`** (opt-in off, or disarmed) is logged under `catsrv` and **flashes ARM
+   TX** (the `tx_refusals` counter), like a refused PTT button. It stays wire-silent (a SET has no
+   reply). Hamlib will still report success from its cache (§0.2) — the flash is the operator's
+   signal; the manual keeps advising against CAT PTT unless the opt-in is on and TX is armed.
+5. **`TQ` tells the truth both ways:** `TQ1` if the app keyed (`Session::is_transmitting`) **or**
+   the radio reports transmit (`RadioState::transmitting`), else `TQ0`.
+6. **`RX` from a client** unkeys through `end_tx` when the app keyed, else sends `RX;` (unchanged).
+   A client's `RX` also ends a transmit the operator started (a stop is never gated) — intended.
+7. Frequency/mode changes while transmitting stay allowed (§0 decision). `TX` while the link is
+   down is dropped with the other SETs.
+
+Open for the review: whether per-client ownership of a keyed state matters (client A keys,
+client B unkeys); whether a client that disconnects while it keyed should unkey (proposal: yes —
+a vanished PTT owner must not leave the transmitter on).
+
+**Adversarial review of §0.3 (2026-09-28) — adopted; §0.3 is revised before any code:**
+
+- **HIGH — no bound on a client-held transmit.** A half-open TCP peer (crash, cable, suspend)
+  never produces a disconnect, and the server writes nothing unsolicited, so "unkey on
+  disconnect" can never fire. The radio does not cover it: `KZF` bounds only `KZ`, and the PRG
+  lists no PTT timeout. → a **maximum client-keyed time** enforced by the worker via `end_tx`,
+  plus TCP keepalive on client sockets. (It also found that **`KZF` is never sent**: FR-TX-SAFE-02's
+  "set on connect" is untrue — fixed separately.)
+- **HIGH — the opt-in must be owned by the session**, not passed as an argument
+  (`set_cat_may_transmit`, an argument-less `begin_tx_for_client`), so a session-level test proves
+  the gate; **revoking the opt-in or disarming must `end_tx`** when a client keyed.
+- **MEDIUM — `RadioState::transmitting` is stale by construction** (set only from `IF`, sent once at
+  seed; no `TQ` reply applied): it cannot be a truth source for `TQ` until verified on the radio;
+  consider polling `TQX;` while a client is keyed.
+- **MEDIUM — the phase-A `KY @` stop is arm-gated** by `Session::send`'s classifier (and sets
+  `raw_tx` when armed) — fixed separately.
+- **MEDIUM — hot mic:** a client's PTT keys whatever TX input device is selected — with a physical
+  mic, the room. → the design must decide (refuse client keying without a chosen TX device, or make
+  the opt-in's wording explicit).
+- **MEDIUM — after a refused `TX` Hamlib believes PTT=1**; a later re-arm makes the client's next
+  `TX` key at a moment the operator did not choose → consider a **one-shot opt-in** cleared by
+  disarm/e-stop.
+- **LOW:** `KeyRequest` exact-`TX` only (`TX$` must not match); `TX` while the link is down must
+  be dropped before the keying branch (today keying is classified first); a per-client `keyed` bit
+  (unkey when any keyed client vanishes); a `catsrv` log line per client key/unkey with its
+  address; a new requirement row and client-path acceptance for FR-TX-SAFE-03/06.
+
 ---
 
 ## 1. Summary + recommendation
