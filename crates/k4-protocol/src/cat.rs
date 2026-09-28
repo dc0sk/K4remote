@@ -1201,8 +1201,10 @@ pub fn keys_transmitter(command: &str) -> bool {
         "TX" => arg.is_empty(),
         // Tune: every action but 0 (exit) keys a carrier.
         "TU" => matches!(arg, "1" | "2" | "3" | "4"),
-        // CW keying stream and text send — both key the transmitter.
-        "KZ" | "KY" => !arg.is_empty(),
+        // CW keying stream and text send — both key the transmitter. The two message stops,
+        // exactly `KY @` and `KY |`, are stops (see `stops_transmitter`), not keying.
+        "KZ" => !arg.is_empty(),
+        "KY" => !arg.is_empty() && !matches!(arg.trim(), "@" | "|"),
         // DVR playback transmits the recorded message; `PB0` stops.
         "PB" => !arg.is_empty() && arg != "0",
         // Digital audio (D12 `DA`). Two of its actions reach the transmitter:
@@ -1238,6 +1240,7 @@ pub fn stops_transmitter(command: &str) -> bool {
     let cmd = cmd.to_ascii_uppercase();
     let cmd = cmd.as_str();
     // `DA0` stops every digital-audio action, which per D12 includes any it
-    // started on the transmitter.
-    matches!(cmd, "RX" | "TU0" | "PB0" | "DA0")
+    // started on the transmitter. `KY @` terminates a CW message and `KY |`
+    // quickly ends FSK/PSK transmit (D12 `KY`).
+    matches!(cmd, "RX" | "TU0" | "PB0" | "DA0" | "KY @" | "KY |")
 }

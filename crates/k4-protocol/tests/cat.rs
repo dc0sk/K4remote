@@ -796,3 +796,25 @@ fn fr_fm_03_a_stored_sequence_is_one_dm_per_digit_or_refused_whole() {
     assert_eq!(dtmf_sequence(&longest).map(|v| v.len()), Some(32));
     assert_eq!(dtmf_sequence(&"1".repeat(DTMF_SEQ_MAX + 1)), None);
 }
+
+/// FR-TX-SAFE-03/05: the CW message stops — exactly `KY @` (terminates a CW message) and `KY |`
+/// (quickly ends FSK/PSK transmit), PRG D12 `KY` — are **stops**, not keying: they pass with the
+/// arm off and clear the on-air belief. Any `KY` that carries text keys, including text that ends
+/// in `@` and `KY0` (`KY*[text]` sends "0"); a bare `KY` is the buffer query.
+/// trace: FR-TX-SAFE-03, FR-TX-SAFE-05
+#[test]
+fn fr_tx_safe_05_cw_message_stops_are_stops_not_keying() {
+    use k4_protocol::cat::{keys_transmitter, stops_transmitter};
+    for stop in ["KY @;", "KY |;", "ky @;", "KY @"] {
+        assert!(stops_transmitter(stop), "{stop} must count as a stop");
+        assert!(
+            !keys_transmitter(stop),
+            "{stop} must not be gated by the arm"
+        );
+    }
+    for keys in ["KY CQ @;", "KY0;", "KY CQ;", "KYR CQ;", "KY <;", "KY @ CQ;"] {
+        assert!(keys_transmitter(keys), "{keys} keys the transmitter");
+        assert!(!stops_transmitter(keys), "{keys} is not a stop");
+    }
+    assert!(!keys_transmitter("KY;"), "the buffer query keys nothing");
+}
