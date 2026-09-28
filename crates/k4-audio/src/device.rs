@@ -277,6 +277,15 @@ impl AudioInput {
         self.gain = g.clamp(0.0, 3.0);
     }
 
+    /// Drop everything captured so far, so the next frame taken is fresh audio (FR-AUD-TX-01): the
+    /// capture runs all the time, and without this a transmit would begin with up to a second
+    /// of whatever was captured before the key.
+    pub fn flush(&self) {
+        if let Ok(mut r) = self.ring.lock() {
+            r.clear();
+        }
+    }
+
     /// Take exactly `n` mono 12 kHz samples (one TX frame) if enough are buffered,
     /// with the local capture gain applied.
     pub fn take_frame(&self, n: usize) -> Option<Vec<f32>> {

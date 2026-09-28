@@ -38,7 +38,7 @@ fn cache(s: &RadioState) -> Cache<'_> {
         rvd: Some("RVD02.34"),
         id_text: Some("DC0SK"),
         link_up: true,
-        tx_fallback: false,
+        on_air: false,
     }
 }
 
@@ -205,8 +205,8 @@ fn fr_catsrv_07_no_client_command_keys_in_phase_a_and_stops_always_pass() {
     let k = cache(&s);
     let mut c = Client::new();
     for cmd in [
-        "TX",
-        "tx",
+        "TX$",
+        "TX1",
         "KY CQ TEST",
         "KY0",
         "KYR CQ",
@@ -413,6 +413,7 @@ fn fr_catsrv_06_only_the_allowlist_reaches_the_radio_over_every_prg_mnemonic() {
                         )
                     }
                     Action::Unkey => assert_eq!(cmd, "RX;", "{cmd} unkeyed"),
+                    Action::KeyRequest => assert_eq!(cmd, "TX;", "{cmd} asked to key"),
                     _ => {}
                 }
             }
@@ -468,38 +469,58 @@ fn fr_catsrv_02_empty_and_junk_commands_are_harmless() {
     }
 }
 
-/// `TQ` is always answered while the link is up (Hamlib's open needs it): from the radio's own
-/// report when there is one, else from the session's transmit state.
-/// trace: FR-CATSRV-06
+/// `TQ` comes only from what the app knows is on air (its own or a client's transmit, a tune, a
+/// raw on-air command): the radio's reported state is stale by construction (set only from the
+/// connect seed's `IF`), so it is not consulted. Answered either way while the link is up (Hamlib's
+/// open needs it).
+/// trace: FR-CATSRV-06, FR-CATSRV-10
 #[test]
-fn fr_catsrv_06_tq_falls_back_to_the_sessions_transmit_state() {
-    let s = RadioState {
-        transmitting: None,
-        ..state()
-    };
+fn fr_catsrv_10_tq_is_what_the_app_knows_is_on_air() {
     let mut c = Client::new();
-    let idle = cache(&s);
-    assert_eq!(reply(&mut c, "TQ;", &idle).as_deref(), Some("TQ0;"));
-    let keyed = Cache {
-        tx_fallback: true,
-        ..cache(&s)
-    };
-    assert_eq!(reply(&mut c, "TQ;", &keyed).as_deref(), Some("TQ1;"));
-    // The radio's own report wins over the fallback.
-    let reported = RadioState {
-        transmitting: Some(false),
+    let stale_tx = RadioState {
+        transmitting: Some(true),
         ..state()
     };
     assert_eq!(
-        reply(
-            &mut c,
-            "TQ;",
-            &Cache {
-                tx_fallback: true,
-                ..cache(&reported)
-            }
-        )
-        .as_deref(),
-        Some("TQ0;")
+        reply(&mut c, "TQ;", &cache(&stale_tx)).as_deref(),
+        Some("TQ0;"),
+        "the stale radio state is not consulted"
+    );
+    let s = state();
+    let keyed = Cache {
+        on_air: true,
+        ..cache(&s)
+    };
+    assert_eq!(reply(&mut c, "TQ;", &keyed).as_deref(), Some("TQ1;"));
+}
+
+/// FR-CATSRV-10: exactly `TX` (any case) is a request to key, decided by the session's gates —
+/// not refused here, never forwarded as a command. `TX$` and `TX1` are not it (refused). With the
+/// radio link down it is dropped before any keying decision.
+/// trace: FR-CATSRV-10
+#[test]
+fn fr_catsrv_10_exactly_tx_is_a_request_to_key() {
+    let s = state();
+    let k = cache(&s);
+    let mut c = Client::new();
+    for tx in ["TX;", "tx;", "Tx"] {
+        assert_eq!(handle(&mut c, tx, &k), vec![Action::KeyRequest], "{tx}");
+    }
+    for not in ["TX$;", "TX1;", "TX0;"] {
+        assert!(
+            !handle(&mut c, not, &k).contains(&Action::KeyRequest),
+            "{not} is not a request to key"
+        );
+    }
+    let down = Cache {
+        link_up: false,
+        ..cache(&s)
+    };
+    assert!(
+        matches!(
+            handle(&mut c, "TX;", &down).as_slice(),
+            [Action::Dropped(..)]
+        ),
+        "TX with the link down is dropped"
     );
 }

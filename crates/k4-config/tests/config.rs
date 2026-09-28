@@ -977,3 +977,32 @@ fn fr_catsrv_01_cat_server_settings_default_off_on_loopback_and_persist() {
         assert!(!catsrv_bind_is_loopback(not), "{not:?}");
     }
 }
+
+/// FR-CATSRV-10: a CAT client's transmit limit is 3 minutes by default, kept within 1–10 minutes
+/// whatever the file says, and the CAT TX audio device is unset by default (so client keying is
+/// refused until one is chosen). "CAT clients may transmit" itself is **not** a setting — it is
+/// one-shot and never saved. Pins written as numbers.
+/// trace: FR-CATSRV-10
+#[test]
+fn fr_catsrv_10_cat_tx_settings_default_and_bounds() {
+    let def = Prefs::default().cat_server;
+    assert_eq!(def.tx_limit_min(), 3);
+    assert_eq!(def.tx_audio_device, None);
+    for (stray, want) in [(0u8, 3u8), (1, 1), (10, 10), (11, 3), (255, 3)] {
+        let p: Prefs = toml::from_str(&format!(
+            "tune_step_hz = 100\n[cat_server]\ntx_limit_min = {stray}\n"
+        ))
+        .expect("a config with a limit");
+        assert_eq!(p.cat_server.tx_limit_min(), want, "limit {stray}");
+    }
+    let mut p = Prefs::default();
+    p.cat_server.tx_audio_device = Some("WSJT-X cable".into());
+    p.cat_server.tx_limit_min = 5;
+    let back: Prefs = toml::from_str(&toml::to_string(&p).expect("serialize")).expect("parse");
+    assert_eq!(back.cat_server, p.cat_server);
+    let text = toml::to_string(&p).unwrap();
+    assert!(
+        !text.contains("may_transmit") && !text.contains("allow_tx"),
+        "the transmit opt-in must never be saved:\n{text}"
+    );
+}

@@ -12,9 +12,10 @@
 //!    and flrig K41, and a K41 reply handed to a K40 client breaks it (`ID`, `IF`, …).
 //! 2. **The stop direction is never refused:** `RX` unkeys through the session (so the app does
 //!    not keep believing it transmits); `KY @`, `KY |`, `TU0`, `PB0`, `DA0` are forwarded.
-//! 3. **No client command keys the transmitter** in this phase: anything that keys or can key —
-//!    including every `SW` code, since a deny-list cannot be complete (`SW17` is both KEYPAD 1
-//!    and "play M1") — is refused. Keying behind arm + opt-in is a later phase.
+//! 3. **Only exactly `TX` can key**, and only through the session's gates — "CAT clients may
+//!    transmit", the arm, the link and a CAT audio device (FR-CATSRV-10); the core just asks
+//!    (`Action::KeyRequest`). Every other keying form is refused — including every `SW` code,
+//!    since a deny-list cannot be complete (`SW17` is both KEYPAD 1 and "play M1").
 //! 4. **GETs are answered locally or from the cache, in the forms real clients check** (Hamlib
 //!    fails its open on any missing or wrong-length reply, with no retries). A GET the cache
 //!    cannot answer gets **no** reply — never a K4 `<cmd>?;`, which Hamlib mis-parses.
@@ -74,9 +75,10 @@ pub struct Cache<'a> {
     pub id_text: Option<&'a str>,
     /// The app's link to the radio is up.
     pub link_up: bool,
-    /// The session's own transmit state, answered for `TQ` when the radio has not reported one
-    /// (Hamlib's open needs `TQ` answered either way).
-    pub tx_fallback: bool,
+    /// What the app knows is on air — its own or a client's transmit, a tune, a raw on-air
+    /// command — answered for `TQ` (FR-CATSRV-10). The radio's reported state is stale by
+    /// construction (only the connect seed's `IF` sets it) and is not consulted.
+    pub on_air: bool,
 }
 
 /// What to do for one client command.
@@ -90,6 +92,9 @@ pub enum Action {
     Stop(String),
     /// Unkey through the session (`end_tx`), for a client's `RX`.
     Unkey,
+    /// A client asks to key (exactly `TX`): the worker puts it to the session's gates — "CAT
+    /// clients may transmit", the arm, the link, a CAT audio device (FR-CATSRV-10).
+    KeyRequest,
     /// A keying command, refused (logged; the client gets no reply, as for any SET).
     Refused(String),
     /// Not acted on, with the reason (logged).
@@ -168,7 +173,14 @@ pub fn handle(client: &mut Client, raw: &str, cache: &Cache) -> Vec<Action> {
         return vec![Action::Stop(wire)];
     }
 
-    // 3. Keying — refused in this phase, however it is spelled.
+    // 3. Exactly `TX` asks to key; the session's gates decide (FR-CATSRV-10). Every other keying
+    //    form is refused, however it is spelled — including `TX$` and `TXn`.
+    if up == "TX" {
+        if !cache.link_up {
+            return drop("radio link down");
+        }
+        return vec![Action::KeyRequest];
+    }
     let active = !arg.is_empty() && arg != "0";
     let keys = keys_transmitter(&up)
         || head == "SW"
@@ -205,8 +217,7 @@ pub fn handle(client: &mut Client, raw: &str, cache: &Cache) -> Vec<Action> {
             "FT" => resp::ft(s),
             "FR" => Some(resp::fr().to_string()),
             "KS" => resp::ks(s),
-            "TQ" if !cache.link_up => Some("TQ0;".to_string()),
-            "TQ" => resp::tq(s).or_else(|| Some(format!("TQ{};", u8::from(cache.tx_fallback)))),
+            "TQ" => Some(format!("TQ{};", u8::from(cache.link_up && cache.on_air))),
             "IF" => resp::if_(s, client.k31()),
             _ => return drop("GET not answered by the server"),
         };

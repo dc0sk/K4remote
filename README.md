@@ -182,8 +182,8 @@ JTDX, fldigi / flrig, Log4OM, CQRLOG and N1MM Logger+ will be able to drive the
 remote K4 *through* K4 Remote, which emulates the K4's own network CAT service on
 `127.0.0.1:9200` — so the software is set up exactly as for a K4 on the LAN.
 Reading and setting frequency and mode works (Settings → **CAT SERVER**, off by
-default); transmitting from the software, which will need TX armed in the app
-*and* an explicit opt-in, is the next step. The design, checked against Hamlib's
+default), and so does **CAT PTT** — behind ARM TX, a one-shot opt-in and a
+separate CAT audio device, bounded in time. The design, checked against Hamlib's
 and flrig's source, is in [`docs/concept/cat-server-plan.md`](docs/concept/cat-server-plan.md).
 
 **Blocked on hardware answers** (each unblocks a feature that is otherwise

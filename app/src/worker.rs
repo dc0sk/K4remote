@@ -264,6 +264,19 @@ pub enum WorkerCmd {
     /// Start (or restart) the CAT server for third-party software, or stop it (`None`) —
     /// FR-CATSRV-01.
     CatServer(Option<CatServerConfig>),
+    /// Turn "CAT clients may transmit" on or off (FR-CATSRV-10). On opens the CAT TX audio device
+    /// first and is refused without one; the session owns the flag.
+    SetCatMayTransmit(bool),
+    /// How long a CAT client may hold the transmitter (FR-CATSRV-10).
+    SetCatTxLimit(Duration),
+    /// The input device a CAT client's transmit audio comes from (`None` = none chosen).
+    SetCatAudioDevice(Option<String>),
+    /// Tests only: install a silent stand-in CAT audio source (CI has no sound device). Never sent
+    /// by the UI (a structural test checks). Deliberately not behind a test-only cfg attribute:
+    /// `cargo xtask` reads a file as test code from the first such attribute on, so test-only
+    /// items live at the end of the file.
+    #[cfg_attr(not(test), allow(dead_code))]
+    TestCatAudio,
     /// AF recorder (FR-AUD-REC-01): the radio's own 90 s buffer.
     AfRecord,
     AfPlay,
@@ -311,6 +324,12 @@ pub struct UiSnapshot {
     pub catsrv_clients: usize,
     /// Why the CAT server could not start, if it could not.
     pub catsrv_error: Option<String>,
+    /// "CAT clients may transmit", as the session holds it (FR-CATSRV-10) — the UI's only source.
+    pub cat_may_transmit: bool,
+    /// A CAT client holds the transmitter now.
+    pub client_tx: bool,
+    /// Why "CAT clients may transmit" could not be turned on (e.g. no CAT audio device).
+    pub cat_tx_error: Option<String>,
     /// Connection lifecycle phase, driving the connect/cancel control (FR-UI-16).
     pub phase: ConnPhase,
     pub transmitting: bool,
@@ -562,12 +581,55 @@ pub const CATSRV_GRACE: Duration = Duration::from_secs(30);
 struct CatSrv {
     server: k4_catsrv::server::Server,
     clients: std::collections::HashMap<k4_catsrv::server::ClientId, k4_catsrv::Client>,
+    /// Each client's address, for the log lines that name who keyed (FR-CATSRV-10).
+    addrs: std::collections::HashMap<k4_catsrv::server::ClientId, std::net::SocketAddr>,
     /// When the radio link was found down, while it stays down.
     link_down_since: Option<Instant>,
     /// The radio state as it was when the session went away, answered from during the grace
     /// period (FR-CATSRV-08).
     last_state: Option<k4_protocol::state::RadioState>,
     grace: Duration,
+}
+
+/// A transmit audio source: the mic, or the CAT TX audio device (FR-CATSRV-10).
+trait TxAudio {
+    /// One TX frame of `n` 12 kHz mono samples, if that much is buffered.
+    fn take_frame(&self, n: usize) -> Option<Vec<f32>>;
+    /// Drop everything buffered, so the next frame is fresh audio.
+    fn flush(&self);
+}
+
+impl TxAudio for AudioInput {
+    fn take_frame(&self, n: usize) -> Option<Vec<f32>> {
+        AudioInput::take_frame(self, n)
+    }
+    fn flush(&self) {
+        AudioInput::flush(self)
+    }
+}
+
+/// Tests only: a CAT audio source with nothing to send (CI has no sound device). Installed only by
+/// `WorkerCmd::TestCatAudio`, which the UI never sends.
+struct SilentTxAudio;
+
+impl TxAudio for SilentTxAudio {
+    fn take_frame(&self, _n: usize) -> Option<Vec<f32>> {
+        None
+    }
+    fn flush(&self) {}
+}
+
+/// The session went away: "CAT clients may transmit" went with it (a new session starts without
+/// it), so the CAT audio device closes and the UI shows it off (FR-CATSRV-10).
+fn clear_cat_tx(ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnapshot>>) {
+    ws.keyed_by = None;
+    if !ws.cat_audio_pinned {
+        ws.cat_audio = None;
+    }
+    if let Ok(mut s) = snapshot.lock() {
+        s.cat_may_transmit = false;
+        s.client_tx = false;
+    }
 }
 
 /// Keep the radio state for CAT clients before the session goes away (FR-CATSRV-08): they are
@@ -588,6 +650,9 @@ fn service_catsrv(ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnapshot>>) {
         catsrv,
         session,
         diag,
+        cat_audio,
+        keyed_by,
+        tx_refusals,
         ..
     } = ws;
     let Some(cs) = catsrv.as_mut() else {
@@ -622,6 +687,7 @@ fn service_catsrv(ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnapshot>>) {
                     );
                 } else {
                     cs.clients.insert(id, k4_catsrv::Client::new());
+                    cs.addrs.insert(id, from);
                     diag.log(
                         Level::Info,
                         "catsrv",
@@ -630,8 +696,26 @@ fn service_catsrv(ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnapshot>>) {
                 }
             }
             Event::Disconnected(id) => {
+                let who = cs.addrs.remove(&id);
                 if cs.clients.remove(&id).is_some() {
                     diag.log(Level::Info, "catsrv", "CAT client disconnected");
+                }
+                // A client that keyed and left must not leave the transmitter on (FR-CATSRV-10).
+                // If the operator took the transmit over, the claim is gone and nothing ends.
+                if *keyed_by == Some(id) {
+                    *keyed_by = None;
+                    if let Some(s) = session.as_mut() {
+                        if s.end_client_tx().unwrap_or(false) {
+                            diag.log(
+                                Level::Warn,
+                                "catsrv",
+                                &format!(
+                                    "transmit ended: the CAT client that keyed ({}) disconnected",
+                                    who.map_or_else(|| "?".into(), |a| a.to_string())
+                                ),
+                            );
+                        }
+                    }
                 }
             }
             Event::Line(id, line) => {
@@ -651,7 +735,9 @@ fn service_catsrv(ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnapshot>>) {
                         rvd: state.fw_rvd.as_deref(),
                         id_text: state.id_text.as_deref(),
                         link_up,
-                        tx_fallback: session.as_ref().is_some_and(|s| s.is_transmitting()),
+                        on_air: session
+                            .as_ref()
+                            .is_some_and(|s| s.is_transmitting() || s.is_tuning() || s.is_raw_tx()),
                     };
                     k4_catsrv::handle(client, &line, &cache)
                 };
@@ -675,7 +761,60 @@ fn service_catsrv(ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnapshot>>) {
                                 let _ = s.send(&cmd);
                             }
                         }
+                        Action::KeyRequest => {
+                            let who = cs
+                                .addrs
+                                .get(&id)
+                                .map_or_else(|| "?".into(), |a| a.to_string());
+                            let mut refuse = |why: &str| {
+                                *tx_refusals += 1;
+                                diag.log(
+                                    Level::Warn,
+                                    "catsrv",
+                                    &format!("TX from CAT client {who} refused: {why}"),
+                                );
+                            };
+                            // The CAT audio device, or nothing: a client's transmit never falls
+                            // back to the operator's mic (FR-CATSRV-10).
+                            if cat_audio.is_none() {
+                                refuse("no CAT TX audio device is open");
+                            } else if let Some(s) = session.as_mut() {
+                                match s.begin_tx_for_client() {
+                                    Ok(k4_session::ClientKey::Keyed) => {
+                                        *keyed_by = Some(id);
+                                        diag.log(
+                                            Level::Info,
+                                            "catsrv",
+                                            &format!("transmit keyed by CAT client {who}"),
+                                        );
+                                    }
+                                    Ok(k4_session::ClientKey::OperatorHolds) => diag.log(
+                                        Level::Info,
+                                        "catsrv",
+                                        &format!(
+                                            "TX from CAT client {who} ignored: the operator is transmitting"
+                                        ),
+                                    ),
+                                    Ok(k4_session::ClientKey::RefusedOptIn) => {
+                                        refuse("CAT clients may not transmit (Settings → CAT SERVER)")
+                                    }
+                                    Ok(k4_session::ClientKey::RefusedDisarmed) => {
+                                        refuse("transmit is not armed")
+                                    }
+                                    Ok(k4_session::ClientKey::RefusedLinkDown) => {
+                                        refuse("the radio link is down")
+                                    }
+                                    Err(e) => refuse(&format!("send failed: {e}")),
+                                }
+                            }
+                        }
                         Action::Unkey => {
+                            let who = cs
+                                .addrs
+                                .get(&id)
+                                .map_or_else(|| "?".into(), |a| a.to_string());
+                            diag.log(Level::Info, "catsrv", &format!("RX from CAT client {who}"));
+                            *keyed_by = None;
                             // A stop is sent unconditionally: through `end_tx` when the app keyed
                             // (so its own transmit state and mic path follow), and as a plain
                             // `RX;` otherwise — the radio may be transmitting by other means.
@@ -754,6 +893,19 @@ struct WorkerState {
     dtmf: PacedQueue,
     /// The CAT server for third-party software, when it is on (FR-CATSRV).
     catsrv: Option<CatSrv>,
+    /// The CAT TX audio source (FR-CATSRV-10): open while "CAT clients may transmit" is on.
+    cat_audio: Option<Box<dyn TxAudio>>,
+    /// The chosen CAT TX audio device.
+    cat_audio_device: Option<String>,
+    /// A test stand-in is installed: keep it across opt-in changes.
+    cat_audio_pinned: bool,
+    /// How long a CAT client may hold the transmitter; applied to each new session.
+    client_tx_limit: Duration,
+    /// Which client keyed, while a transmit is client-held.
+    keyed_by: Option<k4_catsrv::server::ClientId>,
+    /// Which source the current transmit streams (`Some(true)` = CAT, `Some(false)` = mic,
+    /// `None` = not transmitting) — a change flushes the new source's buffer.
+    tx_source: Option<bool>,
     session: Option<Link>,
     rx_audio: JitterBuffer,
     rx_decoder: Option<OpusDecoder>,
@@ -840,6 +992,12 @@ impl WorkerState {
             kpod: kpod::KpodState::new(),
             dtmf: PacedQueue::new(DTMF_GAP),
             catsrv: None,
+            cat_audio: None,
+            cat_audio_device: None,
+            cat_audio_pinned: false,
+            client_tx_limit: k4_session::CLIENT_TX_LIMIT_DEFAULT,
+            keyed_by: None,
+            tx_source: None,
             session: None,
             rx_audio: JitterBuffer::new(8),
             rx_decoder: None,
@@ -1056,6 +1214,8 @@ fn publish(snapshot: &Arc<Mutex<UiSnapshot>>, ws: &mut WorkerState) {
         }
         s.transmitting = session.is_transmitting();
         s.tx_armed = session.is_tx_armed();
+        s.cat_may_transmit = session.cat_may_transmit();
+        s.client_tx = session.is_client_tx();
         s.tuning = session.is_tuning() || session.is_raw_tx();
         s.tx_refusals = ws.tx_refusals;
         s.digital_audio = st.digital_audio;
@@ -1192,6 +1352,7 @@ fn poll_pending(ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnapshot>>) {
         Ok(Ok((link, session_cfg))) => {
             ws.pending_connect = None;
             let mut s = Session::new(link, SystemClock, session_cfg);
+            s.set_client_tx_limit(ws.client_tx_limit);
             let _ = s.seed();
             ws.reset();
             ws.session = Some(s);
@@ -1520,9 +1681,24 @@ fn service(ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnapshot>>) {
         }
     }
 
-    // TX audio: while keyed, pull mic frames → Opus encode → send (FR-AUD-TX-01).
+    // TX audio: while keyed, pull frames → Opus encode → send (FR-AUD-TX-01). A client-held
+    // transmit streams the CAT audio device, never the mic (FR-CATSRV-10); when the source is
+    // first used for a transmit, or changes, its buffer is flushed so no audio from before the
+    // key goes out.
     if session.is_transmitting() {
-        if let (Some(input), Some(encoder)) = (ws.audio_in.as_ref(), ws.tx_encoder.as_mut()) {
+        let client = session.is_client_tx();
+        let source: Option<&dyn TxAudio> = if client {
+            ws.cat_audio.as_deref()
+        } else {
+            ws.audio_in.as_ref().map(|a| a as &dyn TxAudio)
+        };
+        if ws.tx_source != Some(client) {
+            if let Some(src) = source {
+                src.flush();
+            }
+            ws.tx_source = Some(client);
+        }
+        if let (Some(input), Some(encoder)) = (source, ws.tx_encoder.as_mut()) {
             while let Some(frame) = input.take_frame(TX_FRAME_SAMPLES) {
                 if let Ok(opus) = encoder.encode_float(&frame) {
                     let payload = AudioPacket::encode(
@@ -1536,11 +1712,24 @@ fn service(ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnapshot>>) {
                 }
             }
         }
+    } else {
+        ws.tx_source = None;
     }
 
-    if let Ok(SessionEvent::LinkLost) = session.tick() {
-        ws.diag.log(Level::Warn, "net", "link lost");
-        set_status(snapshot, "link lost");
+    match session.tick() {
+        Ok(SessionEvent::LinkLost) => {
+            ws.diag.log(Level::Warn, "net", "link lost");
+            set_status(snapshot, "link lost");
+        }
+        Ok(SessionEvent::ClientTxExpired) => {
+            ws.keyed_by = None;
+            ws.diag.log(
+                Level::Warn,
+                "catsrv",
+                "a CAT client's transmit reached its time limit and was ended",
+            );
+        }
+        _ => {}
     }
 
     let connected = session.is_connected();
@@ -1566,6 +1755,7 @@ fn service(ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnapshot>>) {
     if !connected {
         keep_catsrv_cache(ws);
         ws.session = None;
+        clear_cat_tx(ws, snapshot);
         // Auto-reconnect unless the user explicitly disconnected (params cleared).
         if ws.connect_params.is_some() {
             let delay = ws.backoff.next_delay();
@@ -1606,6 +1796,7 @@ fn handle_cmd(cmd: WorkerCmd, ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnaps
             keep_catsrv_cache(ws);
             ws.session = None;
             ws.dtmf.clear();
+            clear_cat_tx(ws, snapshot);
             ws.pending_connect = None;
             ws.connect_params = None; // stop auto-reconnect / retry
             ws.next_attempt = None;
@@ -1752,6 +1943,85 @@ fn handle_cmd(cmd: WorkerCmd, ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnaps
                 let _ = s.send(k4_protocol::cat::rx_eq_flat());
             }
         }
+        WorkerCmd::SetCatMayTransmit(on) => {
+            let error = if !on {
+                if let Some(s) = ws.session.as_mut() {
+                    s.set_cat_may_transmit(false);
+                }
+                if !ws.cat_audio_pinned {
+                    ws.cat_audio = None;
+                }
+                ws.diag
+                    .log(Level::Info, "catsrv", "CAT clients may no longer transmit");
+                None
+            } else if ws.session.is_none() {
+                Some("not connected to the radio".to_string())
+            } else {
+                // The CAT audio device first: without it a client's key would have nothing to
+                // send but must never fall back to the mic (FR-CATSRV-10).
+                if ws.cat_audio.is_none() {
+                    match ws.cat_audio_device.as_deref() {
+                        None => {}
+                        Some(name) => match AudioInput::with_device(Some(name)) {
+                            Ok(inp) => ws.cat_audio = Some(Box::new(inp)),
+                            Err(e) => ws.diag.log(
+                                Level::Warn,
+                                "catsrv",
+                                &format!("cannot open the CAT audio device {name:?}: {e}"),
+                            ),
+                        },
+                    }
+                }
+                if ws.cat_audio.is_none() {
+                    Some(match &ws.cat_audio_device {
+                        None => "choose a CAT TX audio device first".to_string(),
+                        Some(n) => format!("the CAT audio device {n:?} could not be opened"),
+                    })
+                } else {
+                    if let Some(s) = ws.session.as_mut() {
+                        s.set_cat_may_transmit(true);
+                    }
+                    ws.diag.log(
+                        Level::Info,
+                        "catsrv",
+                        "CAT clients may transmit (while TX is armed)",
+                    );
+                    None
+                }
+            };
+            if let Some(e) = &error {
+                ws.diag.log(
+                    Level::Warn,
+                    "catsrv",
+                    &format!("CAT clients may transmit: not turned on — {e}"),
+                );
+            }
+            if let Ok(mut s) = snapshot.lock() {
+                s.cat_tx_error = error;
+                s.cat_may_transmit = ws.session.as_ref().is_some_and(|x| x.cat_may_transmit());
+            }
+        }
+        WorkerCmd::SetCatTxLimit(limit) => {
+            ws.client_tx_limit = limit;
+            if let Some(s) = ws.session.as_mut() {
+                s.set_client_tx_limit(limit);
+            }
+        }
+        WorkerCmd::SetCatAudioDevice(name) => {
+            if name != ws.cat_audio_device {
+                ws.cat_audio_device = name;
+                // A different device: drop the open one; the opt-in must be turned on again.
+                if !ws.cat_audio_pinned && ws.cat_audio.take().is_some() {
+                    if let Some(s) = ws.session.as_mut() {
+                        s.set_cat_may_transmit(false);
+                    }
+                }
+            }
+        }
+        WorkerCmd::TestCatAudio => {
+            ws.cat_audio = Some(Box::new(SilentTxAudio));
+            ws.cat_audio_pinned = true;
+        }
         WorkerCmd::CatServer(cfg) => {
             // Dropping the old server closes its listener and clients before a new one binds.
             ws.catsrv = None;
@@ -1773,6 +2043,7 @@ fn handle_cmd(cmd: WorkerCmd, ws: &mut WorkerState, snapshot: &Arc<Mutex<UiSnaps
                             ws.catsrv = Some(CatSrv {
                                 server,
                                 clients: std::collections::HashMap::new(),
+                                addrs: std::collections::HashMap::new(),
                                 link_down_since: None,
                                 last_state: None,
                                 grace: cfg.grace,
@@ -2576,6 +2847,168 @@ mod catsrv_e2e_tests {
                 &code[at.saturating_sub(200)..at + 20]
             );
         }
+    }
+
+    /// FR-CATSRV-10: the CAT server keys only through the session's client gate — never the
+    /// operator's `begin_tx`, which has no opt-in check. Structural, over the code above.
+    /// trace: FR-CATSRV-10
+    #[test]
+    fn fr_catsrv_10_the_server_keys_only_through_the_client_gate() {
+        let whole = include_str!("worker.rs");
+        let code = &whole[..whole
+            .find(concat!("mod catsrv_e2e", "_tests {"))
+            .expect("this module")];
+        let start = code.find("fn service_catsrv(").expect("service_catsrv");
+        let end = start + code[start..].find("\n}\n").expect("its end");
+        let body = &code[start..end];
+        assert!(
+            body.contains("begin_tx_for_client()"),
+            "the client gate is not used"
+        );
+        assert!(
+            !body
+                .replace("begin_tx_for_client", "")
+                .contains("begin_tx("),
+            "service_catsrv calls the operator's begin_tx"
+        );
+        // The TX audio loop streams the CAT device for a client-held transmit, never the mic, and
+        // flushes a source when it is first used for a transmit (no audio from before the key).
+        let squash = |t: &str| t.split_whitespace().collect::<String>();
+        let all = squash(code);
+        for (what, needle) in [
+            (
+                "a client-held transmit uses the CAT source",
+                "let source: Option<&dyn TxAudio> = if client { ws.cat_audio.as_deref() } else { ws.audio_in.as_ref().map(|a| a as &dyn TxAudio) };",
+            ),
+            (
+                "a new source is flushed",
+                "if ws.tx_source != Some(client) { if let Some(src) = source { src.flush(); } ws.tx_source = Some(client); }",
+            ),
+            ("not transmitting resets the source", "} else { ws.tx_source = None; }"),
+        ] {
+            assert!(all.contains(&squash(needle)), "TX audio: {what}");
+        }
+    }
+
+    /// FR-CATSRV-10 end to end: PTT from a CAT client, through the real worker, with `k4-sim` as
+    /// the radio and a stand-in CAT audio source (CI has no sound device).
+    /// trace: FR-CATSRV-10
+    #[test]
+    fn fr_catsrv_10_client_ptt_through_the_worker() {
+        let sim = SimServer::start("pw", 14_074_000).expect("simulator");
+        let snapshot: Arc<Mutex<UiSnapshot>> = Arc::default();
+        let (tx, rx) = mpsc::channel();
+        spawn(rx, Arc::clone(&snapshot), PanHandle::default());
+        tx.send(WorkerCmd::Connect(ConnectTarget::Tcp {
+            host: "127.0.0.1".into(),
+            port: sim.addr().port(),
+            password: "pw".into(),
+            use_tls: false,
+        }))
+        .unwrap();
+        wait("connected", 10, || snapshot.lock().unwrap().connected);
+        tx.send(WorkerCmd::CatServer(Some(CatServerConfig {
+            bind: "127.0.0.1".into(),
+            port: 0,
+            grace: Duration::from_secs(30),
+        })))
+        .unwrap();
+        wait("listening", 5, || {
+            snapshot.lock().unwrap().catsrv_addr.is_some()
+        });
+        let addr = snapshot.lock().unwrap().catsrv_addr.unwrap();
+        let tx_count = || sim.received().iter().filter(|c| *c == "TX;").count();
+        let rx_count = || sim.received().iter().filter(|c| *c == "RX;").count();
+        let refusals = || snapshot.lock().unwrap().tx_refusals;
+
+        // 1. Opt-in off (the default): a client's TX puts nothing on the wire and flashes ARM.
+        tx.send(WorkerCmd::ArmTx(true)).unwrap();
+        wait("armed", 5, || snapshot.lock().unwrap().tx_armed);
+        let mut a = TcpStream::connect(addr).expect("client A");
+        wait("client counted", 5, || {
+            snapshot.lock().unwrap().catsrv_clients == 1
+        });
+        let r0 = refusals();
+        a.write_all(b"TX;").unwrap();
+        wait("the refusal flashes ARM", 5, || refusals() > r0);
+        assert_eq!(tx_count(), 0, "a client keyed with the opt-in off");
+
+        // 2. The opt-in without a CAT audio device is refused, with a reason.
+        tx.send(WorkerCmd::SetCatMayTransmit(true)).unwrap();
+        wait("the refusal is reported", 5, || {
+            snapshot.lock().unwrap().cat_tx_error.is_some()
+        });
+        assert!(!snapshot.lock().unwrap().cat_may_transmit);
+
+        // 3. With a CAT source and the opt-in, armed: the client keys, TQ says so, and its
+        //    leaving unkeys.
+        tx.send(WorkerCmd::TestCatAudio).unwrap();
+        tx.send(WorkerCmd::SetCatMayTransmit(true)).unwrap();
+        wait("opt-in on", 5, || snapshot.lock().unwrap().cat_may_transmit);
+        a.write_all(b"TX;").unwrap();
+        wait("TX reached the radio", 5, || tx_count() == 1);
+        wait("client-held", 5, || snapshot.lock().unwrap().client_tx);
+        a.write_all(b"TQ;").unwrap();
+        assert_eq!(
+            read_until(&mut a, "TQ").map(|s| s.contains("TQ1;")),
+            Some(true)
+        );
+        let rx0 = rx_count();
+        drop(a);
+        wait("the keyed client's leaving unkeys", 5, || rx_count() > rx0);
+        wait("not client-held", 5, || !snapshot.lock().unwrap().client_tx);
+
+        // 4. Disarming clears the opt-in (one-shot).
+        tx.send(WorkerCmd::ArmTx(false)).unwrap();
+        wait("disarm clears the opt-in", 5, || {
+            !snapshot.lock().unwrap().cat_may_transmit
+        });
+
+        // 5. Operator wins: a client keys, the operator keys over it, the client leaves — the
+        //    operator's transmit is not ended.
+        tx.send(WorkerCmd::ArmTx(true)).unwrap();
+        wait("armed again", 5, || snapshot.lock().unwrap().tx_armed);
+        tx.send(WorkerCmd::SetCatMayTransmit(true)).unwrap();
+        wait("opt-in on again", 5, || {
+            snapshot.lock().unwrap().cat_may_transmit
+        });
+        let mut b = TcpStream::connect(addr).expect("client B");
+        wait("client B counted", 5, || {
+            snapshot.lock().unwrap().catsrv_clients == 1
+        });
+        b.write_all(b"TX;").unwrap();
+        wait("client B keyed", 5, || snapshot.lock().unwrap().client_tx);
+        tx.send(WorkerCmd::Key(true)).unwrap();
+        wait("the operator took over", 5, || {
+            let s = snapshot.lock().unwrap();
+            s.transmitting && !s.client_tx
+        });
+        let rx1 = rx_count();
+        drop(b);
+        wait("client B gone", 5, || {
+            snapshot.lock().unwrap().catsrv_clients == 0
+        });
+        std::thread::sleep(Duration::from_millis(300));
+        assert_eq!(
+            rx_count(),
+            rx1,
+            "client B's leaving ended the operator's transmit"
+        );
+        assert!(snapshot.lock().unwrap().transmitting);
+        tx.send(WorkerCmd::Key(false)).unwrap();
+        wait("the operator unkeys", 5, || rx_count() > rx1);
+
+        // 6. Losing the session takes the opt-in with it, and the UI shows it off.
+        tx.send(WorkerCmd::SetCatMayTransmit(true)).unwrap();
+        wait("opt-in on for the last time", 5, || {
+            snapshot.lock().unwrap().cat_may_transmit
+        });
+        tx.send(WorkerCmd::Disconnect).unwrap();
+        wait("disconnected", 5, || !snapshot.lock().unwrap().connected);
+        assert!(
+            !snapshot.lock().unwrap().cat_may_transmit,
+            "the UI still shows CAT transmit on after the session went away"
+        );
     }
 
     /// trace: FR-CATSRV-01, FR-CATSRV-05, FR-CATSRV-06, FR-CATSRV-07, FR-CATSRV-08

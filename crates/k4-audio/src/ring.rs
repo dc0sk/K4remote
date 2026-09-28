@@ -42,6 +42,11 @@ impl SampleRing {
     pub fn len(&self) -> usize {
         self.buf.len()
     }
+    /// Drop every buffered sample.
+    pub fn clear(&mut self) {
+        self.buf.clear();
+    }
+
     /// Whether the buffer is empty.
     pub fn is_empty(&self) -> bool {
         self.buf.is_empty()

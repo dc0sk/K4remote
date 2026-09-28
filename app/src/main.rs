@@ -171,6 +171,9 @@ fn refresh_outlasts_age_limit(refresh_secs: u64, max_age_secs: u64) -> bool {
     refresh_secs >= max_age_secs
 }
 
+/// The CAT audio picker's "no device" entry (FR-CATSRV-10): client keying is refused with it.
+const CAT_AUDIO_NONE: &str = "(none)";
+
 /// The CAT server's status line (FR-CATSRV-01) and whether it is a problem: off, listening with
 /// how many clients, or why it could not start.
 fn catsrv_status_text(
@@ -263,6 +266,9 @@ struct App {
     catsrv_port: String,
     /// What the worker was last told, so only a change is sent.
     catsrv_sent: Option<worker::CatServerConfig>,
+    /// The client transmit limit as typed, minutes (FR-CATSRV-10), and what was last sent.
+    catsrv_tx_limit: String,
+    catsrv_tx_limit_sent: Option<u8>,
     spot_window_sent: Option<(u64, u64)>,
     /// Draw the waterfall on the GPU (false = the CPU rasteriser, when there is no wgpu adapter).
     gpu_waterfall: bool,
@@ -867,6 +873,10 @@ enum Message {
     ToggleCatServer,
     CatServerBind(String),
     CatServerPort(String),
+    /// "CAT clients may transmit" (FR-CATSRV-10): a request to the worker, which owns it.
+    ToggleCatMayTransmit,
+    CatAudioDevice(String),
+    CatTxLimit(String),
     /// Edit a stored DTMF sequence's name / digits, or play it (FR-FM-03).
     DtmfSeqName(usize, String),
     DtmfSeqDigits(usize, String),
@@ -1134,6 +1144,9 @@ impl App {
         // Seed the worker with the restored audio settings before any connect.
         let _ = cmd_tx.send(WorkerCmd::SetOutputDevice(selected_output.clone()));
         let _ = cmd_tx.send(WorkerCmd::SetInputDevice(selected_input.clone()));
+        let _ = cmd_tx.send(WorkerCmd::SetCatAudioDevice(
+            prefs.cat_server.tx_audio_device.clone(),
+        ));
         let _ = cmd_tx.send(WorkerCmd::SetVolume(k4_audio::gain_from_level(volume)));
         let _ = cmd_tx.send(WorkerCmd::SetRxVolume(
             false,
@@ -1248,6 +1261,8 @@ impl App {
             catsrv_port: prefs.cat_server.port.to_string(),
             cat_server: prefs.cat_server.clone(),
             catsrv_sent: None,
+            catsrv_tx_limit: prefs.cat_server.tx_limit_min().to_string(),
+            catsrv_tx_limit_sent: None,
             spot_window_sent: None,
             gpu_waterfall: waterfall_gpu::gpu_available(),
             ui: initial,
@@ -1819,6 +1834,8 @@ impl App {
                 .ok()
                 .filter(|p| *p > 0)
                 .unwrap_or(k4_config::CATSRV_DEFAULT_PORT),
+            tx_limit_min: self.cat_server.tx_limit_min(),
+            tx_audio_device: self.cat_server.tx_audio_device.clone(),
         }
     }
 
@@ -1834,6 +1851,13 @@ impl App {
         if want != self.catsrv_sent {
             self.send(WorkerCmd::CatServer(want.clone()));
             self.catsrv_sent = want;
+        }
+        let limit = self.cat_server.tx_limit_min();
+        if Some(limit) != self.catsrv_tx_limit_sent {
+            self.send(WorkerCmd::SetCatTxLimit(std::time::Duration::from_secs(
+                u64::from(limit) * 60,
+            )));
+            self.catsrv_tx_limit_sent = Some(limit);
         }
     }
 
@@ -1885,6 +1909,65 @@ impl App {
                 )
                 .size(12)
                 .color(caution),
+            );
+        }
+        // PTT from clients (FR-CATSRV-10).
+        let dev_sel = prefs
+            .tx_audio_device
+            .clone()
+            .unwrap_or_else(|| CAT_AUDIO_NONE.to_string());
+        let dev_opts: Vec<String> = std::iter::once(CAT_AUDIO_NONE.to_string())
+            .chain(self.audio_inputs.iter().cloned())
+            .collect();
+        col = col
+            .push(Text::new("PTT FROM LOGGING SOFTWARE").size(11).color(dim))
+            .push(
+                Text::new(
+                    "Lets the software key the radio with CAT PTT (WSJT-X, JTDX, fldigi…). PTT \
+                     only — CW text, tune, message play and switch codes stay refused. It needs \
+                     ARM TX, and it switches off by itself when you disarm, on an emergency stop \
+                     or when the radio link drops. Its transmit audio comes from the device below \
+                     (e.g. the virtual audio cable the software plays into) — never your mic.",
+                )
+                .size(11)
+                .color(dim),
+            )
+            .push(
+                Row::new()
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                    .push(Text::new("CAT audio").size(12).width(Length::Fixed(72.0)))
+                    .push(
+                        pick_list(dev_opts, Some(dev_sel), Message::CatAudioDevice)
+                            .text_size(12)
+                            .width(Length::Fixed(320.0)),
+                    ),
+            )
+            .push(Self::spot_field(
+                "Max TX (min)",
+                "3",
+                &self.catsrv_tx_limit,
+                60.0,
+                Message::CatTxLimit,
+            ))
+            .push(small_btn_pair(
+                self.ui.cat_may_transmit,
+                "CAT clients may transmit: ON",
+                "CAT clients may transmit: OFF",
+                Message::ToggleCatMayTransmit,
+            ));
+        if let Some(e) = self.ui.cat_tx_error.as_deref() {
+            col = col.push(
+                Text::new(format!("Not turned on: {e}."))
+                    .size(12)
+                    .color(caution),
+            );
+        }
+        if self.ui.client_tx {
+            col = col.push(
+                Text::new("A CAT client is transmitting now.")
+                    .size(12)
+                    .color(caution),
             );
         }
         let status = catsrv_status_text(
@@ -2690,6 +2773,22 @@ impl App {
             Message::KpodButtonsReset => {
                 self.kpod_buttons = k4_config::default_kpod_buttons();
                 self.push_kpod_buttons();
+            }
+            Message::ToggleCatMayTransmit => {
+                // The session holds the flag; the UI only asks, and shows what the snapshot says.
+                self.send(WorkerCmd::SetCatMayTransmit(!self.ui.cat_may_transmit));
+            }
+            Message::CatAudioDevice(v) => {
+                let dev = (v != CAT_AUDIO_NONE).then_some(v);
+                self.cat_server.tx_audio_device = dev.clone();
+                self.send(WorkerCmd::SetCatAudioDevice(dev));
+                self.save_config();
+            }
+            Message::CatTxLimit(v) => {
+                self.catsrv_tx_limit = v.chars().filter(char::is_ascii_digit).take(2).collect();
+                if let Ok(m) = self.catsrv_tx_limit.parse::<u8>() {
+                    self.cat_server.tx_limit_min = m;
+                }
             }
             Message::ToggleCatServer => {
                 self.cat_server.enabled = !self.cat_server.enabled;
@@ -12194,5 +12293,10 @@ mod catsrv_ui_tests {
                 "CAT server settings: {what}"
             );
         }
+        // The test-only stand-in CAT audio source is never installed from the UI (FR-CATSRV-10).
+        assert!(
+            !code.contains("WorkerCmd::TestCatAudio"),
+            "the UI installs the test CAT audio source"
+        );
     }
 }
