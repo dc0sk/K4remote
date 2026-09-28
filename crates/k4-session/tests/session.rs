@@ -123,9 +123,39 @@ fn build() -> (MockLink, Rc<FakeClock>, Session<MockLink, SharedClock>) {
 fn fr_cat_07_seed_sends_get_burst() {
     let (link, _clock, mut s) = build();
     s.seed().unwrap();
-    let expected: Vec<String> = connect_state_seed().iter().map(|s| s.to_string()).collect();
+    let mut expected: Vec<String> = connect_state_seed().iter().map(|s| s.to_string()).collect();
+    // FR-TX-SAFE-02: the CW fail-safe is set first, before the read-back burst.
+    expected.insert(0, "KZF03;".to_string());
     assert_eq!(link.sent(), expected);
-    assert_eq!(link.sent().first().map(String::as_str), Some("IF;"));
+    assert_eq!(link.sent().get(1).map(String::as_str), Some("IF;"));
+}
+
+/// FR-TX-SAFE-02: the radio-side CW fail-safe (`KZF`) is set on connect — 3 minutes, the radio's
+/// own default — so a stalled `KZ` stream cannot hold the key down indefinitely. (Until this, the
+/// requirement said so but nothing sent it.)
+/// trace: FR-TX-SAFE-02
+#[test]
+fn fr_tx_safe_02_the_cw_failsafe_is_set_on_connect() {
+    let (link, _clock, mut s) = build();
+    s.seed().unwrap();
+    assert_eq!(link.sent().first().map(String::as_str), Some("KZF03;"));
+    assert_eq!(k4_session::CW_FAILSAFE_MINUTES, 3);
+}
+
+/// FR-TX-SAFE-03/05: a CW message stop (`KY @`) passes with the arm off — a stop is never gated —
+/// and, armed, it clears the on-air belief instead of setting it.
+/// trace: FR-TX-SAFE-03, FR-TX-SAFE-05
+#[test]
+fn fr_tx_safe_05_a_cw_stop_passes_disarmed_and_clears_on_air() {
+    let (link, _clock, mut s) = build();
+    s.send("KY @;").expect("a stop passes with the arm off");
+    assert!(link.sent().iter().any(|c| c == "KY @;"));
+    assert!(!s.is_raw_tx());
+    s.arm_tx();
+    s.send("KY CQ;").unwrap();
+    assert!(s.is_raw_tx(), "CW text puts the radio on air");
+    s.send("KY @;").unwrap();
+    assert!(!s.is_raw_tx(), "the stop clears the on-air belief");
 }
 
 /// A hard I/O error on the link while transmitting reaches the safe state

@@ -31,6 +31,13 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
 
 ### Fixed
 
+- **A CW stop could be refused.** Stopping a CW message (`KY @`, and `KY |`
+  for FSK/PSK) was treated as a transmit command: with TX disarmed it was
+  refused, and with TX armed it marked the radio as on air. It is now a stop,
+  which always goes through.
+- **The radio-side CW fail-safe was never set.** The app now sets the K4's key
+  fail-safe (`KZF`, 3 minutes — the radio's default) when it connects, so a
+  stalled CW stream cannot hold the key down.
 - **The RF power meter read QRP power ten times too high.** In the QRP range
   the K4 reports power in tenths of a watt, but the meter showed the number as
   watts — 5.0 W read as "50 W". It now follows the power range: watts in QRO,

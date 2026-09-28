@@ -16,6 +16,10 @@ use k4_protocol::cat::{self, decode_cat_text, TuneAction};
 use k4_protocol::cw::{encode_kz, encode_kzf, encode_kzl, KeyElement};
 use k4_protocol::frame::PayloadType;
 use k4_protocol::state::{connect_state_seed, RadioState};
+
+/// The radio-side CW fail-safe timeout set on connect (`KZF`, FR-TX-SAFE-02): 3 minutes, the
+/// radio's own default. Not configurable yet.
+pub const CW_FAILSAFE_MINUTES: u8 = 3;
 use k4_transport::CatLink;
 
 /// Bounded exponential backoff for reconnect scheduling (FR-SES-RECONNECT).
@@ -175,6 +179,9 @@ impl<L: CatLink, C: Clock> Session<L, C> {
 
     /// Issue the connect-time GET burst to seed [`RadioState`] (FR-CAT-07).
     pub fn seed(&mut self) -> io::Result<()> {
+        // The radio-side CW fail-safe first (FR-TX-SAFE-02), so a stalled `KZ` stream is bounded
+        // from the moment the session exists.
+        self.set_cw_failsafe(CW_FAILSAFE_MINUTES)?;
         for cmd in connect_state_seed() {
             self.link.send_cat(cmd)?;
         }
