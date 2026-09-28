@@ -6,7 +6,8 @@
 //!     dangling trace fails the build.
 //!   * R3 (hard error): every **Must/Should** requirement whose verification
 //!     method includes **Test** must have at least one trace **in a test
-//!     context** (a `tests/` file or a `#[cfg(test)]` module) — unless it is
+//!     context** (a `tests/` file, or the item a real test-cfg attribute is attached to — see
+//!     `regions`) — unless it is
 //!     listed, with a reason, in `docs/test/r3-waivers.md`. Source-comment
 //!     `trace:` annotations document intent but do NOT satisfy R3 on their own.
 //!   * Duplicate declared IDs fail the build (SRS hygiene).
@@ -14,6 +15,8 @@
 //! A coverage report is written to `docs/test/coverage.generated.md`.
 //!
 //! Run with `cargo run -p xtask` (alias: `cargo xtask`).
+
+mod regions;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -103,8 +106,8 @@ fn declared_requirements(root: &Path) -> (BTreeMap<String, Req>, BTreeSet<String
 }
 
 /// Requirement IDs referenced via `trace:` annotations, split by context: every
-/// trace, and only those in a test context (a `tests/` file or after a
-/// `#[cfg(test)]` marker in the file).
+/// trace, and only those in a test context (a `tests/` file, or inside the item a real
+/// test-cfg attribute is attached to — see `regions`).
 fn traced_requirements(root: &Path) -> (BTreeSet<String>, BTreeSet<String>) {
     let mut files = Vec::new();
     for sub in ["crates", "app", "xtask"] {
@@ -117,15 +120,17 @@ fn traced_requirements(root: &Path) -> (BTreeSet<String>, BTreeSet<String>) {
             continue;
         };
         let in_tests_dir = file.components().any(|c| c.as_os_str() == "tests");
-        let mut cfg_test_seen = false;
-        for line in text.lines() {
-            if line.contains("#[cfg(test)]") {
-                cfg_test_seen = true;
-            }
+        // Test code is what a real test-cfg attribute is attached to — not everything after the
+        // first mention of one (see `regions`).
+        let regions = regions::test_regions(&text);
+        let mut offset = 0;
+        for line in text.split_inclusive('\n') {
+            let at = offset;
+            offset += line.len();
             let Some(idx) = line.find("trace:") else {
                 continue;
             };
-            let is_test = in_tests_dir || cfg_test_seen;
+            let is_test = in_tests_dir || regions::in_regions(&regions, at + idx);
             let after = &line[idx + "trace:".len()..];
             for raw in after.split([',', ' ', '\t']) {
                 let tok = raw.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '-');
@@ -250,8 +255,8 @@ fn unreachable_encoders(root: &Path, encoders: &[String]) -> Vec<String> {
         .collect()
 }
 
-/// Concatenate non-test Rust sources, skipping the encoder module itself and
-/// anything under a `tests` directory or after a `#[cfg(test)]` marker.
+/// Concatenate non-test Rust sources, skipping the encoder module itself, anything under a
+/// `tests` directory, and each item a real test-cfg attribute is attached to (see `regions`).
 fn collect_sources(dir: &Path, out: &mut String) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
@@ -274,12 +279,8 @@ fn collect_sources(dir: &Path, out: &mut String) {
         let Ok(text) = fs::read_to_string(&path) else {
             continue;
         };
-        // Drop everything from the first `#[cfg(test)]` on.
-        let live = match text.find("#[cfg(test)]") {
-            Some(i) => &text[..i],
-            None => &text[..],
-        };
-        out.push_str(live);
+        // Drop the test code — each test-cfg attribute's own item (see `regions`).
+        out.push_str(&regions::without_tests(&text));
     }
 }
 
@@ -420,4 +421,48 @@ fn write_coverage_report(
         ));
     }
     let _ = fs::write(root.join("docs/test/coverage.generated.md"), out);
+}
+
+#[cfg(test)]
+mod gate_tests {
+    use super::{traced_requirements, unreachable_encoders};
+    use std::fs;
+
+    /// NFR-TEST-01: the gate's two checks use the real test regions. In a scratch workspace, a
+    /// production file quotes the test-cfg attribute in a comment and has a test-only enum variant
+    /// mid-file, then a production `trace:` and a production caller; a test module traces another
+    /// requirement. Only the test module's trace counts as a test (R3), and the production caller
+    /// after the variant keeps its encoder reachable (R5).
+    /// trace: NFR-TEST-01
+    #[test]
+    fn nfr_test_01_the_checks_see_real_test_regions() {
+        let root = std::env::temp_dir().join(format!("xtask-regions-{}", std::process::id()));
+        let src = root.join("crates/demo/src");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(
+            src.join("lib.rs"),
+            "/// Not behind #[cfg(test)] on purpose.\n\
+             pub enum Cmd {\n    A,\n    #[cfg(test)]\n    B,\n}\n\
+             /// trace: FR-PROD-01\n\
+             pub fn live() { rx_eq_flat(); }\n\
+             #[cfg(test)]\nmod tests {\n    /// trace: FR-TEST-01\n    #[test]\n    fn t() {}\n}\n",
+        )
+        .unwrap();
+        let (all, tested) = traced_requirements(&root);
+        let unreached = unreachable_encoders(&root, &["rx_eq_flat".to_string()]);
+        let _ = fs::remove_dir_all(&root);
+        assert!(all.contains("FR-PROD-01") && all.contains("FR-TEST-01"));
+        assert!(
+            tested.contains("FR-TEST-01"),
+            "the test module's trace is a test"
+        );
+        assert!(
+            !tested.contains("FR-PROD-01"),
+            "a production trace counted as a test"
+        );
+        assert!(
+            unreached.is_empty(),
+            "a production caller was hidden: {unreached:?}"
+        );
+    }
 }
