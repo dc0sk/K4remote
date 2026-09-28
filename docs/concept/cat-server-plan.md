@@ -278,6 +278,34 @@ refused), never the operator's mic; the opt-in is **one-shot** — disarm or eme
 Requirements: a new row **`FR-CATSRV-10` (client PTT)** replaces the "not in this phase" part of
 `FR-CATSRV-07`; `FR-TX-SAFE-03/06` acceptance extends to the client path.
 
+### 0.3.2 Re-review of §0.3.1 (2026-09-28) — adopted, overriding §0.3.1 where they differ
+
+- **Operator wins.** A client `TX` while the operator transmits is ignored and logged. When the
+  operator keys while a client holds TX, the transmit becomes the operator's and the client's
+  claim (its `keyed` bit and the time bound) is cleared — so that client's later disconnect or the
+  bound cannot end the operator's transmit.
+- **The time bound lives in the session**, on its injected clock: `tick()` ends a client-held
+  transmit when the limit passes (`SessionEvent::ClientTxExpired`), mock-clock testable and at the
+  seam. It is **the** bound: TCP keepalive is dropped (std has no API, and it never fires for a
+  hung-but-alive program, the likely failure). Whether the K4 unkeys when `PING`s stop is a
+  hardware question.
+- **The opt-in is never persisted** (a saved opt-in would re-enable at start-up — FR-CATSRV-09's
+  "allow-TX … persist" is corrected), and the UI holds no copy: it renders from the worker
+  snapshot, as `tx_armed` is. A new session starts with it off. A toggle sent while disconnected is
+  dropped, and the UI shows off.
+- **Stale audio.** Capture rings buffer about 1 s and drop the oldest; the newly selected source
+  is flushed at every key and switch, so neither pre-key CAT audio nor room audio bursts out. The
+  CAT device is opened when the opt-in is turned on (the operator's moment) and closed when it
+  clears — no per-key open latency.
+- **`TQ` gap, documented:** `TQ0` during the app's own CW (`send_cw` sets no TX flag) and during
+  front-panel transmit.
+- **Exact `TX`:** the core's `KeyRequest` tests the whole command (`TX$` must not match).
+- **Tests required:** a session truth table over opt-in × arm × connected with each conjunct
+  sabotaged; revoke / disarm / e-stop / fail-safe while client-held → `RX;` and the opt-in off;
+  expiry under the mock clock; a keyed client's disconnect → `RX;`; operator takeover then that
+  disconnect → no `RX;`; a worker end-to-end proving a client `TX` without the opt-in puts no
+  `TX;` on the wire; a source scan that `service_catsrv` never calls `begin_tx(`.
+
 ---
 
 ## 1. Summary + recommendation
