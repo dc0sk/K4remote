@@ -14,6 +14,10 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
 
 ### Added
 
+- A build gate (`cargo xtask`, rule R6) for public functions that no production
+  code calls. Today's 29 are listed with a reason each in
+  `docs/test/r6-reachability-baseline.md`; a new one fails the build, and so
+  does an entry that has since been wired up or removed.
 - **CAT server for logging and digital-mode software.** Turn it on under
   Settings → **CAT SERVER** and WSJT-X, JTDX, fldigi, flrig, Log4OM, CQRLOG or
   N1MM Logger+ on the same computer can follow and set the radio's frequency and
