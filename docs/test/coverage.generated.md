@@ -148,8 +148,8 @@ Legend: ✅ test-traced · 🟡 waived (see r3-waivers.md) · ⚪ not test-requi
 | `FR-TX-01` | M | T | ✅ |
 | `FR-TX-02` | S | T | ✅ |
 | `FR-TX-CMP-01` | C | T | ✅ |
-| `FR-TX-CW-01` | M | T | ✅ |
-| `FR-TX-CW-02` | S | T | ✅ |
+| `FR-TX-CW-01` | C | T | ✅ |
+| `FR-TX-CW-02` | C | T | ✅ |
 | `FR-TX-CW-03` | C | T | ⚪ |
 | `FR-TX-DLY-01` | C | T | ✅ |
 | `FR-TX-MON-01` | C | T | ✅ |

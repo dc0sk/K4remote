@@ -395,6 +395,9 @@ impl<L: CatLink, C: Clock> Session<L, C> {
     /// transmit: returns `false` and sends nothing unless armed and connected
     /// (FR-TX-CW-01, FR-TX-SAFE-03). CW is self-timed by the radio (and bounded
     /// by the `KZF` fail-safe), so it does not set the sustained TX flag.
+    ///
+    /// DORMANT(#227): no production caller — there is no paddle input (FR-TX-CW-01 not built).
+    /// Kept compiled, tested and arm-gated so a paddle can be wired to it.
     pub fn send_cw(&mut self, elements: &[KeyElement]) -> io::Result<bool> {
         if !self.tx_armed || !self.connected {
             return Ok(false);
@@ -443,6 +446,9 @@ impl<L: CatLink, C: Clock> Session<L, C> {
     }
 
     /// Configure the radio-side CW key-down initial delay (`KZL`; FR-TX-CW-02).
+    ///
+    /// DORMANT(#227): no production caller — paddle CW is not built. Kept compiled and tested;
+    /// wire it with the paddle input (send `KZL` on connect) or retire it.
     pub fn set_cw_delay(&mut self, ms: u16) -> io::Result<()> {
         self.link.send_cat(&encode_kzl(ms))
     }
