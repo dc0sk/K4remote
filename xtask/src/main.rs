@@ -16,6 +16,7 @@
 //!
 //! Run with `cargo run -p xtask` (alias: `cargo xtask`).
 
+mod reach;
 mod regions;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -292,6 +293,7 @@ fn main() {
     let encoders = cat_encoders(&root);
     let unreached = unreachable_encoders(&root, &encoders);
     let r5_waived = load_named_waivers(&root, "docs/test/r5-unreached-encoders.md");
+    let (r6_new, r6_stale, r6_kept) = reach::check(&root);
     let r5_gaps: Vec<_> = unreached
         .iter()
         .filter(|n| !r5_waived.contains(*n))
@@ -325,6 +327,12 @@ fn main() {
     println!("  R3 gaps (unwaived):          {}", r3_missing.len());
     println!("  CAT encoders (traced):       {}", encoders.len());
     println!("  R5 gaps (uncalled, unwaived):{}", r5_gaps.len());
+    println!(
+        "  R6 unreferenced pub fns:     {} baselined, {} new, {} stale",
+        r6_kept,
+        r6_new.len(),
+        r6_stale.len()
+    );
     for name in &r5_gaps {
         println!("    - {name}");
     }
@@ -375,6 +383,31 @@ fn main() {
         }
         failed = true;
     }
+    if !r6_new.is_empty() {
+        eprintln!(
+            "\nerror (R6): {} public function(s) have no reference in production code — a \
+             capability nothing can reach, however well tested. Wire it up, make it private, \
+             or record why in {}:",
+            r6_new.len(),
+            reach::BASELINE
+        );
+        for key in &r6_new {
+            eprintln!("    ! {key}");
+        }
+        failed = true;
+    }
+    if !r6_stale.is_empty() {
+        eprintln!(
+            "\nerror (R6): {} baseline entr(ies) in {} are no longer unreferenced (now called, \
+             or gone) — remove them so the list keeps shrinking:",
+            r6_stale.len(),
+            reach::BASELINE
+        );
+        for key in &r6_stale {
+            eprintln!("    ! {key}");
+        }
+        failed = true;
+    }
     if !r3_missing.is_empty() {
         eprintln!(
             "\nerror (R3): {} Must/Should+Test requirement(s) lack a test-context trace \
@@ -390,7 +423,9 @@ fn main() {
     if failed {
         std::process::exit(1);
     }
-    println!("\nOK: R3 (Must/Should+Test covered or waived) and R4 (no dangling) satisfied.");
+    println!(
+        "\nOK: R3 (Must/Should+Test covered or waived), R4 (no dangling) and R6 (reachability) satisfied."
+    );
 }
 
 /// Write `docs/test/coverage.generated.md` — the promised coverage report.
