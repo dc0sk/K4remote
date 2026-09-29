@@ -33,7 +33,7 @@ found that day; the reasons were checked against each function's callers.
 
 ## Superseded evidence — acceptance cites code production does not run
 
-- `crates/k4-stream/src/render.rs:hz_to_x` — #229: FR-PAN-06 cites it; production scrolls rows through `column_to_bin`.
+- `crates/k4-stream/src/render.rs:hz_to_x` — #229: FR-PAN-06 and FR-PAN-07 cite it; production scrolls rows through `column_to_bin`.
 - `crates/k4-stream/src/render.rs:row_scroll_px` — #229: FR-PAN-06 cites it; production scrolls rows through `column_to_bin`.
 - `crates/k4-stream/src/render.rs:resample_peak` — #229: FR-PAN-08 cites it; the trace is not decimated through it.
 - `crates/k4-protocol/src/cat_resp.rs:tq` — the CAT server answers `TQ` from what the app knows is on air (`Cache::on_air`), because the radio's reported TX state is stale by construction; delete when convenient.
