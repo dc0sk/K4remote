@@ -39,7 +39,7 @@ Legend: ✅ test-traced · 🟡 waived (see r3-waivers.md) · ⚪ not test-requi
 | `FR-CATSRV-03` | S | T | ✅ |
 | `FR-CATSRV-05` | S | T | ✅ |
 | `FR-CATSRV-06` | S | T | ✅ |
-| `FR-CATSRV-07` | S | S | ✅ |
+| `FR-CATSRV-07` | S | T | ✅ |
 | `FR-CATSRV-08` | S | T | ✅ |
 | `FR-CATSRV-09` | C | T/D | ⚪ |
 | `FR-CATSRV-10` | S | T | ✅ |
@@ -104,7 +104,7 @@ Legend: ✅ test-traced · 🟡 waived (see r3-waivers.md) · ⚪ not test-requi
 | `FR-PAN-09` | S | T/D | ✅ |
 | `FR-PAN-10` | S | T/D | ✅ |
 | `FR-PAN-11` | S | T/D | ✅ |
-| `FR-PAN-12` | S | S | ✅ |
+| `FR-PAN-12` | S | T/D | ✅ |
 | `FR-PAN-13` | S | T/D | ✅ |
 | `FR-PAN-14` | S | T/D | ✅ |
 | `FR-PAN-CTL-01` | S | T | ✅ |

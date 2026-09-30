@@ -71,6 +71,37 @@ impl Req {
     }
 }
 
+/// The cells of one markdown table row, split on `|` but not on an escaped `\|` (which a cell
+/// may contain — `FR-PAN-12`'s `cpu\|gpu`). Splitting on every `|` shifted such a row's columns,
+/// so its priority and verification were read from the wrong cells.
+fn srs_cells(line: &str) -> Vec<String> {
+    let mut cells = vec![String::new()];
+    let mut chars = line.trim().chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' if chars.peek() == Some(&'|') => {
+                cells.last_mut().unwrap().push('|');
+                chars.next();
+            }
+            '|' => cells.push(String::new()),
+            _ => cells.last_mut().unwrap().push(c),
+        }
+    }
+    cells.iter().map(|c| c.trim().to_string()).collect()
+}
+
+/// Each SRS requirement row as `(id, acceptance cell)`, in document order.
+fn srs_acceptance(root: &Path) -> Vec<(String, String)> {
+    let text = fs::read_to_string(root.join("docs/requirements/system-requirements.md"))
+        .unwrap_or_default();
+    text.lines()
+        .filter(|l| l.trim_start().starts_with("| `"))
+        .map(srs_cells)
+        .filter(|c| c.len() >= 7 && is_req_id(c[1].trim_matches('`')))
+        .map(|c| (c[1].trim_matches('`').to_string(), c[6].clone()))
+        .collect()
+}
+
 /// Parse the SRS requirement rows: returns each ID's `Req` plus any IDs that are
 /// declared more than once (a hygiene error).
 fn declared_requirements(root: &Path) -> (BTreeMap<String, Req>, BTreeSet<String>) {
@@ -86,7 +117,8 @@ fn declared_requirements(root: &Path) -> (BTreeMap<String, Req>, BTreeSet<String
             continue;
         }
         // Columns: | `ID` | statement | stakeholder | Pri | Ver | acceptance |
-        let cols: Vec<&str> = trimmed.split('|').map(str::trim).collect();
+        let cells = srs_cells(trimmed);
+        let cols: Vec<&str> = cells.iter().map(String::as_str).collect();
         if cols.len() < 6 {
             continue;
         }
@@ -294,6 +326,7 @@ fn main() {
     let unreached = unreachable_encoders(&root, &encoders);
     let r5_waived = load_named_waivers(&root, "docs/test/r5-unreached-encoders.md");
     let (r6_new, r6_stale, r6_kept) = reach::check(&root);
+    let (r7_cited, r7_stale, r7_kept) = reach::check_acceptance(&root, &srs_acceptance(&root));
     let r5_gaps: Vec<_> = unreached
         .iter()
         .filter(|n| !r5_waived.contains(*n))
@@ -332,6 +365,12 @@ fn main() {
         r6_kept,
         r6_new.len(),
         r6_stale.len()
+    );
+    println!(
+        "  R7 acceptance citing them:   {} exempted, {} new, {} stale",
+        r7_kept,
+        r7_cited.len(),
+        r7_stale.len()
     );
     for name in &r5_gaps {
         println!("    - {name}");
@@ -383,6 +422,31 @@ fn main() {
         }
         failed = true;
     }
+    if !r7_cited.is_empty() {
+        eprintln!(
+            "\nerror (R7): {} requirement(s) name, as acceptance evidence, a function production \
+             never calls — the test passes whatever the product does. Cite the code the product \
+             runs, wire the function in, or record why in {}:",
+            r7_cited.len(),
+            reach::EXEMPTIONS
+        );
+        for key in &r7_cited {
+            eprintln!("    ! {key}");
+        }
+        failed = true;
+    }
+    if !r7_stale.is_empty() {
+        eprintln!(
+            "\nerror (R7): {} exemption(s) in {} no longer apply (the row no longer cites the \
+             function, or it is called now) — remove them:",
+            r7_stale.len(),
+            reach::EXEMPTIONS
+        );
+        for key in &r7_stale {
+            eprintln!("    ! {key}");
+        }
+        failed = true;
+    }
     if !r6_new.is_empty() {
         eprintln!(
             "\nerror (R6): {} public function(s) have no reference in production code — a \
@@ -424,7 +488,7 @@ fn main() {
         std::process::exit(1);
     }
     println!(
-        "\nOK: R3 (Must/Should+Test covered or waived), R4 (no dangling) and R6 (reachability) satisfied."
+        "\nOK: R3 (Must/Should+Test covered or waived), R4 (no dangling), R6 (reachability) and R7 (acceptance cites reachable code) satisfied."
     );
 }
 
@@ -460,7 +524,22 @@ fn write_coverage_report(
 
 #[cfg(test)]
 mod gate_tests {
-    use super::{traced_requirements, unreachable_encoders};
+    use super::{srs_cells, traced_requirements, unreachable_encoders};
+
+    /// NFR-TEST-01: an escaped `\|` inside a cell does not split it, so a row's priority and
+    /// verification are read from their own columns (`FR-PAN-12` was read as priority "S" from
+    /// its stakeholder cell and verification "S" — no test required).
+    /// trace: NFR-TEST-01
+    #[test]
+    fn nfr_test_01_escaped_pipe_does_not_split_a_cell() {
+        let c = srs_cells("| `FR-X-01` | pick `cpu\\|gpu` | STK-09 | S | T/D | a test |");
+        assert_eq!(c.len(), 8, "{c:?}");
+        assert_eq!(c[2], "pick `cpu|gpu`");
+        assert_eq!(
+            (c[4].as_str(), c[5].as_str(), c[6].as_str()),
+            ("S", "T/D", "a test")
+        );
+    }
     use std::fs;
 
     /// NFR-TEST-01: the gate's two checks use the real test regions. In a scratch workspace, a
