@@ -21,6 +21,9 @@ use crate::regions;
 /// Where the baseline lives, relative to the workspace root.
 pub const BASELINE: &str = "docs/test/r6-reachability-baseline.md";
 
+/// Where R7's exemptions live, relative to the workspace root.
+pub const EXEMPTIONS: &str = "docs/test/r7-acceptance-exemptions.md";
+
 /// The source trees scanned (production code only; `tests/` directories are skipped).
 const TREES: &[&str] = &["crates", "app"];
 
@@ -130,9 +133,9 @@ pub fn unreferenced(root: &Path) -> BTreeSet<String> {
     out
 }
 
-/// The baseline's entries: each list line `- `path:name` — reason`.
-pub fn load_baseline(root: &Path) -> BTreeSet<String> {
-    let Ok(text) = fs::read_to_string(root.join(BASELINE)) else {
+/// A list file's entries: each line `- `key` — reason`.
+fn load_list(root: &Path, rel: &str) -> BTreeSet<String> {
+    let Ok(text) = fs::read_to_string(root.join(rel)) else {
         return BTreeSet::new();
     };
     text.lines()
@@ -146,15 +149,51 @@ pub fn load_baseline(root: &Path) -> BTreeSet<String> {
 /// that are no longer unreferenced (stale — referenced now, or gone).
 pub fn check(root: &Path) -> (Vec<String>, Vec<String>, usize) {
     let found = unreferenced(root);
-    let base = load_baseline(root);
+    let base = load_list(root, BASELINE);
     let new = found.difference(&base).cloned().collect();
     let stale = base.difference(&found).cloned().collect();
     (new, stale, found.intersection(&base).count())
 }
 
+/// Whether `name` occurs as a word inside a backtick span of `cell` — how the SRS names code.
+fn cites(cell: &str, name: &str) -> bool {
+    cell.split('`')
+        .skip(1)
+        .step_by(2)
+        .any(|span| word_count(span, name) > 0)
+}
+
+/// R7 (NFR-TEST-01): a requirement whose **acceptance** names, as its evidence, a function R6
+/// finds unreferenced is evidenced by code the product never runs — `FR-PAN-06/07/08` (#229)
+/// passed that way. Each such `ID:name` must be exempted with a reason; an exemption that no
+/// longer applies is stale. Only the acceptance cell counts: a test that merely *uses* a test
+/// seam while exercising production is not flagged. Returns (cited, stale, exempted count).
+pub fn check_acceptance(
+    root: &Path,
+    rows: &[(String, String)],
+) -> (Vec<String>, Vec<String>, usize) {
+    let names: BTreeSet<String> = unreferenced(root)
+        .iter()
+        .filter_map(|k| k.rsplit(':').next().map(str::to_string))
+        .collect();
+    let found: BTreeSet<String> = rows
+        .iter()
+        .flat_map(|(id, cell)| {
+            names
+                .iter()
+                .filter(|n| cites(cell, n))
+                .map(move |n| format!("{id}:{n}"))
+        })
+        .collect();
+    let exempt = load_list(root, EXEMPTIONS);
+    let cited = found.difference(&exempt).cloned().collect();
+    let stale = exempt.difference(&found).cloned().collect();
+    (cited, stale, found.intersection(&exempt).count())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{check, pub_fn_name, word_count, BASELINE};
+    use super::{check, check_acceptance, cites, pub_fn_name, word_count, BASELINE, EXEMPTIONS};
     use std::fs;
 
     /// NFR-TEST-01: public function definitions are recognised in their forms, private ones not.
@@ -214,5 +253,56 @@ mod tests {
             "stale"
         );
         assert_eq!(kept, 1, "the baselined one is accepted");
+    }
+
+    /// NFR-TEST-01: acceptance cites a function only by name in a backtick span, as a word.
+    /// trace: NFR-TEST-01
+    #[test]
+    fn nfr_test_01_acceptance_citations_are_backtick_words() {
+        assert!(cites("`row_scroll_px`/`hz_to_x` shift a row", "hz_to_x"));
+        assert!(cites("`hz_to_x(f)` maps", "hz_to_x"));
+        assert!(
+            !cites("hz_to_x maps", "hz_to_x"),
+            "bare prose is not a citation"
+        );
+        assert!(
+            !cites("`hz_to_x_2` maps", "hz_to_x"),
+            "a longer name is not this one"
+        );
+    }
+
+    /// NFR-TEST-01, in a scratch workspace: a requirement whose acceptance cites an unreferenced
+    /// function fails unless exempted; one citing a production-called function does not; an
+    /// exemption that no longer applies is stale.
+    /// trace: NFR-TEST-01
+    #[test]
+    fn nfr_test_01_acceptance_citing_unreachable_code_is_flagged() {
+        let root = std::env::temp_dir().join(format!("xtask-r7-{}", std::process::id()));
+        let src = root.join("crates/demo/src");
+        fs::create_dir_all(&src).unwrap();
+        fs::create_dir_all(root.join("docs/test")).unwrap();
+        fs::write(
+            src.join("lib.rs"),
+            "pub fn live() {}\npub fn ghost() {}\npub fn gauge() {}\nfn main_path() { live(); }\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join(EXEMPTIONS),
+            "- `FR-B-01:gauge` — a measuring instrument\n- `FR-C-01:ghost` — no longer cited\n",
+        )
+        .unwrap();
+        let rows = [
+            ("FR-A-01".to_string(), "`ghost` does it (test)".to_string()),
+            (
+                "FR-B-01".to_string(),
+                "`gauge` measures it (test)".to_string(),
+            ),
+            ("FR-D-01".to_string(), "`live` does it (test)".to_string()),
+        ];
+        let (cited, stale, kept) = check_acceptance(&root, &rows);
+        let _ = fs::remove_dir_all(&root);
+        assert_eq!(cited, vec!["FR-A-01:ghost".to_string()], "cited");
+        assert_eq!(stale, vec!["FR-C-01:ghost".to_string()], "stale");
+        assert_eq!(kept, 1, "the exempted one is accepted");
     }
 }

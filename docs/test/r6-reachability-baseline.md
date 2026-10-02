@@ -1,7 +1,7 @@
 ---
 title: "R6 baseline — public functions with no production reference"
 status: Draft
-version: "0.1"
+version: "0.2"
 updated: 2026-09-29
 authors:
   - Simon Keimer (DC0SK)
@@ -31,11 +31,8 @@ found that day; the reasons were checked against each function's callers.
 - `crates/k4-session/src/lib.rs:send_cw` — DORMANT(#227): paddle CW (FR-TX-CW-01) not built; kept arm-gated for a paddle input.
 - `crates/k4-session/src/lib.rs:set_cw_delay` — DORMANT(#227): `KZL` (FR-TX-CW-02) belongs to paddle CW; wire with it or retire.
 
-## Superseded evidence — acceptance cites code production does not run
+## Superseded
 
-- `crates/k4-stream/src/render.rs:hz_to_x` — #229: FR-PAN-06 and FR-PAN-07 cite it; production scrolls rows through `column_to_bin`.
-- `crates/k4-stream/src/render.rs:row_scroll_px` — #229: FR-PAN-06 cites it; production scrolls rows through `column_to_bin`.
-- `crates/k4-stream/src/render.rs:resample_peak` — #229: FR-PAN-08 cites it; the trace is not decimated through it.
 - `crates/k4-protocol/src/cat_resp.rs:tq` — the CAT server answers `TQ` from what the app knows is on air (`Cache::on_air`), because the radio's reported TX state is stale by construction; delete when convenient.
 
 ## CAT encoders already waived under R5
@@ -62,6 +59,14 @@ See `r5-unreached-encoders.md` for each one's reason.
 - `crates/k4-config/src/lib.rs:any_enabled` — asserted by `tests/config.rs`.
 - `crates/k4-spot/src/style.rs:contrast` — WCAG ratio; its in-file tests use it to hold spot nameplate colours readable.
 - `crates/k4-spot/src/mqtt.rs:buffered` — lets the in-file tests bound the decoder's buffer.
+
+## Independent references in tests
+
+Held beside the production mapping as a second derivation, so a test can check `column_to_bin` and
+`axis_ticks` against something other than themselves. No acceptance cell cites them (R7).
+
+- `crates/k4-stream/src/render.rs:hz_to_x` — frequency→pixel reference for the axis and scroll tests (FR-PAN-07, #229).
+- `crates/k4-stream/src/render.rs:row_scroll_px` — pixel-offset reference that `fr_pan_09_agrees_with_row_scroll_px` holds `column_to_bin` to (FR-PAN-06, #229).
 
 ## CPU references of GPU code
 

@@ -18,6 +18,8 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
   code calls. Today's 29 are listed with a reason each in
   `docs/test/r6-reachability-baseline.md`; a new one fails the build, and so
   does an entry that has since been wired up or removed.
+- A second build gate (rule R7): a requirement's acceptance may not cite, as its
+  evidence, a function the product never calls.
 - **CAT server for logging and digital-mode software.** Turn it on under
   Settings → **CAT SERVER** and WSJT-X, JTDX, fldigi, flrig, Log4OM, CQRLOG or
   N1MM Logger+ on the same computer can follow and set the radio's frequency and
@@ -39,6 +41,12 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
   **Send** while you are transmitting. They are saved with your settings. (The
   K4's own CMD1–6 memories can't be reached over the link, so the app keeps
   its own.)
+
+### Changed
+
+- The spectrum trace and waterfall rows are decimated by the same tested
+  function the requirements cite, rather than a private copy of it; nothing
+  changes on screen.
 
 ### Fixed
 

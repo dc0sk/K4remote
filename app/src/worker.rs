@@ -20,7 +20,7 @@ use k4_audio::{AudioInput, AudioOutput, JitterBuffer, OpusDecoder, OpusEncoder};
 use k4_diag::{DiagLog, Level};
 use k4_protocol::state::{Mode, RadioState};
 use k4_session::{Backoff, Session, SessionConfig, SessionEvent, SystemClock};
-use k4_stream::render::crop_to_span;
+use k4_stream::render::{crop_to_span, resample_peak};
 use k4_stream::{AudioPacket, EncodeMode, PanFrame};
 use k4_transport::{CatLink, ConnectConfig, SerialPortTransport, TcpRemoteTransport};
 
@@ -193,25 +193,18 @@ impl PanRow {
     }
 }
 
-/// Bucket-peak downsample of a bin array to `target` columns.
+/// Bucket-peak downsample of a bin array to at most `target` columns, through
+/// [`resample_peak`] (FR-PAN-08) — one bucketing rule, tested where the product
+/// runs it. A row already no wider than `target` is kept as sent: widening would
+/// only repeat bins.
 fn downsample(bins: &[f32], target: usize) -> Vec<f32> {
-    if bins.is_empty() || target == 0 {
+    if target == 0 {
         return Vec::new();
     }
     if bins.len() <= target {
         return bins.to_vec();
     }
-    let chunk = bins.len() as f32 / target as f32;
-    (0..target)
-        .map(|i| {
-            let start = (i as f32 * chunk) as usize;
-            let end = (((i + 1) as f32 * chunk) as usize).clamp(start + 1, bins.len());
-            bins[start..end]
-                .iter()
-                .copied()
-                .fold(f32::NEG_INFINITY, f32::max)
-        })
-        .collect()
+    resample_peak(bins, target)
 }
 
 /// Where/how to connect (transport selection).
