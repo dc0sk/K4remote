@@ -199,6 +199,10 @@ guesswork):
 USB/serial path get their final validation against a live K4; most control paths
 are already confirmed.
 
+**Proposed** — band buttons whose label colour shows each band's current
+conditions (`FR-UI-25`); the data source, a propagation forecast or the spot
+activity the app already receives, is still to be chosen.
+
 **Deferred, lower priority** — `SI`-based V/I metering (whose response format
 the K4 Programmer's Reference leaves for a future revision).
 
