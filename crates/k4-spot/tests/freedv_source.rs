@@ -213,7 +213,9 @@ const LONG: Duration = Duration::from_secs(5);
 
 /// The source upgrades, joins **only** as a read-only viewer, sends nothing that identifies the
 /// operator, and delivers the in-window stations from the server's `bulk_update` and later events
-/// as spots — counting the bad and out-of-window ones.
+/// as spots — counting the bad and out-of-window ones. The activity tap sees every station, before
+/// the window (FR-UI-25).
+/// trace: FR-UI-25
 #[test]
 fn fr_spot_08_source_joins_as_a_viewer_and_delivers_spots() {
     let (tx, rx) = std::sync::mpsc::channel();
@@ -248,6 +250,11 @@ fn fr_spot_08_source_joins_as_a_viewer_and_delivers_spots() {
     })]);
     let mut src = FreeDvSource::with_timing(cfg(port), fast());
     src.set_window(Some((14_000_000, 14_300_000)));
+    let tapped = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let t = std::sync::Arc::clone(&tapped);
+    src.set_activity_tap(Some(Box::new(move |s| {
+        t.lock().unwrap().push(s.call.clone())
+    })));
     let run = pump(&mut src, LONG, |_, r| {
         r.spots.iter().any(|s| s.snr_db == Some(-9))
     });
@@ -285,6 +292,14 @@ fn fr_spot_08_source_joins_as_a_viewer_and_delivers_spots() {
     let st = src.stats();
     assert!(st.spots >= 1 && st.outside_window >= 3, "{st:?}");
     assert_eq!(st.rejected, 1, "the bad freq_change is counted");
+    // FR-UI-25: the activity tap saw the stations outside the window, before it.
+    let seen = tapped.lock().unwrap();
+    for call in ["BB2BBB", "BE1LOW", "AB1OVE", "LO1LO", "AA1AAA"] {
+        assert!(
+            seen.iter().any(|c| c == call),
+            "{call} not tapped: {seen:?}"
+        );
+    }
     assert_eq!(st.connects, 1);
 
     // What the client sent, on the wire.

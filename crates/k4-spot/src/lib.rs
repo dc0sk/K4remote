@@ -27,7 +27,8 @@ pub mod tooltip;
 pub mod ws;
 
 pub use model::{
-    normalise_callsign, sanitise_text, Network, Parsed, SourceError, Spot, SpotSource, MAX_TEXT_LEN,
+    normalise_callsign, sanitise_text, ActivityTap, Network, Parsed, SourceError, Spot, SpotSource,
+    MAX_TEXT_LEN,
 };
 pub use store::{Insert, SpotStore, DEDUPE_TOLERANCE_HZ, DEFAULT_CAPACITY};
 

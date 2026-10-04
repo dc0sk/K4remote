@@ -160,6 +160,11 @@ impl std::error::Error for SourceError {}
 /// One `poll` means "deliver what has arrived": a polled network (PSK Reporter)
 /// makes a request; a streamed one (RBN, a DX cluster) drains its socket. The
 /// shape is revisited when the first real sources land (FR-SPOT-05/-07).
+/// Sees every spot a streaming source parses and accepts, **before** its frequency window — so
+/// band activity is counted on every band the network delivers, not only the one in view
+/// (FR-UI-25). The store still receives only in-window spots.
+pub type ActivityTap = Box<dyn FnMut(&Spot) + Send>;
+
 pub trait SpotSource {
     /// Which network this is.
     fn network(&self) -> Network;

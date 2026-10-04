@@ -14,7 +14,7 @@ use std::net::TcpStream;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::cluster::{is_call_prompt, parse_line, LineSplitter, RateGate};
-use crate::{normalise_callsign, Network, SourceError, Spot, SpotSource};
+use crate::{normalise_callsign, ActivityTap, Network, SourceError, Spot, SpotSource};
 
 /// What to connect to.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -118,6 +118,7 @@ pub struct TelnetSource {
     /// Only spots inside `[lo, hi]` Hz are kept; `None` keeps everything. Applied before the rate
     /// gate, so an unfiltered relay's other bands cannot use up the budget.
     window: Option<(u64, u64)>,
+    tap: Option<ActivityTap>,
     stats: Stats,
     attempts: u64,
     epoch: Instant,
@@ -137,6 +138,7 @@ impl TelnetSource {
             conn: None,
             next_attempt: now,
             window: None,
+            tap: None,
             stats: Stats::default(),
             attempts: 0,
             epoch: now,
@@ -144,6 +146,11 @@ impl TelnetSource {
     }
 
     /// Keep only spots between `lo` and `hi` Hz (`None` = all).
+    /// Hand every parsed spot, before the window, to `tap` (FR-UI-25); `None` stops it.
+    pub fn set_activity_tap(&mut self, tap: Option<ActivityTap>) {
+        self.tap = tap;
+    }
+
     pub fn set_window(&mut self, window: Option<(u64, u64)>) {
         self.window = window;
     }
@@ -328,6 +335,9 @@ impl TelnetSource {
                         }
                     }
                     Some(spot) => {
+                        if let Some(tap) = self.tap.as_mut() {
+                            tap(&spot);
+                        }
                         if let Some((lo, hi)) = window {
                             if spot.freq_hz < lo || spot.freq_hz > hi {
                                 self.stats.outside_window += 1;

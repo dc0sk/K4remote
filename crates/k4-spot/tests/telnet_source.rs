@@ -295,7 +295,9 @@ fn fr_spot_07_source_sheds_a_flood() {
     assert_eq!(run.spots.len() as u64, st.spots);
 }
 
-/// Spots outside the wanted window are dropped before they use up the rate budget.
+/// Spots outside the wanted window are dropped before they use up the rate budget — but the
+/// activity tap sees them first, so other bands' activity is counted (FR-UI-25).
+/// trace: FR-SPOT-07, FR-UI-25
 #[test]
 fn fr_spot_07_source_filters_to_a_window() {
     let port = serve(vec![Box::new(|mut s| {
@@ -307,12 +309,22 @@ fn fr_spot_07_source_filters_to_a_window() {
     })]);
     let mut src = TelnetSource::with_timing(cfg(port), fast());
     src.set_window(Some((14_070_000, 14_078_000)));
+    let tapped = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let t = std::sync::Arc::clone(&tapped);
+    src.set_activity_tap(Some(Box::new(move |s| {
+        t.lock().unwrap().push(s.call.clone())
+    })));
     let run = pump(&mut src, LONG, |s, _| {
         s.stats().spots + s.stats().outside_window >= 3
     });
     let calls: Vec<&str> = run.spots.iter().map(|s| s.call.as_str()).collect();
     assert_eq!(calls, ["W1AW"]);
     assert_eq!(src.stats().outside_window, 2);
+    assert_eq!(
+        *tapped.lock().unwrap(),
+        ["NP2X", "W1AW", "K1ABC"],
+        "the tap sees every band, before the window"
+    );
 }
 
 /// Two megabytes with no newline neither stalls the source nor grows it, and the feed carries on.
