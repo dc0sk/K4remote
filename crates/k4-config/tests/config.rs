@@ -1043,10 +1043,15 @@ fn fr_ui_25_propagation_defaults_on_and_persist() {
     );
     assert_eq!(partial.propagation.hamqsl_interval_secs(), 3600);
 
-    let mut prefs = Prefs::default();
-    prefs.station_locator = "JO31".into();
-    prefs.propagation.activity_freedv = false;
-    prefs.propagation.hamqsl_interval_secs = 60; // below HamQSL's floor
+    let prefs = Prefs {
+        station_locator: "JO31".into(),
+        propagation: k4_config::PropagationPrefs {
+            activity_freedv: false,
+            hamqsl_interval_secs: 60, // below HamQSL's floor
+            ..Default::default()
+        },
+        ..Default::default()
+    };
     let back: Prefs = toml::from_str(&toml::to_string(&prefs).unwrap()).unwrap();
     assert_eq!(back.station_locator, "JO31");
     assert!(!back.propagation.activity_freedv);
@@ -1055,7 +1060,9 @@ fn fr_ui_25_propagation_defaults_on_and_persist() {
         3600,
         "never below hourly"
     );
-    let mut long = Prefs::default();
-    long.propagation.hamqsl_interval_secs = 10_000_000;
-    assert_eq!(long.propagation.hamqsl_interval_secs(), 86_400);
+    let long = k4_config::PropagationPrefs {
+        hamqsl_interval_secs: 10_000_000,
+        ..Default::default()
+    };
+    assert_eq!(long.hamqsl_interval_secs(), 86_400);
 }

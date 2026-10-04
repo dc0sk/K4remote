@@ -35,8 +35,8 @@ use std::cell::Cell;
 
 use iced::widget::canvas::Canvas;
 use iced::widget::{
-    button, container, horizontal_space, mouse_area, pick_list, progress_bar, scrollable, slider,
-    stack, text_editor, vertical_slider,
+    button, checkbox, container, horizontal_space, mouse_area, pick_list, progress_bar, scrollable,
+    slider, stack, text_editor, vertical_slider,
 };
 use iced::widget::{
     tooltip, Button, Column, Container, MouseArea, ProgressBar, Row, Space, Text, TextInput,
@@ -261,6 +261,11 @@ struct App {
     spot_status_ui: spot_sources::Statuses,
     /// What the worker was last told to run and keep, so a tick sends only a change.
     spot_sent: SpotSent,
+    /// Band-condition colours (FR-UI-25): the settings, the station locator as typed, and what
+    /// the spot worker was last told.
+    propagation: k4_config::PropagationPrefs,
+    station_locator: String,
+    prop_sent: Option<spot_sources::PropagationCfg>,
     /// The CAT server's settings (FR-CATSRV-01); bind and port as typed.
     cat_server: k4_config::CatServerPrefs,
     catsrv_bind: String,
@@ -722,8 +727,60 @@ enum SettingsTab {
     Kpod,
     Kpa1500,
     CatServer,
+    Propagation,
     Backup,
 }
+
+/// One switch on the PROPAGATION tab (FR-UI-25).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PropSwitch {
+    Colour,
+    Hamqsl,
+    Rbn,
+    DxCluster,
+    PskReporter,
+    FreeDv,
+}
+
+/// A HamQSL update interval offered on the PROPAGATION tab, hours (FR-UI-25): never under an
+/// hour, which is what HamQSL asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct IntervalHours(u8);
+
+impl IntervalHours {
+    const OFFERED: [IntervalHours; 6] = [
+        IntervalHours(1),
+        IntervalHours(2),
+        IntervalHours(3),
+        IntervalHours(6),
+        IntervalHours(12),
+        IntervalHours(24),
+    ];
+}
+
+impl std::fmt::Display for IntervalHours {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            1 => write!(f, "every hour"),
+            h => write!(f, "every {h} hours"),
+        }
+    }
+}
+
+/// Hover ids for the band buttons' tooltips, one per button (FR-UI-25).
+const BAND_TIP_IDS: [&str; 11] = [
+    "band.cond.160",
+    "band.cond.80",
+    "band.cond.60",
+    "band.cond.40",
+    "band.cond.30",
+    "band.cond.20",
+    "band.cond.17",
+    "band.cond.15",
+    "band.cond.12",
+    "band.cond.10",
+    "band.cond.6",
+];
 
 /// A single TX-config adjustment (FR-KEY-01/FR-AUD-CFG-01/FR-ANT-01).
 #[derive(Debug, Clone, Copy)]
@@ -1041,6 +1098,10 @@ enum Message {
     Disp(DispMsg),
     SelectBand(u8),
     BandStack,
+    // PROPAGATION settings (FR-UI-25).
+    PropToggle(PropSwitch, bool),
+    PropIntervalHours(IntervalHours),
+    StationLocator(String),
     // TX config (FR-KEY-01/FR-AUD-CFG-01), Fn VFO ops (FR-VFO-07), MENU (FR-MENU-01).
     SetTxTab(TxTab),
     Tx(TxMsg),
@@ -1258,6 +1319,9 @@ impl App {
             spot_status,
             spot_status_ui: spot_sources::Statuses::default(),
             spot_sent: SpotSent::default(),
+            propagation: prefs.propagation.clone(),
+            station_locator: prefs.station_locator.clone(),
+            prop_sent: None,
             catsrv_bind: prefs.cat_server.bind.clone(),
             catsrv_port: prefs.cat_server.port.to_string(),
             cat_server: prefs.cat_server.clone(),
@@ -1864,6 +1928,146 @@ impl App {
 
     /// The Settings tab for the CAT server (FR-CATSRV-01): the switch, where it listens, a
     /// warning when that is not this computer, what it is doing, and how to point software at it.
+    /// The station locator to save: as typed if it is a valid Maidenhead square, else empty
+    /// (FR-UI-25). A half-typed locator is never stored.
+    fn locator_for_save(&self) -> String {
+        let l = self.station_locator.trim();
+        if k4_spot::bandcond::locator_centre(l).is_some() {
+            l.to_string()
+        } else {
+            String::new()
+        }
+    }
+
+    /// Each band button's rating and tooltip now (FR-UI-25).
+    fn band_views(&self) -> Vec<propagation::BandView> {
+        let unix = spots::unix_now();
+        propagation::band_views(
+            &self.spot_status_ui.bands,
+            &self.propagation,
+            &self.locator_for_save(),
+            unix,
+            propagation::local_hour(unix),
+        )
+    }
+
+    /// The PROPAGATION settings tab (FR-UI-25): every source opt-out, the HamQSL interval, the
+    /// station locator, and what HamQSL is doing.
+    fn propagation_settings_view(&self) -> Element<'_, Message> {
+        let dim = role_color(ui::ColorRole::Inactive);
+        let caution = role_color(ui::ColorRole::Caution);
+        let p = &self.propagation;
+        let check = |label: &'static str, on: bool, which: PropSwitch| {
+            checkbox(label, on)
+                .on_toggle(move |v| Message::PropToggle(which, v))
+                .size(14)
+                .text_size(12)
+        };
+        let interval = p.hamqsl_interval_secs() / 3600;
+        let selected = IntervalHours::OFFERED
+            .into_iter()
+            .find(|h| u64::from(h.0) == interval);
+        let mut col = Column::new()
+            .spacing(8)
+            .push(
+                Text::new(
+                    "Colours each band button's label by that band's current conditions — green \
+                     good, amber fair, red poor — from the sources ticked below; the tooltip says \
+                     why. A band with no current data keeps its normal colour, and nothing here \
+                     needs an internet connection to keep working.",
+                )
+                .size(11)
+                .color(dim),
+            )
+            .push(check(
+                "Colour the band buttons",
+                p.colour_bands,
+                PropSwitch::Colour,
+            ))
+            .push(Text::new("Forecast").size(12).color(dim))
+            .push(check("HamQSL (N0NBH)", p.hamqsl, PropSwitch::Hamqsl))
+            .push(
+                Row::new()
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                    .push(Text::new("Update").size(12).width(Length::Fixed(72.0)))
+                    .push(
+                        pick_list(IntervalHours::OFFERED, selected, Message::PropIntervalHours)
+                            .text_size(12),
+                    ),
+            );
+        if let Some(st) = &self.spot_status_ui.bands.hamqsl {
+            let line = match &st.error {
+                Some(e) => format!("HamQSL: {e} — retrying in {} min", st.next_in_min),
+                None if self.spot_status_ui.bands.forecast.is_some() => {
+                    format!("HamQSL: current — next update in {} min", st.next_in_min)
+                }
+                None => "HamQSL: waiting for the first update".to_string(),
+            };
+            let colour = if st.error.is_some() { caution } else { dim };
+            col = col.push(Text::new(line).size(11).color(colour));
+        }
+        col = col
+            .push(
+                Text::new(
+                    "Spot activity — stations heard per band in the last 15 minutes. Unticking a \
+                     network stops counting it; it still runs for spot nameplates if it is on \
+                     under SPOTTING.",
+                )
+                .size(11)
+                .color(dim),
+            )
+            .push(check(
+                "Reverse Beacon Network",
+                p.activity_rbn,
+                PropSwitch::Rbn,
+            ))
+            .push(check(
+                "DX cluster",
+                p.activity_dx_cluster,
+                PropSwitch::DxCluster,
+            ))
+            .push(check(
+                "PSK Reporter (bands in view only)",
+                p.activity_psk_reporter,
+                PropSwitch::PskReporter,
+            ))
+            .push(check(
+                "FreeDV Reporter",
+                p.activity_freedv,
+                PropSwitch::FreeDv,
+            ))
+            .push(Text::new("Day or night").size(12).color(dim))
+            .push(Self::spot_field(
+                "Locator",
+                "e.g. JO31",
+                &self.station_locator,
+                90.0,
+                Message::StationLocator,
+            ));
+        let typed = self.station_locator.trim();
+        let note = if typed.is_empty() {
+            (
+                "No locator: day is 06:00–18:00 on this computer's clock.".to_string(),
+                dim,
+            )
+        } else if k4_spot::bandcond::locator_centre(typed).is_some() {
+            (
+                format!("Day and night follow the sun at {typed} — the radio's site."),
+                dim,
+            )
+        } else {
+            (
+                "Not a locator yet (4 or 6 characters, e.g. JO31 or JO31lk) — not saved."
+                    .to_string(),
+                caution,
+            )
+        };
+        col.push(Text::new(note.0).size(11).color(note.1))
+            .push(Text::new(propagation::HAMQSL_CREDIT).size(11).color(dim))
+            .into()
+    }
+
     fn cat_server_settings_view(&self) -> Element<'_, Message> {
         let dim = role_color(ui::ColorRole::Inactive);
         let caution = role_color(ui::ColorRole::Caution);
@@ -2054,6 +2258,8 @@ impl App {
                     kpod_buttons: self.kpod_buttons.clone(),
                     dtmf_sequences: self.dtmf_seqs.clone(),
                     cat_server: self.cat_server_for_save(),
+                    station_locator: self.locator_for_save(),
+                    propagation: self.propagation.clone(),
                     ..Default::default()
                 },
             };
@@ -2789,6 +2995,35 @@ impl App {
                 self.catsrv_tx_limit = v.chars().filter(char::is_ascii_digit).take(2).collect();
                 if let Ok(m) = self.catsrv_tx_limit.parse::<u8>() {
                     self.cat_server.tx_limit_min = m;
+                }
+            }
+            Message::PropToggle(which, on) => {
+                let p = &mut self.propagation;
+                *match which {
+                    PropSwitch::Colour => &mut p.colour_bands,
+                    PropSwitch::Hamqsl => &mut p.hamqsl,
+                    PropSwitch::Rbn => &mut p.activity_rbn,
+                    PropSwitch::DxCluster => &mut p.activity_dx_cluster,
+                    PropSwitch::PskReporter => &mut p.activity_psk_reporter,
+                    PropSwitch::FreeDv => &mut p.activity_freedv,
+                } = on;
+                self.save_config();
+            }
+            Message::PropIntervalHours(h) => {
+                self.propagation.hamqsl_interval_secs = u64::from(h.0) * 3600;
+                self.save_config();
+            }
+            Message::StationLocator(v) => {
+                self.station_locator = v
+                    .chars()
+                    .filter(char::is_ascii_alphanumeric)
+                    .take(6)
+                    .collect();
+                // Saved only when valid (or cleared); a half-typed one is shown as such.
+                if self.station_locator.is_empty()
+                    || k4_spot::bandcond::locator_centre(&self.station_locator).is_some()
+                {
+                    self.save_config();
                 }
             }
             Message::ToggleCatServer => {
@@ -3728,6 +3963,18 @@ impl App {
                     if spots::window_needs_update(self.spot_window_sent, win) {
                         self.spot_window_sent = Some(win);
                         let _ = self.spot_tx.send(spot_sources::Cmd::Window(Some(win)));
+                    }
+                    // Band-condition sources (FR-UI-25); only a change is sent.
+                    let prop = spot_sources::PropagationCfg {
+                        hamqsl: self.propagation.hamqsl,
+                        hamqsl_interval_secs: self.propagation.hamqsl_interval_secs(),
+                        activity: propagation::activity_networks(&self.propagation),
+                    };
+                    if self.prop_sent.as_ref() != Some(&prop) {
+                        let _ = self
+                            .spot_tx
+                            .send(spot_sources::Cmd::Propagation(prop.clone()));
+                        self.prop_sent = Some(prop);
                     }
                 }
                 // Drop spots past the age limit, so the store never holds ones that can no longer
@@ -6708,12 +6955,20 @@ impl App {
     fn band_screen(&self) -> Element<'_, Message> {
         let dim = role_color(ui::ColorRole::Inactive);
         let mut grid = Row::new().spacing(6);
-        for (label, bn) in ui::band_buttons() {
-            grid = grid.push(tipped(
+        // Each label coloured by its band's conditions, explained in its tooltip (FR-UI-25).
+        let views = self.band_views();
+        for (((label, bn), view), id) in ui::band_buttons().iter().zip(views).zip(BAND_TIP_IDS) {
+            let mut text = Text::new(*label).size(13);
+            if let Some(r) = view.rating {
+                let (red, green, blue) = propagation::rating_rgb(active_theme(), r);
+                text = text.color(Color::from_rgb8(red, green, blue));
+            }
+            grid = grid.push(tipped_text(
                 self.tips_on(),
                 self.hover,
-                "vfo.band.up",
-                Button::new(Text::new(*label).size(13))
+                id,
+                view.tip,
+                Button::new(text)
                     .style(btn_style(BtnKind::Plain))
                     .padding([8, 12])
                     .on_press(Message::SelectBand(*bn)),
@@ -7593,6 +7848,7 @@ impl App {
             .push(settings_tab_btn(SettingsTab::Kpod, "K-POD"))
             .push(settings_tab_btn(SettingsTab::Kpa1500, "KPA1500"))
             .push(settings_tab_btn(SettingsTab::CatServer, "CAT SERVER"))
+            .push(settings_tab_btn(SettingsTab::Propagation, "PROPAGATION"))
             .push(settings_tab_btn(SettingsTab::Backup, "BACKUP"));
         let settings_body: Element<Message> = match self.settings_tab {
             SettingsTab::Connection => Column::new()
@@ -7649,6 +7905,15 @@ impl App {
                         .color(dim),
                 )
                 .push(self.cat_server_settings_view())
+                .into(),
+            SettingsTab::Propagation => Column::new()
+                .spacing(10)
+                .push(
+                    Text::new("Band conditions on the band buttons")
+                        .size(12)
+                        .color(dim),
+                )
+                .push(self.propagation_settings_view())
                 .into(),
             SettingsTab::Backup => Column::new()
                 .spacing(10)
@@ -10448,13 +10713,25 @@ fn tipped<'a>(
     id: &'static str,
     content: impl Into<Element<'a, Message>>,
 ) -> Element<'a, Message> {
+    match tips::tip(id) {
+        Some(text) => tipped_text(enabled, hover, id, text.to_string(), content),
+        None => content.into(),
+    }
+}
+
+/// As [`tipped`], with the tooltip text given rather than looked up — for a tip that changes with
+/// the data, like a band button's conditions (FR-UI-25).
+fn tipped_text<'a>(
+    enabled: bool,
+    hover: Option<(&'static str, std::time::Instant)>,
+    id: &'static str,
+    text: String,
+    content: impl Into<Element<'a, Message>>,
+) -> Element<'a, Message> {
     let content = content.into();
     if !enabled {
         return content;
     }
-    let Some(text) = tips::tip(id) else {
-        return content;
-    };
     let dwelt =
         matches!(hover, Some((h, since)) if h == id && since.elapsed() >= tips::TOOLTIP_DELAY);
     let inner: Element<'a, Message> = if dwelt {
@@ -11945,6 +12222,7 @@ mod settings_tabs_wiring_tests {
             "Kpod",
             "Kpa1500",
             "CatServer",
+            "Propagation",
             "Backup",
         ] {
             assert!(
@@ -11964,6 +12242,7 @@ mod settings_tabs_wiring_tests {
             "self.kpod_buttons_view()",
             "self.backup_section_view()",
             "self.cat_server_settings_view()",
+            "self.propagation_settings_view()",
             "Message::ToggleKpa1500Window", // KPA1500 configuration entry point
         ] {
             assert!(
@@ -12299,5 +12578,71 @@ mod catsrv_ui_tests {
             !code.contains("WorkerCmd::TestCatAudio"),
             "the UI installs the test CAT audio source"
         );
+    }
+}
+
+#[cfg(test)]
+mod propagation_ui_tests {
+    use super::{IntervalHours, BAND_TIP_IDS};
+
+    /// FR-UI-25: the band-condition settings are carried through every hand-off — loaded, saved
+    /// (the save ends in `..Default::default()`, so a forgotten field would silently reset them),
+    /// sent to the spot worker on the tick when they change, each switch persisted — and the BAND
+    /// screen draws each label in its rating's colour with its own tooltip. Structural, over the
+    /// code above this module.
+    /// trace: FR-UI-25
+    #[test]
+    fn fr_ui_25_settings_and_band_screen_are_wired() {
+        let whole = include_str!("main.rs");
+        let code = &whole[..whole
+            .find(concat!("mod propagation_ui", "_tests {"))
+            .expect("this module")];
+        let squash = |t: &str| t.split_whitespace().collect::<String>();
+        let code = squash(code);
+        for (what, needle) in [
+            ("loaded", "propagation: prefs.propagation.clone(),"),
+            ("locator loaded", "station_locator: prefs.station_locator.clone(),"),
+            ("saved", "propagation: self.propagation.clone(),"),
+            ("locator saved, valid only", "station_locator: self.locator_for_save(),"),
+            (
+                "only a change is sent",
+                "if self.prop_sent.as_ref() != Some(&prop) { let _ = self.spot_tx.send(spot_sources::Cmd::Propagation(prop.clone()));",
+            ),
+            (
+                "the interval sent is the clamped one",
+                "hamqsl_interval_secs: self.propagation.hamqsl_interval_secs(),",
+            ),
+            ("each switch persists", "} = on; self.save_config();"),
+            ("the band screen rates its buttons", "let views = self.band_views();"),
+            (
+                "a rated label takes its colour",
+                "if let Some(r) = view.rating { let (red, green, blue) = propagation::rating_rgb(active_theme(), r); text = text.color(Color::from_rgb8(red, green, blue)); }",
+            ),
+            ("each button has its tooltip", "tipped_text( self.tips_on(), self.hover, id, view.tip,"),
+            ("the tab exists", "settings_tab_btn(SettingsTab::Propagation"),
+            ("the tab shows the settings", "self.propagation_settings_view()"),
+        ] {
+            assert!(code.contains(&squash(needle)), "not wired ({what}): {needle}");
+        }
+    }
+
+    /// FR-UI-25: the interval offered is never under HamQSL's hour, nor over a day; each band
+    /// button has its own tooltip id.
+    /// trace: FR-UI-25
+    #[test]
+    fn fr_ui_25_interval_choices_and_tip_ids() {
+        for h in IntervalHours::OFFERED {
+            let secs = u64::from(h.0) * 3600;
+            assert!(
+                (k4_config::HAMQSL_INTERVAL_MIN_SECS..=k4_config::HAMQSL_INTERVAL_MAX_SECS)
+                    .contains(&secs),
+                "{h}"
+            );
+        }
+        assert_eq!(BAND_TIP_IDS.len(), crate::ui::band_buttons().len());
+        let mut ids = BAND_TIP_IDS.to_vec();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), BAND_TIP_IDS.len(), "tooltip ids are unique");
     }
 }

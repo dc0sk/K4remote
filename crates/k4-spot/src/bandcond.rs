@@ -421,7 +421,7 @@ mod tests {
         );
         let text = std::str::from_utf8(FIXTURE).unwrap();
         let cut = text.find("</calculatedconditions>").unwrap();
-        assert!(parse_hamqsl(text[..cut].as_bytes()).is_err(), "truncated");
+        assert!(parse_hamqsl(&text.as_bytes()[..cut]).is_err(), "truncated");
         assert!(parse_hamqsl(b"<solar></solar>").is_err(), "no conditions");
         assert!(parse_hamqsl(&[0xff, 0xfe]).is_err(), "not UTF-8");
         let odd = text.replacen(
