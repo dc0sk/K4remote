@@ -77,5 +77,4 @@ Held beside the production mapping as a second derivation, so a test can check `
 
 - `crates/k4-audio/src/codec.rs:stereo` — Opus stereo encoder; K4 TX audio is mono. Used only by `tests/opus.rs`.
 - `crates/k4-kpod/src/lib.rs:configure_packet` — K-Pod encoder scale/beeper packet; no setting sends it.
-- `crates/k4-spot/src/psk.rs:band_token` — band name for a frequency; only its own test calls it.
 - `crates/k4-transport/src/lib.rs:available_serial_ports` — serial port picker (feature `serial`); no UI lists ports.
