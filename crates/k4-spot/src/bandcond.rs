@@ -69,6 +69,12 @@ impl Group {
     }
 }
 
+/// The bands the K4's direct band buttons select (`BN` 00–10), as [`psk::band_token`]s — the
+/// bands activity is reported for.
+pub const BANDS: [&str; 11] = [
+    "160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m",
+];
+
 /// The HamQSL group a band (a [`psk::band_token`], e.g. `"20m"`) is rated by. 160 m and 6 m are
 /// not rated by HamQSL's HF groups, and its VHF values are not used (plan §1.1, §2).
 pub fn group_for_band(band: &str) -> Option<Group> {
