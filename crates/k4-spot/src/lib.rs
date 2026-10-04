@@ -11,6 +11,7 @@ pub mod cluster;
 pub mod dns;
 pub mod freedv;
 pub mod freedv_source;
+pub mod hamqsl;
 pub mod json;
 pub mod layout;
 mod model;
