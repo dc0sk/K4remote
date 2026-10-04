@@ -2245,6 +2245,7 @@ dependencies = [
  "k4-spot",
  "k4-stream",
  "k4-transport",
+ "libc",
  "rustls",
  "sha2",
  "tokio",

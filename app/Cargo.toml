@@ -68,6 +68,8 @@ kpod = ["dep:k4-kpod", "k4-kpod/hidapi"]
 
 [dependencies]
 k4-protocol = { path = "../crates/k4-protocol" }
+# The local hour for the band-condition day/night fallback (FR-UI-25) — already in the tree.
+libc = "0.2"
 k4-kpod = { path = "../crates/k4-kpod", optional = true }
 # `serial` always enabled for the app (USB/serial transport selectable in the UI).
 k4-transport = { path = "../crates/k4-transport", features = ["serial"] }

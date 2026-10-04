@@ -11,6 +11,7 @@ mod afterglow;
 mod http_fetch;
 mod kpa;
 mod meter;
+mod propagation;
 mod spectrum;
 mod spot_sources;
 mod spots;
