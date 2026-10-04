@@ -168,6 +168,68 @@ pub struct Prefs {
     /// The CAT server for third-party software (FR-CATSRV-01). Off by default.
     #[serde(default)]
     pub cat_server: CatServerPrefs,
+    /// The station's Maidenhead locator (the radio's site, which in remote operation may be far
+    /// from this computer). Empty = not set. Validated where it is entered; FR-UI-25 uses it to
+    /// tell day from night.
+    #[serde(default)]
+    pub station_locator: String,
+    /// Band-condition colours on the band buttons (FR-UI-25). Everything on by default.
+    #[serde(default)]
+    pub propagation: PropagationPrefs,
+}
+
+/// HamQSL's update interval bounds, seconds (FR-UI-25): its page asks for no more than hourly.
+/// The same three values are `k4_spot::bandcond::HAMQSL_INTERVAL_*`; the app holds them equal.
+pub const HAMQSL_INTERVAL_MIN_SECS: u64 = 3600;
+pub const HAMQSL_INTERVAL_DEFAULT_SECS: u64 = 3600;
+pub const HAMQSL_INTERVAL_MAX_SECS: u64 = 86_400;
+
+fn default_hamqsl_interval() -> u64 {
+    HAMQSL_INTERVAL_DEFAULT_SECS
+}
+
+/// Band-condition sources and colouring (FR-UI-25). Every source is opt-out: on unless the
+/// operator unticks it. For the activity sources, "off" means not counted — the network still runs
+/// for spots if it is enabled there.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PropagationPrefs {
+    #[serde(default = "default_true")]
+    pub colour_bands: bool,
+    #[serde(default = "default_true")]
+    pub hamqsl: bool,
+    #[serde(default = "default_true")]
+    pub activity_rbn: bool,
+    #[serde(default = "default_true")]
+    pub activity_dx_cluster: bool,
+    #[serde(default = "default_true")]
+    pub activity_psk_reporter: bool,
+    #[serde(default = "default_true")]
+    pub activity_freedv: bool,
+    /// Read through [`PropagationPrefs::hamqsl_interval_secs`].
+    #[serde(default = "default_hamqsl_interval")]
+    pub hamqsl_interval_secs: u64,
+}
+
+impl PropagationPrefs {
+    /// The HamQSL update interval, kept within its bounds whatever the file says.
+    pub fn hamqsl_interval_secs(&self) -> u64 {
+        self.hamqsl_interval_secs
+            .clamp(HAMQSL_INTERVAL_MIN_SECS, HAMQSL_INTERVAL_MAX_SECS)
+    }
+}
+
+impl Default for PropagationPrefs {
+    fn default() -> Self {
+        Self {
+            colour_bands: true,
+            hamqsl: true,
+            activity_rbn: true,
+            activity_dx_cluster: true,
+            activity_psk_reporter: true,
+            activity_freedv: true,
+            hamqsl_interval_secs: HAMQSL_INTERVAL_DEFAULT_SECS,
+        }
+    }
 }
 
 /// Default CAT server port: the K4's own network CAT port, so a logger is set up exactly as for
@@ -978,6 +1040,8 @@ impl Default for Prefs {
             kpod_buttons: default_kpod_buttons(),
             dtmf_sequences: Vec::new(),
             cat_server: CatServerPrefs::default(),
+            station_locator: String::new(),
+            propagation: PropagationPrefs::default(),
         }
     }
 }
