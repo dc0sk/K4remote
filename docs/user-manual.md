@@ -2,7 +2,7 @@
 title: "K4 Remote — User Manual"
 status: Draft
 version: "0.10.0"
-updated: 2026-09-25
+updated: 2026-10-04
 authors:
   - Simon Keimer (DC0SK)
 ---
@@ -436,6 +436,8 @@ scrolling:
 | **Audio** | Speaker/Mic device selection, Volume, Mic gain, mute-radio-monitor, mode-adaptive UI toggle |
 | **K-Pod** | K-Pod on/off, and the 16-slot F1–F8 tap/hold macro editor |
 | **KPA1500** | Amplifier support on/off, and the **Configuration…** window |
+| **CAT Server** | The CAT server for logging and digital-mode software, and PTT from it |
+| **Propagation** | Band-condition colours on the band buttons: sources, update interval, station locator |
 | **Backup** | Export the radio's settings to a SHA-256-stamped `.cfg`, and import one back |
 
 The **theme** (dark / light / high-contrast / follow-system) cycles from the header.
@@ -545,6 +547,37 @@ The address should stay `127.0.0.1`. Another address makes the port reachable fr
 computers, and the CAT protocol has no password — the Settings warn you if you change it.
 
 ---
+
+### Band conditions (PROPAGATION)
+
+On the **BAND** screen each band button's label is coloured by that band's current conditions:
+**green** good, **amber** fair, **red** poor. Hover over a button (with tooltips on) to see why — for
+example *"20 m: Good — HamQSL day at JO31: Fair; 14 stations heard in 15 min (RBN, PSK Reporter)"*.
+A band with no current data keeps its normal colour.
+
+The colours combine every source that is switched on and reachable:
+
+- **HamQSL (N0NBH)** — a propagation forecast for four band groups (80–40, 30–20, 17–15 and 12–10 m),
+  separately for day and night. 60 m follows the 80–40 m group; 160 m and 6 m are not rated by it.
+  Updated **every hour** by default (HamQSL asks for no more than that); choose up to every 24 hours.
+- **Spot activity** — how many different stations the spotting networks reported on a band in the last
+  15 minutes. Activity can only **raise** the forecast, by one step at most (a busy band is in use
+  somewhere, not necessarily open from your station), and it never makes a band look worse: a quiet
+  band may be open with nobody reporting. On its own (160 m, 6 m) it shows at most amber. RBN, the DX
+  cluster and FreeDV count every band; PSK Reporter counts only the bands in view. A network counts
+  only while it is switched on under **Spotting → Networks…**.
+
+**Settings → Propagation** has a checkbox for the colouring and one per source, all **on** until you
+untick them; unticking an activity network only stops counting it. **Locator** is your **radio's**
+Maidenhead square (4 or 6 characters, e.g. `JO31`): day and night follow the sun there, which matters
+when the radio is far from this computer. Without one, day is 06:00–18:00 on this computer's clock. A
+locator that is not yet complete is shown in the caution colour and not saved.
+
+**Without an internet connection nothing gets in the way.** Sources are fetched in the background; one
+that cannot be reached is retried later and shown as a status line on the tab, never as a dialog. The
+buttons then simply keep their normal colour.
+
+Band conditions: HamQSL.com (N0NBH).
 
 ## 11. Keyboard shortcuts
 
