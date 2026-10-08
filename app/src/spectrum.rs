@@ -92,6 +92,47 @@ fn rgba_row(
     }
 }
 
+/// The 3D view's settings, from the GRAPHICS tab (FR-PAN-15).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct View3d {
+    pub style: k4_stream::view3d::Style,
+    /// Fraction of the pane height the history climbs.
+    pub tilt: f32,
+    /// Rows of history laid out.
+    pub depth: usize,
+}
+
+/// The largest 3D image drawn on the CPU path, in pixels; it is stretched over the pane. The cost
+/// of a frame follows the image, not the window.
+const MAX_3D_W: f32 = 1024.0;
+const MAX_3D_H: f32 = 640.0;
+/// The most columns per row on the CPU path (tuned); `FR-PAN-15` allows fewer on the CPU.
+const MAX_3D_COLS: usize = 512;
+
+/// The canvas's per-pane state: the CPU waterfall ring (FR-UI-26) and the 3D image cache.
+#[derive(Debug, Default)]
+pub struct PaneState {
+    pub wf: WfRing,
+    d3: D3Cache,
+}
+
+/// The last 3D image, rebuilt only when a row arrives or the view changes.
+#[derive(Debug, Default)]
+struct D3Cache {
+    key: Option<(View3dKey, u64)>,
+    image: Option<(image::Handle, Size)>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct View3dKey {
+    view: View3d,
+    center_hz: u64,
+    span_hz: u32,
+    top_dbm: f32,
+    range_db: f32,
+    img: (u32, u32),
+}
+
 /// What a coloured row depends on besides its own data: a change of any of these redraws the
 /// whole ring.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -209,6 +250,8 @@ pub struct Spectrum<'a, Message> {
     /// RF passband edges `(lo, hi)` in absolute Hz for the overlay, from
     /// `k4_protocol::cat::rf_passband_hz`. `None` = mode/filter not yet known.
     pub passband_hz: Option<(u64, u64)>,
+    /// The 3D view instead of trace + waterfall (FR-PAN-15); `None` = the classic view.
+    pub view3d: Option<View3d>,
     /// Left-click → tune this VFO to the clicked frequency.
     pub on_qsy: fn(bool, u64) -> Message,
     /// Wheel scroll → step this VFO up (`+1`) / down (`-1`).
@@ -226,6 +269,123 @@ struct SpotView {
 
 impl<Message> Spectrum<'_, Message> {
     /// Every fresh spot inside the view, and the layout of their plates for a spectrum band
+    /// The 3D view over the whole pane (FR-PAN-15): the image from [`k4_stream::view3d`], rebuilt
+    /// only when a row arrives or the view changes, stretched over the pane, with the frequency axis
+    /// and the passband along the front edge.
+    fn draw_3d(
+        &self,
+        frame: &mut Frame,
+        state: &std::cell::RefCell<PaneState>,
+        v: View3d,
+        w: f32,
+        h: f32,
+    ) {
+        use k4_stream::view3d::{render_rgba, row_levels, Proj, Row};
+        if w < 2.0 || h < 2.0 || self.span_hz == 0 {
+            return;
+        }
+        let scale = (MAX_3D_W / w).min(MAX_3D_H / h).min(1.0);
+        let (iw, ih) = ((w * scale).round().max(1.0), (h * scale).round().max(1.0));
+        let cols = (iw as usize).min(MAX_3D_COLS);
+        let mut st = state.borrow_mut();
+        if let Ok(p) = self.pan.lock() {
+            let key = (
+                View3dKey {
+                    view: v,
+                    center_hz: self.center_hz,
+                    span_hz: self.span_hz,
+                    top_dbm: self.top_dbm,
+                    range_db: self.range_db,
+                    img: (iw as u32, ih as u32),
+                },
+                p.total(self.rx),
+            );
+            if st.d3.key != Some(key) {
+                let proj = Proj {
+                    w: iw,
+                    h: ih,
+                    tilt: v.tilt,
+                    depth: v.depth,
+                };
+                let rows = p.rows(self.rx);
+                let n = proj.rows_drawn(rows.len());
+                let levels: Vec<Vec<Option<f32>>> = rows
+                    .iter()
+                    .take(n)
+                    .map(|r| {
+                        row_levels(
+                            Row {
+                                bins: &r.bins,
+                                center_hz: r.center_hz,
+                                span_hz: r.span_hz,
+                            },
+                            cols,
+                            self.center_hz as i64,
+                            self.span_hz,
+                            self.top_dbm,
+                            self.range_db,
+                        )
+                    })
+                    .collect();
+                let rgba = render_rgba(&levels, proj, v.style, self.top_dbm, self.range_db);
+                st.d3.image = Some((
+                    image::Handle::from_rgba(iw as u32, ih as u32, rgba),
+                    Size::new(iw, ih),
+                ));
+                st.d3.key = Some(key);
+            }
+        }
+        if let Some((handle, _)) = &st.d3.image {
+            frame.draw_image(
+                Rectangle::new(Point::ORIGIN, Size::new(w, h)),
+                canvas::Image::new(handle.clone()).filter_method(image::FilterMethod::Linear),
+            );
+        }
+        // Along the front edge: the frequency labels and the passband, by frequency as in the
+        // classic view, so click-to-QSY agrees with them.
+        let label = Color::from_rgba8(150, 156, 168, 0.85);
+        const DIVS: u32 = 4;
+        for (i, hz) in axis_ticks(self.center_hz as i64, self.span_hz, DIVS)
+            .into_iter()
+            .enumerate()
+        {
+            let x = w * i as f32 / DIVS as f32;
+            let text = format!("{:.3}", hz as f64 / 1e6);
+            const EDGE: f32 = 3.0 * CHAR_W + 2.0;
+            frame.fill_text(Text {
+                content: text,
+                position: Point::new(x.clamp(EDGE, w - EDGE), h - 2.0),
+                color: label,
+                size: Pixels(TEXT_PX),
+                horizontal_alignment: iced::alignment::Horizontal::Center,
+                vertical_alignment: iced::alignment::Vertical::Bottom,
+                ..Text::default()
+            });
+        }
+        if let Some((lo, hi)) = self.passband_hz {
+            let x_of = |hz: u64| {
+                let frac = (hz as f64 - self.center_hz as f64) / self.span_hz as f64 + 0.5;
+                (frac as f32).clamp(0.0, 1.0) * w
+            };
+            let band = (1.0 - v.tilt) * h * 0.25;
+            let (x_lo, x_hi) = (x_of(lo), x_of(hi));
+            if x_hi > x_lo {
+                frame.fill_rectangle(
+                    Point::new(x_lo, h - band),
+                    Size::new(x_hi - x_lo, band),
+                    Color::from_rgba8(0x3D, 0x7E, 0xFF, 0.12),
+                );
+            }
+            let cx = x_of(self.vfo_hz);
+            frame.stroke(
+                &Path::line(Point::new(cx, h - band), Point::new(cx, h)),
+                Stroke::default()
+                    .with_width(1.0)
+                    .with_color(Color::from_rgba8(0x3D, 0x7E, 0xFF, 0.5)),
+            );
+        }
+    }
+
     /// `spec_h` tall and `w` wide. `None` when there is nothing to show or no room for a plate.
     fn spot_view(&self, w: f32, spec_h: f32) -> Option<SpotView> {
         use k4_spot::layout::{declutter, label_width, max_lanes, spot_x, Item};
@@ -386,8 +546,8 @@ pub(crate) fn trace_points(
 }
 
 impl<Message> canvas::Program<Message> for Spectrum<'_, Message> {
-    /// The CPU waterfall's ring of coloured rows (FR-UI-26); unused on the GPU path.
-    type State = std::cell::RefCell<WfRing>;
+    /// The CPU waterfall's ring of coloured rows (FR-UI-26) and the 3D view's image (FR-PAN-15).
+    type State = std::cell::RefCell<PaneState>;
 
     /// Click-to-QSY + wheel-tuning on the panadapter.
     /// trace: FR-PAN-04
@@ -476,6 +636,11 @@ impl<Message> canvas::Program<Message> for Spectrum<'_, Message> {
             Size::new(w, bg_h),
             Color::from_rgb8(10, 10, 14),
         );
+        // The 3D view replaces trace and waterfall over the whole pane (FR-PAN-15).
+        if let Some(v) = self.view3d {
+            self.draw_3d(&mut frame, state, v, w, h);
+            return vec![frame.into_geometry()];
+        }
 
         // dB grid + scale over the spectrum area (drawn under the trace).
         let grid = Color::from_rgba8(255, 255, 255, 0.07);
@@ -666,7 +831,7 @@ impl<Message> canvas::Program<Message> for Spectrum<'_, Message> {
             let tex_w = (w.round() as usize).clamp(1, MAX_TEXTURE_WIDTH);
             let cap = (wf_h.round() as usize).clamp(1, crate::worker::WATERFALL_ROWS);
             match self.pan.lock() {
-                Ok(p) => state.borrow_mut().update(
+                Ok(p) => state.borrow_mut().wf.update(
                     p.rows(self.rx),
                     p.total(self.rx),
                     self.center_hz as i64,
@@ -975,6 +1140,7 @@ mod spot_click_tests {
             span_hz: SPAN,
             vfo_hz: CENTER,
             passband_hz: None,
+            view3d: None,
             on_qsy: qsy,
             on_wheel: wheel,
         };
@@ -1120,6 +1286,7 @@ mod spot_click_tests {
             span_hz: sp.span_hz,
             vfo_hz: sp.vfo_hz,
             passband_hz: sp.passband_hz,
+            view3d: sp.view3d,
             on_qsy: sp.on_qsy,
             on_wheel: sp.on_wheel,
         }

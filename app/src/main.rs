@@ -783,6 +783,28 @@ impl std::fmt::Display for IntervalHours {
     }
 }
 
+/// A panadapter view choice on the GRAPHICS tab (FR-PAN-15).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ViewChoice(k4_config::PanView);
+
+impl ViewChoice {
+    const ALL: [ViewChoice; 3] = [
+        ViewChoice(k4_config::PanView::Classic),
+        ViewChoice(k4_config::PanView::Traces3d),
+        ViewChoice(k4_config::PanView::Surface3d),
+    ];
+}
+
+impl std::fmt::Display for ViewChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self.0 {
+            k4_config::PanView::Classic => "Spectrum + waterfall",
+            k4_config::PanView::Traces3d => "3D — stacked traces",
+            k4_config::PanView::Surface3d => "3D — shaded surface",
+        })
+    }
+}
+
 /// A renderer choice on the GRAPHICS tab (FR-UI-27).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RendererChoice(k4_config::Renderer);
@@ -1142,6 +1164,11 @@ enum Message {
     StationLocator(String),
     // GRAPHICS settings (FR-UI-27).
     GraphicsRenderer(RendererChoice),
+    GraphicsView(ViewChoice),
+    GraphicsTilt(u8),
+    GraphicsDepth(u16),
+    /// A slider was released: save the GRAPHICS settings once, not on every step of a drag.
+    GraphicsSave,
     // TX config (FR-KEY-01/FR-AUD-CFG-01), Fn VFO ops (FR-VFO-07), MENU (FR-MENU-01).
     SetTxTab(TxTab),
     Tx(TxMsg),
@@ -1975,8 +2002,23 @@ impl App {
 
     /// The Settings tab for the CAT server (FR-CATSRV-01): the switch, where it listens, a
     /// warning when that is not this computer, what it is doing, and how to point software at it.
-    /// The GRAPHICS settings tab (FR-UI-27): the renderer in use and why, and the one to start
-    /// with next time.
+    /// The 3D view to draw, from the GRAPHICS settings; `None` = spectrum + waterfall (FR-PAN-15).
+    fn view3d(&self) -> Option<spectrum::View3d> {
+        use k4_stream::view3d::Style;
+        let style = match self.graphics.pan_view {
+            k4_config::PanView::Classic => return None,
+            k4_config::PanView::Traces3d => Style::Traces,
+            k4_config::PanView::Surface3d => Style::Surface,
+        };
+        Some(spectrum::View3d {
+            style,
+            tilt: f32::from(self.graphics.tilt_pct()) / 100.0,
+            depth: usize::from(self.graphics.depth_rows()),
+        })
+    }
+
+    /// The GRAPHICS settings tab (FR-UI-27): the panadapter view and its 3D tilt and depth, the
+    /// renderer in use and why, and the one to start with next time.
     fn graphics_settings_view(&self) -> Element<'_, Message> {
         let dim = role_color(ui::ColorRole::Inactive);
         let caution = role_color(ui::ColorRole::Caution);
@@ -1988,8 +2030,58 @@ impl App {
                 )
             })
             .unwrap_or_else(|| "Renderer not decided at start.".to_string());
-        let mut col = Column::new()
-            .spacing(8)
+        let g = &self.graphics;
+        let mut col = Column::new().spacing(8).push(
+            Row::new()
+                .spacing(8)
+                .align_y(Alignment::Center)
+                .push(Text::new("View").size(12).width(Length::Fixed(72.0)))
+                .push(
+                    pick_list(
+                        ViewChoice::ALL,
+                        Some(ViewChoice(g.pan_view)),
+                        Message::GraphicsView,
+                    )
+                    .text_size(12),
+                ),
+        );
+        if g.pan_view != k4_config::PanView::Classic {
+            col = col
+                .push(
+                    Row::new()
+                        .spacing(8)
+                        .align_y(Alignment::Center)
+                        .push(Text::new("Tilt").size(12).width(Length::Fixed(72.0)))
+                        .push(
+                            slider(
+                                k4_config::TILT_MIN_PCT..=k4_config::TILT_MAX_PCT,
+                                g.tilt_pct(),
+                                Message::GraphicsTilt,
+                            )
+                            .on_release(Message::GraphicsSave)
+                            .width(Length::Fixed(240.0)),
+                        )
+                        .push(Text::new(format!("{} %", g.tilt_pct())).size(12)),
+                )
+                .push(
+                    Row::new()
+                        .spacing(8)
+                        .align_y(Alignment::Center)
+                        .push(Text::new("Depth").size(12).width(Length::Fixed(72.0)))
+                        .push(
+                            slider(
+                                k4_config::DEPTH_MIN_ROWS..=k4_config::DEPTH_MAX_ROWS,
+                                g.depth_rows(),
+                                Message::GraphicsDepth,
+                            )
+                            .on_release(Message::GraphicsSave)
+                            .width(Length::Fixed(240.0)),
+                        )
+                        .push(Text::new(format!("{} rows", g.depth_rows())).size(12)),
+                );
+        }
+        col = col
+            .push(Text::new("Renderer").size(12).color(dim))
             .push(Text::new(status).size(12))
             .push(
                 Row::new()
@@ -3114,6 +3206,13 @@ impl App {
                 self.graphics.renderer = c.0;
                 self.save_config();
             }
+            Message::GraphicsView(v) => {
+                self.graphics.pan_view = v.0;
+                self.save_config();
+            }
+            Message::GraphicsTilt(t) => self.graphics.tilt_pct = t,
+            Message::GraphicsDepth(d) => self.graphics.depth_rows = d,
+            Message::GraphicsSave => self.save_config(),
             Message::StationLocator(v) => {
                 self.station_locator = v
                     .chars()
@@ -9097,11 +9196,15 @@ impl App {
                 .padding(8)
                 .into()
             } else {
+                let view3d = self.view3d();
+                // The 3D view draws the whole pane itself (FR-PAN-15): no GPU waterfall under it.
+                let gpu_waterfall = self.gpu_waterfall && view3d.is_none();
                 let canvas = Canvas::new(spectrum::Spectrum {
                     latest: &latest.bins,
                     pan: &self.pan,
                     rx: usize::from(p.is_b()),
-                    gpu_waterfall: self.gpu_waterfall,
+                    gpu_waterfall,
+                    view3d,
                     spots: &self.spots,
                     spot_max_age_secs: u64::from(k4_config::parse_spot_max_age_min(
                         &self.spot_max_age,
@@ -9118,7 +9221,7 @@ impl App {
                 })
                 .width(Length::Fill)
                 .height(Length::Fill);
-                if self.gpu_waterfall {
+                if gpu_waterfall {
                     // The waterfall is a GPU widget under the canvas (FR-PAN-12): the bottom 60 %
                     // of the pane, matching the canvas's own 40/60 split. The canvas sits on top,
                     // transparent over that band, and keeps the grid, overlays and all mouse
@@ -12816,8 +12919,9 @@ mod large_screen_tests {
 
     /// FR-UI-27: the renderer is decided before iced starts, from the saved setting; the GPU
     /// waterfall follows that decision; a GPU frame marks the GPU as drawing; the setting is loaded,
-    /// saved and shown on its tab. Structural, over the code above this module.
-    /// trace: FR-UI-27
+    /// saved and shown on its tab. FR-PAN-15: the 3D view is switched from it. Structural, over the
+    /// code above this module.
+    /// trace: FR-UI-27, FR-PAN-15
     #[test]
     fn fr_ui_27_renderer_is_decided_at_start_and_wired() {
         let whole = include_str!("main.rs");
@@ -12841,6 +12945,37 @@ mod large_screen_tests {
             ("the tab", "settings_tab_btn(SettingsTab::Graphics"),
         ] {
             assert!(code.contains(&squash(needle)), "not wired ({what}): {needle}");
+        }
+        // FR-PAN-15: the view setting reaches the canvas, the 3D view suppresses the GPU waterfall
+        // under it, the sliders save on release, and the view choice persists.
+        for (what, needle) in [
+            ("the canvas gets the 3D view", "let view3d = self.view3d();"),
+            (
+                "no GPU waterfall under the 3D view",
+                "let gpu_waterfall = self.gpu_waterfall && view3d.is_none();",
+            ),
+            ("the GPU branch follows it", "if gpu_waterfall {"),
+            (
+                "the view persists",
+                "self.graphics.pan_view = v.0; self.save_config();",
+            ),
+            (
+                "a slider saves on release",
+                ".on_release(Message::GraphicsSave)",
+            ),
+            (
+                "the tilt reaches the view",
+                "tilt: f32::from(self.graphics.tilt_pct()) / 100.0,",
+            ),
+            (
+                "the depth reaches the view",
+                "depth: usize::from(self.graphics.depth_rows()),",
+            ),
+        ] {
+            assert!(
+                code.contains(&squash(needle)),
+                "not wired ({what}): {needle}"
+            );
         }
         let wf = include_str!("waterfall_gpu.rs");
         assert!(

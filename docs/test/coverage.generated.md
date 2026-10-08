@@ -107,7 +107,7 @@ Legend: ✅ test-traced · 🟡 waived (see r3-waivers.md) · ⚪ not test-requi
 | `FR-PAN-12` | S | T/D | ✅ |
 | `FR-PAN-13` | S | T/D | ✅ |
 | `FR-PAN-14` | S | T/D | ✅ |
-| `FR-PAN-15` | S | T/D | ❌ |
+| `FR-PAN-15` | S | T/D | ✅ |
 | `FR-PAN-CTL-01` | S | T | ✅ |
 | `FR-PAN-CTL-02` | S | T | ✅ |
 | `FR-PAN-CTL-03` | C | T | ⚪ |
@@ -189,8 +189,8 @@ Legend: ✅ test-traced · 🟡 waived (see r3-waivers.md) · ⚪ not test-requi
 | `FR-UI-23` | S | D | ✅ |
 | `FR-UI-24` | C | T | ✅ |
 | `FR-UI-25` | C | T/D | ✅ |
-| `FR-UI-26` | S | T/D | ❌ |
-| `FR-UI-27` | S | T/D | ❌ |
+| `FR-UI-26` | S | T/D | ✅ |
+| `FR-UI-27` | S | T/D | ✅ |
 | `FR-UI-ALT-01` | C | T/D | ✅ |
 | `FR-UI-HOLD-01` | S | T/D | ✅ |
 | `FR-UI-POPUP-01` | S | T/D | ✅ |
