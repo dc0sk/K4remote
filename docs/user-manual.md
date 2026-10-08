@@ -2,7 +2,7 @@
 title: "K4 Remote — User Manual"
 status: Draft
 version: "0.10.0"
-updated: 2026-10-04
+updated: 2026-10-08
 authors:
   - Simon Keimer (DC0SK)
 ---
@@ -438,6 +438,7 @@ scrolling:
 | **KPA1500** | Amplifier support on/off, and the **Configuration…** window |
 | **CAT Server** | The CAT server for logging and digital-mode software, and PTT from it |
 | **Propagation** | Band-condition colours on the band buttons: sources, update interval, station locator |
+| **Graphics** | The panadapter view (spectrum + waterfall, or 3D), 3D tilt and depth, the renderer in use, and the renderer for the next start |
 | **Backup** | Export the radio's settings to a SHA-256-stamped `.cfg`, and import one back |
 
 The **theme** (dark / light / high-contrast / follow-system) cycles from the header.
@@ -578,6 +579,28 @@ that cannot be reached is retried later and shown as a status line on the tab, n
 buttons then simply keep their normal colour.
 
 Band conditions: HamQSL.com (N0NBH).
+
+### Graphics: 3D spectrum and the renderer
+
+The window opens **maximised**, and the spectrum and waterfall take all the space the other panels
+leave, so a large screen shows a large panadapter. The waterfall keeps up to 256 rows of history and
+shows as many as its height has pixels: a taller pane shows more time.
+
+**Settings → Graphics → View** switches the panadapter between:
+
+- **Spectrum + waterfall** — the classic view (default);
+- **3D — stacked traces** — each past spectrum drawn as a line behind the previous one, the newest in
+  front, time receding into the background; nearer lines hide farther ones;
+- **3D — shaded surface** — the same as a continuous landscape coloured by level, like the waterfall.
+
+For the 3D views, **Tilt** sets how far the history climbs up the pane (20–90 %) and **Depth** how many
+rows of history are shown (16–256). The frequency axis and the passband sit along the front edge, and
+clicking or wheel-tuning there works as in the classic view. Spot nameplates are not shown in 3D.
+
+**Renderer** shows what is drawing now — *GPU (wgpu)* or *CPU (software)* — and why, and chooses the
+renderer for the **next start**: *Auto* (use the GPU if there is one, the default), *GPU*, or *CPU*.
+If the GPU is chosen but none is found, the app starts on the CPU instead and says so. The environment
+variables `ICED_BACKEND` and `K4_WATERFALL`, if set, override the setting (for diagnosis).
 
 ## 11. Keyboard shortcuts
 

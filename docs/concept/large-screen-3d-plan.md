@@ -1,7 +1,7 @@
 ---
 title: "Large screens, 3D spectrum and the GRAPHICS tab — design (FR-UI-26, FR-PAN-15, FR-UI-27)"
 status: Draft
-version: "0.2"
+version: "0.3"
 updated: 2026-10-08
 authors:
   - Simon Keimer (DC0SK)
@@ -31,6 +31,18 @@ finding was checked against the source and taken:
 | 8 | `WindowOpened` carries no id; `Settings` has no `maximized` | §2: `open_main.then(\|id\| window::maximize(id, true))`; prefs loaded in `main` for §4 |
 | 9 | serde fails the whole load on an unknown enum variant | §5: `#[serde(other)]` on the default variant |
 | 10 | A pure draw-order test cannot catch a reversed GPU vertex mapping; a GPU-vs-CPU golden must run at the same column count | §6 |
+
+## 0.1 As built (v0.3, 2026-10-08)
+
+- **The 3D view uses the CPU rasteriser on both renderers** (§3.4's CPU path; under wgpu the image
+  is uploaded and drawn by the GPU). Measured in release mode at the CPU caps (1024 × 640 image,
+  512 columns): traces 1.8 ms (depth 64) / 4.2 ms (256), surface 3.8 / 6.5 ms per **rebuilt**
+  frame — and a frame is rebuilt only when a row arrives or the view changes. That is well inside
+  budget, so the **dedicated GPU shader path (§3.4 GPU) is deferred**: re-open it if the 3D view is
+  measured to cost too much on a target (e.g. the Pi) or needs per-pixel columns on the GPU.
+- **Spot nameplates are not drawn in the 3D view** (v1); the frequency axis and the passband are,
+  along the front edge.
+- The GPU golden gained a capped-band case; the waterfall golden's H became 512 (§2).
 
 ## 1. What exists (read from the code, 2026-10-08)
 
