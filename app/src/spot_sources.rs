@@ -17,7 +17,9 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use k4_spot::bandcond::{self, Activity, Forecast};
 use k4_spot::freedv_source::{FreeDvConfig, FreeDvSource};
+use k4_spot::hamqsl::HamqslSource;
 use k4_spot::mqtt_source::{CertInfo, MqttConfig, MqttSource};
 use k4_spot::polled::{PolledConfig, PolledSource};
 use k4_spot::pota;
@@ -51,6 +53,41 @@ pub struct Statuses {
     pub psk_reporter: Option<Status>,
     pub pota: Option<Status>,
     pub freedv: Option<Status>,
+    /// What the band-condition colours are made from (FR-UI-25).
+    pub bands: BandInputs,
+}
+
+/// The band-condition inputs the worker gathers (FR-UI-25); the UI combines them with the
+/// station's locator and the colour switch.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct BandInputs {
+    /// HamQSL's forecast while it still counts (both freshness limits), else `None`.
+    pub forecast: Option<Forecast>,
+    /// Distinct calls heard per band ([`bandcond::BANDS`] order) in the activity window, by the
+    /// enabled activity networks.
+    pub activity: [usize; 11],
+    /// Which networks were counted.
+    pub counted: Vec<Network>,
+    /// HamQSL's state; `None` = switched off.
+    pub hamqsl: Option<HamqslStatus>,
+}
+
+/// HamQSL's state, for the PROPAGATION tab's status line.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct HamqslStatus {
+    /// The last failure, until a request succeeds.
+    pub error: Option<String>,
+    /// Seconds until the next request (rounded to the minute, so the snapshot does not churn).
+    pub next_in_min: u64,
+}
+
+/// The band-condition settings the worker needs (FR-UI-25).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PropagationCfg {
+    pub hamqsl: bool,
+    pub hamqsl_interval_secs: u64,
+    /// The networks whose spots count as activity.
+    pub activity: Vec<Network>,
 }
 
 pub type StatusHandle = Arc<Mutex<Statuses>>;
@@ -76,6 +113,9 @@ pub enum Cmd {
     /// Try again now instead of waiting out the backoff — sent after the operator approves a
     /// certificate.
     RetryNow,
+    /// The band-condition settings (FR-UI-25). Until the first one arrives HamQSL is not fetched
+    /// and no activity is reported.
+    Propagation(PropagationCfg),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -166,6 +206,23 @@ impl Feed {
         }
     }
 
+    /// Hand every parsed spot, before the window, to the activity counter (FR-UI-25). Polled
+    /// feeds (POTA) are activations, not propagation evidence, and get no tap.
+    fn set_activity_tap(&mut self, activity: &Arc<Mutex<Activity>>) {
+        let a = Arc::clone(activity);
+        let tap: k4_spot::ActivityTap = Box::new(move |s: &Spot| {
+            if let Ok(mut a) = a.lock() {
+                a.note(&s.call, s.freq_hz, s.network, unix_now());
+            }
+        });
+        match self {
+            Feed::Telnet(s) => s.set_activity_tap(Some(tap)),
+            Feed::Mqtt(s) => s.set_activity_tap(Some(tap)),
+            Feed::FreeDv(s) => s.set_activity_tap(Some(tap)),
+            Feed::Polled(_) => {}
+        }
+    }
+
     fn retry_now(&mut self) {
         match self {
             Feed::Mqtt(s) => s.retry_now(),
@@ -235,6 +292,16 @@ fn run(rx: &Receiver<Cmd>, store: &SpotHandle, status: &StatusHandle, pins: &tls
     // label.
     let mut window: Option<(u64, u64)> = Some((1, 0));
     let mut published = Statuses::default();
+    // FR-UI-25. Made once and reconfigured in place, so a settings change never refetches inside
+    // the hour; off until the UI sends the settings, so an opted-out source is never asked.
+    let activity: Arc<Mutex<Activity>> = Arc::default();
+    let mut hamqsl = HamqslSource::new(
+        crate::http_fetch::fetcher(),
+        bandcond::HAMQSL_INTERVAL_DEFAULT_SECS,
+        Instant::now(),
+    );
+    hamqsl.set_enabled(false);
+    let mut counted: Option<Vec<Network>> = None;
     loop {
         loop {
             match rx.try_recv() {
@@ -259,6 +326,7 @@ fn run(rx: &Receiver<Cmd>, store: &SpotHandle, status: &StatusHandle, pins: &tls
                                 want.as_ref().and_then(|c| Feed::new(c, pins)).map(|mut s| {
                                     s.set_window(window);
                                     s.set_topics(topics_for(window));
+                                    s.set_activity_tap(&activity);
                                     s
                                 });
                             slot.cfg = want;
@@ -277,6 +345,11 @@ fn run(rx: &Receiver<Cmd>, store: &SpotHandle, status: &StatusHandle, pins: &tls
                     for src in slots.iter_mut().filter_map(|s| s.src.as_mut()) {
                         src.retry_now();
                     }
+                }
+                Ok(Cmd::Propagation(p)) => {
+                    hamqsl.set_interval(p.hamqsl_interval_secs);
+                    hamqsl.set_enabled(p.hamqsl);
+                    counted = Some(p.activity);
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => return,
@@ -305,12 +378,16 @@ fn run(rx: &Receiver<Cmd>, store: &SpotHandle, status: &StatusHandle, pins: &tls
             }
         }
 
+        let unix = unix_now();
+        hamqsl.poll(Instant::now(), unix);
+        let bands = band_inputs(&hamqsl, &activity, counted.as_deref(), unix);
         let now = Statuses {
             rbn: slots[0].status(),
             dx_cluster: slots[1].status(),
             psk_reporter: slots[2].status(),
             pota: slots[3].status(),
             freedv: slots[4].status(),
+            bands,
         };
         if now != published {
             if let Ok(mut g) = status.lock() {
@@ -319,6 +396,45 @@ fn run(rx: &Receiver<Cmd>, store: &SpotHandle, status: &StatusHandle, pins: &tls
             published = now;
         }
         thread::sleep(pace(active, started.elapsed()));
+    }
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+/// The band-condition snapshot for this pass (FR-UI-25). Nothing is reported until the settings
+/// have arrived; activity older than its window is dropped as it goes.
+fn band_inputs(
+    hamqsl: &HamqslSource,
+    activity: &Mutex<Activity>,
+    counted: Option<&[Network]>,
+    unix: u64,
+) -> BandInputs {
+    let Some(networks) = counted else {
+        return BandInputs::default();
+    };
+    let mut counts = [0usize; 11];
+    if let Ok(mut a) = activity.lock() {
+        a.purge(unix);
+        for (n, band) in counts.iter_mut().zip(bandcond::BANDS) {
+            *n = a.count(band, unix, networks);
+        }
+    }
+    BandInputs {
+        forecast: hamqsl.current(unix).cloned(),
+        activity: counts,
+        counted: networks.to_vec(),
+        hamqsl: hamqsl.enabled().then(|| HamqslStatus {
+            error: hamqsl.error().map(str::to_string),
+            next_in_min: hamqsl
+                .next_attempt()
+                .saturating_duration_since(Instant::now())
+                .as_secs()
+                .div_ceil(60),
+        }),
     }
 }
 
@@ -589,6 +705,78 @@ mod tests {
         wait("all sources are stopped", || {
             let s = status.lock().unwrap();
             s.rbn.is_none() && s.dx_cluster.is_none() && s.psk_reporter.is_none()
+        });
+    }
+
+    /// FR-UI-25: through the real worker, a spot on another band than the one in view counts as
+    /// that band's activity without being stored; an unticked network is not counted; nothing is
+    /// reported before the settings arrive, and HamQSL switched off reports no forecast.
+    /// trace: FR-UI-25
+    #[test]
+    fn fr_ui_25_worker_counts_activity_outside_the_window() {
+        let store: SpotHandle = Arc::default();
+        let status: StatusHandle = Arc::default();
+        let (tx, rx) = mpsc::channel();
+        spawn(rx, Arc::clone(&store), Arc::clone(&status), Arc::default());
+
+        let rbn = mock_cluster("DX de DL1AA-#: 7025.0 K1ABC CW 20 dB 25 WPM CQ 1200Z\r\n");
+        tx.send(Cmd::Window(Some((14_000_000, 14_350_000))))
+            .unwrap(); // 20 m in view
+        tx.send(Cmd::Configure {
+            rbn: Some(cfg(Network::Rbn, rbn)),
+            dx_cluster: None,
+            psk_reporter: None,
+            pota: None,
+            freedv: None,
+        })
+        .unwrap();
+        wait("the source connects", || {
+            status
+                .lock()
+                .unwrap()
+                .rbn
+                .as_ref()
+                .is_some_and(|s| s.stats.outside_window > 0)
+        });
+        assert_eq!(
+            status.lock().unwrap().bands,
+            BandInputs::default(),
+            "no settings yet"
+        );
+
+        let forty = bandcond::BANDS.iter().position(|b| *b == "40m").unwrap();
+        tx.send(Cmd::Propagation(PropagationCfg {
+            hamqsl: false,
+            hamqsl_interval_secs: 3600,
+            activity: vec![Network::Rbn],
+        }))
+        .unwrap();
+        wait("40 m activity counted", || {
+            status.lock().unwrap().bands.activity[forty] == 1
+        });
+        let b = status.lock().unwrap().bands.clone();
+        assert_eq!(
+            b.activity.iter().sum::<usize>(),
+            1,
+            "one station, heard three times: {b:?}"
+        );
+        assert!(
+            b.hamqsl.is_none() && b.forecast.is_none(),
+            "HamQSL off: {b:?}"
+        );
+        assert!(
+            store.lock().unwrap().is_empty(),
+            "the 40 m spot is not stored"
+        );
+
+        tx.send(Cmd::Propagation(PropagationCfg {
+            hamqsl: false,
+            hamqsl_interval_secs: 3600,
+            activity: vec![],
+        }))
+        .unwrap();
+        wait("RBN unticked: not counted", || {
+            status.lock().unwrap().bands.activity[forty] == 0
         });
     }
 

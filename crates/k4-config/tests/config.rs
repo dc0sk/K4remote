@@ -1006,3 +1006,63 @@ fn fr_catsrv_10_cat_tx_settings_default_and_bounds() {
         "the transmit opt-in must never be saved:\n{text}"
     );
 }
+
+/// FR-UI-25: a configuration written before the PROPAGATION settings existed — and one with the
+/// section present but a field missing — loads with every source and the colouring **on**; the
+/// HamQSL interval never reads below its hourly floor; the locator persists.
+/// trace: FR-UI-25
+#[test]
+fn fr_ui_25_propagation_defaults_on_and_persist() {
+    let old: Prefs = toml::from_str("tune_step_hz = 100").expect("legacy config");
+    let p = &old.propagation;
+    assert!(
+        p.colour_bands
+            && p.hamqsl
+            && p.activity_rbn
+            && p.activity_dx_cluster
+            && p.activity_psk_reporter
+            && p.activity_freedv,
+        "every source on by default: {p:?}"
+    );
+    assert_eq!(p.hamqsl_interval_secs(), 3600);
+    assert_eq!(old.station_locator, "");
+
+    let partial: Prefs =
+        toml::from_str("tune_step_hz = 100\n[propagation]\nhamqsl = false\n").expect("partial");
+    let q = &partial.propagation;
+    assert!(!q.hamqsl, "the operator's choice kept");
+    // Each absent field must come out on — a plain `#[serde(default)]` on a bool gives `false`,
+    // which only a section that is present but incomplete exposes.
+    assert!(
+        q.colour_bands
+            && q.activity_rbn
+            && q.activity_dx_cluster
+            && q.activity_psk_reporter
+            && q.activity_freedv,
+        "an absent field is on, not false: {q:?}"
+    );
+    assert_eq!(partial.propagation.hamqsl_interval_secs(), 3600);
+
+    let prefs = Prefs {
+        station_locator: "JO31".into(),
+        propagation: k4_config::PropagationPrefs {
+            activity_freedv: false,
+            hamqsl_interval_secs: 60, // below HamQSL's floor
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let back: Prefs = toml::from_str(&toml::to_string(&prefs).unwrap()).unwrap();
+    assert_eq!(back.station_locator, "JO31");
+    assert!(!back.propagation.activity_freedv);
+    assert_eq!(
+        back.propagation.hamqsl_interval_secs(),
+        3600,
+        "never below hourly"
+    );
+    let long = k4_config::PropagationPrefs {
+        hamqsl_interval_secs: 10_000_000,
+        ..Default::default()
+    };
+    assert_eq!(long.hamqsl_interval_secs(), 86_400);
+}

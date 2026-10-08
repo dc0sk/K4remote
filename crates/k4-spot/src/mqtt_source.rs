@@ -31,7 +31,7 @@ use crate::cluster::RateGate;
 use crate::mqtt::{self, Packet, PacketReader};
 use crate::psk::parse_payload;
 use crate::telnet::{ConnState, Stats, Timing};
-use crate::{Network, SourceError, Spot, SpotSource};
+use crate::{ActivityTap, Network, SourceError, Spot, SpotSource};
 
 /// What to connect to.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -154,6 +154,7 @@ pub struct MqttSource {
     topics: Vec<String>,
     /// Only spots inside `[lo, hi]` Hz are kept; `None` keeps everything.
     window: Option<(u64, u64)>,
+    tap: Option<ActivityTap>,
     stats: Stats,
     attempts: u64,
     epoch: Instant,
@@ -183,6 +184,7 @@ impl MqttSource {
             next_attempt: now,
             topics: Vec::new(),
             window: None,
+            tap: None,
             stats: Stats::default(),
             attempts: 0,
             epoch: now,
@@ -221,6 +223,11 @@ impl MqttSource {
     }
 
     /// Keep only spots between `lo` and `hi` Hz (`None` = all).
+    /// Hand every parsed spot, before the window, to `tap` (FR-UI-25); `None` stops it.
+    pub fn set_activity_tap(&mut self, tap: Option<ActivityTap>) {
+        self.tap = tap;
+    }
+
     pub fn set_window(&mut self, window: Option<(u64, u64)>) {
         self.window = window;
     }
@@ -402,6 +409,9 @@ impl MqttSource {
                         self.stats.rejected += 1;
                         continue;
                     };
+                    if let Some(tap) = self.tap.as_mut() {
+                        tap(&spot);
+                    }
                     if let Some((lo, hi)) = window {
                         if spot.freq_hz < lo || spot.freq_hz > hi {
                             self.stats.outside_window += 1;

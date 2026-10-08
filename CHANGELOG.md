@@ -14,6 +14,14 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
 
 ### Added
 
+- **Band buttons coloured by band conditions.** On the BAND screen each band's
+  label is green, amber or red for good, fair or poor conditions, from the
+  HamQSL (N0NBH) forecast combined with how many stations the spotting
+  networks hear on that band; the tooltip says why. Configure it on the new
+  **Settings → Propagation** tab: every source on until you untick it, the
+  HamQSL update interval (hourly at most), and your radio's locator for day
+  and night. It keeps working — uncoloured — without an internet connection.
+  (`FR-UI-25`)
 - A build gate (`cargo xtask`, rule R6) for public functions that no production
   code calls. Today's 29 are listed with a reason each in
   `docs/test/r6-reachability-baseline.md`; a new one fails the build, and so

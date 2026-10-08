@@ -6,10 +6,12 @@
 //! All times are Unix seconds. The caller supplies `now`, so nothing here reads a
 //! clock and every result is deterministic.
 
+pub mod bandcond;
 pub mod cluster;
 pub mod dns;
 pub mod freedv;
 pub mod freedv_source;
+pub mod hamqsl;
 pub mod json;
 pub mod layout;
 mod model;
@@ -26,7 +28,8 @@ pub mod tooltip;
 pub mod ws;
 
 pub use model::{
-    normalise_callsign, sanitise_text, Network, Parsed, SourceError, Spot, SpotSource, MAX_TEXT_LEN,
+    normalise_callsign, sanitise_text, ActivityTap, Network, Parsed, SourceError, Spot, SpotSource,
+    MAX_TEXT_LEN,
 };
 pub use store::{Insert, SpotStore, DEDUPE_TOLERANCE_HZ, DEFAULT_CAPACITY};
 

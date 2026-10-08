@@ -30,7 +30,7 @@ use crate::mqtt_source::{plain_connector, CertInfo, ConnectError, Connector, Wir
 use crate::sio::{self, Packet};
 use crate::telnet::{ConnState, Stats, Timing};
 use crate::ws::{self, FrameReader, Message, Rng};
-use crate::{Network, SourceError, Spot, SpotSource};
+use crate::{ActivityTap, Network, SourceError, Spot, SpotSource};
 
 /// The path of the Socket.IO endpoint on a WebSocket (Engine.IO revision 4).
 pub const PATH: &str = "/socket.io/?EIO=4&transport=websocket";
@@ -109,6 +109,7 @@ pub struct FreeDvSource {
     backoff: Duration,
     /// Only spots inside `[lo, hi]` Hz are kept; `None` keeps everything.
     window: Option<(u64, u64)>,
+    tap: Option<ActivityTap>,
     roster: Roster,
     stats: Stats,
     /// Packets that were not valid once the session was running (a bad event costs only itself).
@@ -142,6 +143,7 @@ impl FreeDvSource {
             conn: None,
             next_attempt: now,
             window: None,
+            tap: None,
             roster: Roster::default(),
             stats: Stats::default(),
             packets_rejected: 0,
@@ -185,6 +187,11 @@ impl FreeDvSource {
     }
 
     /// Keep only spots between `lo` and `hi` Hz (`None` = all).
+    /// Hand every parsed spot, before the window, to `tap` (FR-UI-25); `None` stops it.
+    pub fn set_activity_tap(&mut self, tap: Option<ActivityTap>) {
+        self.tap = tap;
+    }
+
     pub fn set_window(&mut self, window: Option<(u64, u64)>) {
         self.window = window;
     }
@@ -328,6 +335,9 @@ impl FreeDvSource {
 
     /// Hand a spot to the sink if it is inside the window and the rate allows.
     fn emit(&mut self, spot: Spot, now_ms: u64, sink: &mut dyn FnMut(Spot)) {
+        if let Some(tap) = self.tap.as_mut() {
+            tap(&spot);
+        }
         if let Some((lo, hi)) = self.window {
             if spot.freq_hz < lo || spot.freq_hz > hi {
                 self.stats.outside_window += 1;

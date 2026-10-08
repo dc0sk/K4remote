@@ -168,6 +168,8 @@ const LONG: Duration = Duration::from_secs(5);
 
 /// The source sends exactly a clean-session CONNECT with no credentials, subscribes to exactly
 /// the topic it was given, delivers the in-window spots, and counts the bad and out-of-window ones.
+/// The activity tap sees the out-of-window spot too (FR-UI-25).
+/// trace: FR-UI-25
 #[test]
 fn fr_spot_05_source_connects_subscribes_and_streams() {
     let (tx, rx) = mpsc::channel();
@@ -196,6 +198,11 @@ fn fr_spot_05_source_connects_subscribes_and_streams() {
     let mut src = MqttSource::with_timing(cfg(port), fast());
     src.set_topics(vec![TOPIC_20M.into()]);
     src.set_window(Some((14_000_000, 14_100_000)));
+    let tapped = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let t = std::sync::Arc::clone(&tapped);
+    src.set_activity_tap(Some(Box::new(move |s| {
+        t.lock().unwrap().push(s.call.clone())
+    })));
     let run = pump(&mut src, LONG, |_, r| r.spots.len() >= 2);
 
     let calls: Vec<&str> = run.spots.iter().map(|s| s.call.as_str()).collect();
@@ -206,6 +213,11 @@ fn fr_spot_05_source_connects_subscribes_and_streams() {
     assert_eq!(src.state(), ConnState::Connected);
     let st = src.stats();
     assert_eq!((st.spots, st.rejected, st.outside_window), (2, 1, 1));
+    assert_eq!(
+        *tapped.lock().unwrap(),
+        ["AA1AAA", "CC3CCC", "DD4DDD"],
+        "the tap sees the out-of-window spot, before the window"
+    );
     drop(src);
 
     let (connect, topics, others) = rx.recv_timeout(Duration::from_secs(3)).unwrap();
