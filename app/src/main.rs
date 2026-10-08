@@ -1269,7 +1269,11 @@ impl App {
             icon: app_icon(),
             ..Default::default()
         });
-        let mut window_tasks = vec![open_main.map(|_| Message::WindowOpened)];
+        // Opened maximised, so on a large screen the window manager gives it the screen's free area
+        // and the panadapter takes what the panels leave (FR-UI-26).
+        let mut window_tasks = vec![open_main
+            .then(|id| iced::window::maximize(id, true))
+            .map(|_: ()| Message::WindowOpened)];
         // Restore the detached diagnostics window if it was enabled.
         let diag_window = if diag_enabled {
             let (id, open) = iced::window::open(diag_window_settings());
@@ -7152,7 +7156,9 @@ impl App {
             .style(panel_style)
             .padding(14)
             .width(Length::Fill)
-            .height(Length::Fixed(SCREEN_H))
+            // The same Fill as the pane it replaces, so the frame never resizes (FR-UI-19), at any
+            // window size (FR-UI-26).
+            .height(Length::Fill)
             .into()
     }
 
@@ -9109,8 +9115,9 @@ impl App {
                 .padding(8)
                 .width(Length::Fill)
                 // Match the menu-screen slot exactly so the frame doesn't resize
-                // when swapping the spectrum for a config screen (FR-UI-19).
-                .height(Length::Fixed(SCREEN_H));
+                // when swapping the spectrum for a config screen (FR-UI-19); both take all the
+                // height the other panels leave (FR-UI-26).
+                .height(Length::Fill);
             spectrum_panes.push(if dual {
                 mouse_area(pane)
                     .on_press(Message::SelectTxVfo(p.is_b()))
@@ -9398,7 +9405,12 @@ impl App {
             .push(primaries)
             .push(bottom);
 
-        let content = Container::new(scrollable(body)).width(Length::Fill);
+        // Not scrollable: a Fill height inside a scrollable collapses, and the panadapter must take
+        // the space a large screen leaves (FR-UI-26). `min_size` is what guarantees the fixed panels
+        // fit.
+        let content = Container::new(body)
+            .width(Length::Fill)
+            .height(Length::Fill);
 
         // Modal dialogs over a dimming scrim: About. Settings is a detached window now
         // (FR-UI-23), not an overlay here. The RX settings popup (FR-UI-POPUP-01) sits
@@ -10531,10 +10543,6 @@ const DANGER: Color = Color::from_rgb(0.898, 0.282, 0.235); // #E5483C
 /// Shared height of the VFO header band panels (Fill is not allowed inside the
 /// scrollable body, so the panels agree on a fixed height instead).
 const VFO_BAND_H: f32 = 160.0;
-
-/// Height of a menu screen shown in place of the spectrum frame (FR-UI-19).
-/// Matches the panadapter footprint so the layout doesn't jump.
-const SCREEN_H: f32 = 300.0;
 
 /// Height of the always-present mini-pan overview frame (FR-UI-14).
 const MINI_PAN_H: f32 = 56.0;
@@ -12644,5 +12652,60 @@ mod propagation_ui_tests {
         ids.sort_unstable();
         ids.dedup();
         assert_eq!(ids.len(), BAND_TIP_IDS.len(), "tooltip ids are unique");
+    }
+}
+
+#[cfg(test)]
+mod large_screen_tests {
+    /// FR-UI-26: the main window opens maximised, and the panadapter can take the space a large
+    /// screen leaves — its pane and the menu screen that replaces it are both `Fill` (so they still
+    /// match exactly, FR-UI-19), and no `scrollable` wraps the body, under which `Fill` would
+    /// collapse. Structural, over the code above this module.
+    /// trace: FR-UI-26
+    #[test]
+    fn fr_ui_26_window_fits_and_the_panadapter_fills() {
+        let whole = include_str!("main.rs");
+        let code = &whole[..whole
+            .find(concat!("mod large_screen", "_tests {"))
+            .expect("this module")];
+        let squash = |t: &str| t.split_whitespace().collect::<String>();
+        let code = squash(code);
+        assert!(
+            code.contains(&squash(
+                "open_main.then(|id| iced::window::maximize(id, true)).map(|_: ()| Message::WindowOpened)"
+            )),
+            "the main window is not opened maximised"
+        );
+        assert!(
+            !code.contains("scrollable(body)"),
+            "the body is scrollable: a Fill height inside it collapses"
+        );
+        assert!(
+            code.contains(&squash(
+                "let content = Container::new(body).width(Length::Fill).height(Length::Fill);"
+            )),
+            "the body does not fill the window"
+        );
+        assert!(
+            !code.contains("SCREEN_H"),
+            "a slot is still pinned to the old fixed height"
+        );
+        let pane = code
+            .find(&squash(
+                "let pane = Container::new(Column::new().spacing(6).push(header).push(plot))",
+            ))
+            .expect("the pane");
+        assert!(
+            code[pane..pane + 400].contains(".height(Length::Fill);"),
+            "the pane does not fill"
+        );
+        let menu = code
+            .find(&squash("fn menu_screen(&self, p: ui::Primary)"))
+            .expect("menu_screen");
+        let menu_end = menu + code[menu..].find("fneq").unwrap_or(4000).min(4000);
+        assert!(
+            code[menu..menu_end].contains(".height(Length::Fill)"),
+            "the menu screen does not match the pane's Fill"
+        );
     }
 }
