@@ -8,6 +8,7 @@
 //! buttons, and proportional S-meter bars (FR-UI-08..15).
 
 mod afterglow;
+mod graphics;
 mod http_fetch;
 mod kpa;
 mod meter;
@@ -62,6 +63,17 @@ fn active_theme() -> ui::EffectiveTheme {
 use worker::{ConnectTarget, UiSnapshot, WorkerCmd};
 
 pub fn main() -> iced::Result {
+    // The renderer for this start (FR-UI-27): decided from the saved GRAPHICS setting and the
+    // environment, and handed to iced through ICED_BACKEND — here, before iced or any other thread
+    // exists.
+    let renderer = k4_config::default_config_path()
+        .as_deref()
+        .map(Config::load)
+        .unwrap_or_default()
+        .prefs
+        .graphics
+        .renderer;
+    graphics::apply_at_start(renderer, waterfall_gpu::adapter_present);
     // Multi-window (daemon): the main window plus an optional detached
     // diagnostics window (FR-DIAG-04). Windows are opened in `App::new`.
     iced::daemon(App::title, App::update, App::view)
@@ -265,6 +277,9 @@ struct App {
     /// the spot worker was last told.
     propagation: k4_config::PropagationPrefs,
     station_locator: String,
+    /// The GRAPHICS settings (FR-UI-27), and the renderer this run started with.
+    graphics: k4_config::GraphicsPrefs,
+    renderer_at_start: k4_config::Renderer,
     prop_sent: Option<spot_sources::PropagationCfg>,
     /// The CAT server's settings (FR-CATSRV-01); bind and port as typed.
     cat_server: k4_config::CatServerPrefs,
@@ -728,6 +743,7 @@ enum SettingsTab {
     Kpa1500,
     CatServer,
     Propagation,
+    Graphics,
     Backup,
 }
 
@@ -764,6 +780,28 @@ impl std::fmt::Display for IntervalHours {
             1 => write!(f, "every hour"),
             h => write!(f, "every {h} hours"),
         }
+    }
+}
+
+/// A renderer choice on the GRAPHICS tab (FR-UI-27).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RendererChoice(k4_config::Renderer);
+
+impl RendererChoice {
+    const ALL: [RendererChoice; 3] = [
+        RendererChoice(k4_config::Renderer::Auto),
+        RendererChoice(k4_config::Renderer::Gpu),
+        RendererChoice(k4_config::Renderer::Cpu),
+    ];
+}
+
+impl std::fmt::Display for RendererChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self.0 {
+            k4_config::Renderer::Auto => "Auto — use the GPU if there is one",
+            k4_config::Renderer::Gpu => "GPU",
+            k4_config::Renderer::Cpu => "CPU (software)",
+        })
     }
 }
 
@@ -1102,6 +1140,8 @@ enum Message {
     PropToggle(PropSwitch, bool),
     PropIntervalHours(IntervalHours),
     StationLocator(String),
+    // GRAPHICS settings (FR-UI-27).
+    GraphicsRenderer(RendererChoice),
     // TX config (FR-KEY-01/FR-AUD-CFG-01), Fn VFO ops (FR-VFO-07), MENU (FR-MENU-01).
     SetTxTab(TxTab),
     Tx(TxMsg),
@@ -1325,6 +1365,8 @@ impl App {
             spot_sent: SpotSent::default(),
             propagation: prefs.propagation.clone(),
             station_locator: prefs.station_locator.clone(),
+            graphics: prefs.graphics.clone(),
+            renderer_at_start: prefs.graphics.renderer,
             prop_sent: None,
             catsrv_bind: prefs.cat_server.bind.clone(),
             catsrv_port: prefs.cat_server.port.to_string(),
@@ -1333,7 +1375,8 @@ impl App {
             catsrv_tx_limit: prefs.cat_server.tx_limit_min().to_string(),
             catsrv_tx_limit_sent: None,
             spot_window_sent: None,
-            gpu_waterfall: waterfall_gpu::gpu_available(),
+            gpu_waterfall: graphics::decision()
+                .map_or_else(waterfall_gpu::adapter_present, |d| d.gpu),
             ui: initial,
             view_mode: ViewMode::default(),
             // Start on the spectrum/waterfall, not a pre-opened BAND screen.
@@ -1932,6 +1975,55 @@ impl App {
 
     /// The Settings tab for the CAT server (FR-CATSRV-01): the switch, where it listens, a
     /// warning when that is not this computer, what it is doing, and how to point software at it.
+    /// The GRAPHICS settings tab (FR-UI-27): the renderer in use and why, and the one to start
+    /// with next time.
+    fn graphics_settings_view(&self) -> Element<'_, Message> {
+        let dim = role_color(ui::ColorRole::Inactive);
+        let caution = role_color(ui::ColorRole::Caution);
+        let status = graphics::decision()
+            .map(|d| {
+                graphics::status_text(
+                    &d,
+                    graphics::GPU_DRAWING.load(std::sync::atomic::Ordering::Relaxed),
+                )
+            })
+            .unwrap_or_else(|| "Renderer not decided at start.".to_string());
+        let mut col = Column::new()
+            .spacing(8)
+            .push(Text::new(status).size(12))
+            .push(
+                Row::new()
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                    .push(Text::new("Renderer").size(12).width(Length::Fixed(72.0)))
+                    .push(
+                        pick_list(
+                            RendererChoice::ALL,
+                            Some(RendererChoice(self.graphics.renderer)),
+                            Message::GraphicsRenderer,
+                        )
+                        .text_size(12),
+                    ),
+            );
+        if self.graphics.renderer != self.renderer_at_start {
+            col = col.push(
+                Text::new("Applies at the next start of the app.")
+                    .size(11)
+                    .color(caution),
+            );
+        }
+        col.push(
+            Text::new(
+                "The GPU draws the waterfall (and the 3D views) far more cheaply; the CPU renderer is \
+                 the fallback where there is no GPU. ICED_BACKEND or K4_WATERFALL in the environment \
+                 override this setting.",
+            )
+            .size(11)
+            .color(dim),
+        )
+        .into()
+    }
+
     /// The station locator to save: as typed if it is a valid Maidenhead square, else empty
     /// (FR-UI-25). A half-typed locator is never stored.
     fn locator_for_save(&self) -> String {
@@ -2264,6 +2356,7 @@ impl App {
                     cat_server: self.cat_server_for_save(),
                     station_locator: self.locator_for_save(),
                     propagation: self.propagation.clone(),
+                    graphics: self.graphics.clone(),
                     ..Default::default()
                 },
             };
@@ -3015,6 +3108,10 @@ impl App {
             }
             Message::PropIntervalHours(h) => {
                 self.propagation.hamqsl_interval_secs = u64::from(h.0) * 3600;
+                self.save_config();
+            }
+            Message::GraphicsRenderer(c) => {
+                self.graphics.renderer = c.0;
                 self.save_config();
             }
             Message::StationLocator(v) => {
@@ -7855,6 +7952,7 @@ impl App {
             .push(settings_tab_btn(SettingsTab::Kpa1500, "KPA1500"))
             .push(settings_tab_btn(SettingsTab::CatServer, "CAT SERVER"))
             .push(settings_tab_btn(SettingsTab::Propagation, "PROPAGATION"))
+            .push(settings_tab_btn(SettingsTab::Graphics, "GRAPHICS"))
             .push(settings_tab_btn(SettingsTab::Backup, "BACKUP"));
         let settings_body: Element<Message> = match self.settings_tab {
             SettingsTab::Connection => Column::new()
@@ -7920,6 +8018,11 @@ impl App {
                         .color(dim),
                 )
                 .push(self.propagation_settings_view())
+                .into(),
+            SettingsTab::Graphics => Column::new()
+                .spacing(10)
+                .push(Text::new("Graphics").size(12).color(dim))
+                .push(self.graphics_settings_view())
                 .into(),
             SettingsTab::Backup => Column::new()
                 .spacing(10)
@@ -12231,6 +12334,7 @@ mod settings_tabs_wiring_tests {
             "Kpa1500",
             "CatServer",
             "Propagation",
+            "Graphics",
             "Backup",
         ] {
             assert!(
@@ -12251,6 +12355,7 @@ mod settings_tabs_wiring_tests {
             "self.backup_section_view()",
             "self.cat_server_settings_view()",
             "self.propagation_settings_view()",
+            "self.graphics_settings_view()",
             "Message::ToggleKpa1500Window", // KPA1500 configuration entry point
         ] {
             assert!(
@@ -12706,6 +12811,41 @@ mod large_screen_tests {
         assert!(
             code[menu..menu_end].contains(".height(Length::Fill)"),
             "the menu screen does not match the pane's Fill"
+        );
+    }
+
+    /// FR-UI-27: the renderer is decided before iced starts, from the saved setting; the GPU
+    /// waterfall follows that decision; a GPU frame marks the GPU as drawing; the setting is loaded,
+    /// saved and shown on its tab. Structural, over the code above this module.
+    /// trace: FR-UI-27
+    #[test]
+    fn fr_ui_27_renderer_is_decided_at_start_and_wired() {
+        let whole = include_str!("main.rs");
+        let code = &whole[..whole
+            .find(concat!("mod large_screen", "_tests {"))
+            .expect("this module")];
+        let squash = |t: &str| t.split_whitespace().collect::<String>();
+        let code = squash(code);
+        let main_fn = code.find("pubfnmain()->iced::Result{").expect("main");
+        let daemon = code[main_fn..].find("iced::daemon(").expect("daemon") + main_fn;
+        assert!(
+            code[main_fn..daemon]
+                .contains("graphics::apply_at_start(renderer,waterfall_gpu::adapter_present);"),
+            "the renderer is not decided before iced starts"
+        );
+        for (what, needle) in [
+            ("the GPU waterfall follows the decision", "gpu_waterfall: graphics::decision() .map_or_else(waterfall_gpu::adapter_present, |d| d.gpu),"),
+            ("loaded", "graphics: prefs.graphics.clone(),"),
+            ("saved", "graphics: self.graphics.clone(),"),
+            ("the choice persists", "self.graphics.renderer = c.0; self.save_config();"),
+            ("the tab", "settings_tab_btn(SettingsTab::Graphics"),
+        ] {
+            assert!(code.contains(&squash(needle)), "not wired ({what}): {needle}");
+        }
+        let wf = include_str!("waterfall_gpu.rs");
+        assert!(
+            squash(wf).contains("crate::graphics::note_gpu_drawing();if!storage.has::<Gpu>(){"),
+            "the GPU primitive does not report drawing"
         );
     }
 }

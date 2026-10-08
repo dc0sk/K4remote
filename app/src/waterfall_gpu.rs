@@ -409,15 +409,9 @@ fn write_texture_rgba32f(queue: &wgpu::Queue, tex: &wgpu::Texture, floats: &[f32
     );
 }
 
-/// Whether a wgpu adapter is available — i.e. whether iced will be rendering through wgpu, so a
-/// shader widget will actually draw. Under iced's software fallback it would not, and the CPU
-/// waterfall is used instead. `K4_WATERFALL=cpu` (or `gpu`) overrides, for diagnosis.
-pub fn gpu_available() -> bool {
-    match std::env::var("K4_WATERFALL").as_deref() {
-        Ok("cpu") => return false,
-        Ok("gpu") => return true,
-        _ => {}
-    }
+/// Whether a wgpu adapter is available. Which renderer is actually used — with the GRAPHICS
+/// setting and the `ICED_BACKEND` / `K4_WATERFALL` overrides — is decided in [`crate::graphics`].
+pub fn adapter_present() -> bool {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
     iced::futures::executor::block_on(
         instance.request_adapter(&wgpu::RequestAdapterOptions::default()),
@@ -631,6 +625,8 @@ impl shader::Primitive for WaterfallPrimitive {
         bounds: &Rectangle,
         viewport: &Viewport,
     ) {
+        // Only ever runs under wgpu: the honest "the GPU is drawing" for the GRAPHICS tab (FR-UI-27).
+        crate::graphics::note_gpu_drawing();
         if !storage.has::<Gpu>() {
             storage.store(Gpu::new(device, queue, format));
             storage.store(Placement(vec![None, None]));
