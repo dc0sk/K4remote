@@ -1,7 +1,7 @@
 ---
 title: "R6 baseline — public functions with no production reference"
 status: Draft
-version: "0.2"
+version: "0.3"
 updated: 2026-09-29
 authors:
   - Simon Keimer (DC0SK)
@@ -70,6 +70,7 @@ Held beside the production mapping as a second derivation, so a test can check `
 
 ## CPU references of GPU code
 
+- `app/src/spectrum.rs:waterfall_rgba` — since FR-UI-26 the canvas draws through `WfRing` (only new rows coloured); this full redraw is the reference the ring (`fr_ui_26_incremental_ring_equals_a_full_redraw`) and the GPU golden are held equal to.
 - `crates/k4-stream/src/gpu_waterfall.rs:lut_index` — the WGSL shader does this rounding; this is the CPU reference its test checks.
 - `crates/k4-stream/src/gpu_waterfall.rs:shader_bin` — the WGSL lookup restated in Rust, held to `column_to_bin` by a test (FR-PAN-12).
 

@@ -14,6 +14,17 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
 
 ### Added
 
+- **Large screens are used.** The main window opens maximised, and the
+  spectrum and waterfall take all the space the other panels leave; the
+  waterfall keeps up to 256 rows of history, so a tall pane shows more time.
+  (`FR-UI-26`)
+- **3D spectrum.** Instead of the spectrum and waterfall, the panadapter can
+  show the spectrum in 3D with time receding into the background — as stacked
+  traces or as a shaded surface — with adjustable tilt and depth. Choose it in
+  **Settings → Graphics**. (`FR-PAN-15`)
+- **Settings → Graphics** also shows whether the GPU or the CPU is drawing and
+  why, and chooses the renderer for the next start: Auto, GPU or CPU.
+  (`FR-UI-27`)
 - **Band buttons coloured by band conditions.** On the BAND screen each band's
   label is green, amber or red for good, fair or poor conditions, from the
   HamQSL (N0NBH) forecast combined with how many stations the spotting
@@ -51,6 +62,9 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
   its own.)
 
 ### Changed
+
+- The CPU waterfall colours only the rows that arrived since the last frame
+  instead of redrawing its whole history every frame.
 
 - The spectrum trace and waterfall rows are decimated by the same tested
   function the requirements cite, rather than a private copy of it; nothing

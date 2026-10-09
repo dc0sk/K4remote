@@ -35,11 +35,13 @@ const TX_FRAME_SAMPLES: usize = 240;
 /// is deep-cloned to the UI each tick, so it still bounds memory bandwidth,
 /// which matters on the Pi target (NFR-PORT-02).
 ///
-/// Worst case: 64 rows × 1024 bins × 4 B × 2 receivers ≈ 512 kB resident.
+/// Worst case: 256 rows × 1024 bins × 4 B × 2 receivers = 2 MiB resident, shared, not copied per
+/// tick (FR-PAN-12).
 pub const SPECTRUM_WIDTH: usize = 1024;
-/// Waterfall history depth (rows).
-/// Waterfall rows retained per receiver (also the GPU ring texture height, FR-PAN-12).
-pub const WATERFALL_ROWS: usize = 64;
+/// Waterfall rows retained per receiver (also the GPU ring texture height, FR-PAN-12). 256 so a
+/// tall pane on a large screen shows more time (FR-UI-26); both renderers draw at most as many rows
+/// as the band has pixels, so a small window pays only for what it shows.
+pub const WATERFALL_ROWS: usize = 256;
 
 /// Whether a `<cmd>?;` rejection should be announced now, and what to say.
 ///

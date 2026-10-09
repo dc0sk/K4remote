@@ -32,7 +32,11 @@ const MAX_TEXTURE_WIDTH: usize = 2048;
 /// another span map at their own scale. Columns no row covers are left fully
 /// transparent.
 ///
+/// Since FR-UI-26 the canvas draws through [`WfRing`], which colours only new rows; this full
+/// redraw stays as the reference the ring and the GPU golden test are held to.
+///
 /// trace: FR-PAN-09
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn waterfall_rgba(
     rows: &[PanRow],
     view_center_hz: i64,
@@ -45,30 +49,172 @@ pub(crate) fn waterfall_rgba(
     if tex_w == 0 {
         return rgba;
     }
-    let min_db = top_dbm - range_db;
     for (r, row) in rows.iter().enumerate() {
-        let base = r * tex_w * 4;
-        for c in 0..tex_w {
-            let Some(bin) = column_to_bin(
-                c,
-                tex_w,
-                view_center_hz,
-                view_span_hz,
-                row.center_hz,
-                row.span_hz,
-                row.bins.len(),
-            ) else {
-                continue; // scrolled out of view → transparent
-            };
-            let (cr, cg, cb) = dbm_to_color(row.bins[bin], min_db, top_dbm);
-            let p = base + c * 4;
-            rgba[p] = cr;
-            rgba[p + 1] = cg;
-            rgba[p + 2] = cb;
-            rgba[p + 3] = 0xFF;
-        }
+        rgba_row(
+            row,
+            view_center_hz,
+            view_span_hz,
+            top_dbm,
+            range_db,
+            &mut rgba[r * tex_w * 4..(r + 1) * tex_w * 4],
+        );
     }
     rgba
+}
+
+/// One history row into `out` (`out.len() / 4` texels): cleared, then each column the row covers
+/// coloured — the per-row half of [`waterfall_rgba`].
+fn rgba_row(
+    row: &PanRow,
+    view_center_hz: i64,
+    view_span_hz: u32,
+    top_dbm: f32,
+    range_db: f32,
+    out: &mut [u8],
+) {
+    out.fill(0);
+    let tex_w = out.len() / 4;
+    let min_db = top_dbm - range_db;
+    for c in 0..tex_w {
+        let Some(bin) = column_to_bin(
+            c,
+            tex_w,
+            view_center_hz,
+            view_span_hz,
+            row.center_hz,
+            row.span_hz,
+            row.bins.len(),
+        ) else {
+            continue; // scrolled out of view → transparent
+        };
+        let (cr, cg, cb) = dbm_to_color(row.bins[bin], min_db, top_dbm);
+        out[c * 4..c * 4 + 4].copy_from_slice(&[cr, cg, cb, 0xFF]);
+    }
+}
+
+/// The 3D view's settings, from the GRAPHICS tab (FR-PAN-15).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct View3d {
+    pub style: k4_stream::view3d::Style,
+    /// Fraction of the pane height the history climbs.
+    pub tilt: f32,
+    /// Rows of history laid out.
+    pub depth: usize,
+}
+
+/// The largest 3D image drawn on the CPU path, in pixels; it is stretched over the pane. The cost
+/// of a frame follows the image, not the window.
+const MAX_3D_W: f32 = 1024.0;
+const MAX_3D_H: f32 = 640.0;
+/// The most columns per row on the CPU path (tuned); `FR-PAN-15` allows fewer on the CPU.
+const MAX_3D_COLS: usize = 512;
+
+/// The canvas's per-pane state: the CPU waterfall ring (FR-UI-26) and the 3D image cache.
+#[derive(Debug, Default)]
+pub struct PaneState {
+    pub wf: WfRing,
+    d3: D3Cache,
+}
+
+/// The last 3D image, rebuilt only when a row arrives or the view changes.
+#[derive(Debug, Default)]
+struct D3Cache {
+    key: Option<(View3dKey, u64)>,
+    image: Option<(image::Handle, Size)>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct View3dKey {
+    view: View3d,
+    center_hz: u64,
+    span_hz: u32,
+    top_dbm: f32,
+    range_db: f32,
+    img: (u32, u32),
+}
+
+/// What a coloured row depends on besides its own data: a change of any of these redraws the
+/// whole ring.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct WfKey {
+    center_hz: i64,
+    span_hz: u32,
+    top_dbm: f32,
+    range_db: f32,
+    tex_w: usize,
+    cap: usize,
+}
+
+/// The CPU waterfall's incremental ring (FR-UI-26): rows already coloured are kept, so a frame
+/// colours only the rows that arrived since the last one — and never more rows than the band has
+/// pixels (`cap`). A change of view (centre, span, scale, width, cap) redraws the ring once.
+#[derive(Debug, Default)]
+pub struct WfRing {
+    key: Option<WfKey>,
+    /// `cap` slots of `tex_w` texels; history row `seq` lives in slot `seq % cap`.
+    slots: Vec<u8>,
+    /// How many rows had been pushed when the ring was last brought up to date.
+    total: u64,
+    /// Rows coloured on the last update (for tests and the frame-cost claim).
+    pub(crate) coloured_last: usize,
+}
+
+impl WfRing {
+    /// Bring the ring up to date with `rows` (newest first, `total` ever pushed) and return the
+    /// image newest-first with its row count: at most `cap` rows, `tex_w` texels wide.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn update(
+        &mut self,
+        rows: &std::collections::VecDeque<PanRow>,
+        total: u64,
+        center_hz: i64,
+        span_hz: u32,
+        top_dbm: f32,
+        range_db: f32,
+        tex_w: usize,
+        cap: usize,
+    ) -> (Vec<u8>, usize) {
+        let n = rows.len().min(cap);
+        let row_bytes = tex_w * 4;
+        if n == 0 || tex_w == 0 {
+            self.coloured_last = 0;
+            return (Vec::new(), 0);
+        }
+        let key = WfKey {
+            center_hz,
+            span_hz,
+            top_dbm,
+            range_db,
+            tex_w,
+            cap,
+        };
+        let fresh = total.saturating_sub(self.total);
+        let redo = self.key != Some(key) || total < self.total || fresh >= n as u64;
+        if redo {
+            self.slots = vec![0u8; cap * row_bytes];
+        }
+        let colour = if redo { n } else { fresh as usize };
+        for (k, row) in rows.iter().take(colour).enumerate() {
+            let slot = ((total - 1 - k as u64) % cap as u64) as usize;
+            rgba_row(
+                row,
+                center_hz,
+                span_hz,
+                top_dbm,
+                range_db,
+                &mut self.slots[slot * row_bytes..(slot + 1) * row_bytes],
+            );
+        }
+        self.key = Some(key);
+        self.total = total;
+        self.coloured_last = colour;
+        let mut out = Vec::with_capacity(n * row_bytes);
+        for k in 0..n {
+            let slot = ((total - 1 - k as u64) % cap as u64) as usize;
+            out.extend_from_slice(&self.slots[slot * row_bytes..(slot + 1) * row_bytes]);
+        }
+        (out, n)
+    }
 }
 
 /// Canvas program drawing a spectrum trace (top) and waterfall (bottom).
@@ -104,6 +250,8 @@ pub struct Spectrum<'a, Message> {
     /// RF passband edges `(lo, hi)` in absolute Hz for the overlay, from
     /// `k4_protocol::cat::rf_passband_hz`. `None` = mode/filter not yet known.
     pub passband_hz: Option<(u64, u64)>,
+    /// The 3D view instead of trace + waterfall (FR-PAN-15); `None` = the classic view.
+    pub view3d: Option<View3d>,
     /// Left-click → tune this VFO to the clicked frequency.
     pub on_qsy: fn(bool, u64) -> Message,
     /// Wheel scroll → step this VFO up (`+1`) / down (`-1`).
@@ -121,6 +269,123 @@ struct SpotView {
 
 impl<Message> Spectrum<'_, Message> {
     /// Every fresh spot inside the view, and the layout of their plates for a spectrum band
+    /// The 3D view over the whole pane (FR-PAN-15): the image from [`k4_stream::view3d`], rebuilt
+    /// only when a row arrives or the view changes, stretched over the pane, with the frequency axis
+    /// and the passband along the front edge.
+    fn draw_3d(
+        &self,
+        frame: &mut Frame,
+        state: &std::cell::RefCell<PaneState>,
+        v: View3d,
+        w: f32,
+        h: f32,
+    ) {
+        use k4_stream::view3d::{render_rgba, row_levels, Proj, Row};
+        if w < 2.0 || h < 2.0 || self.span_hz == 0 {
+            return;
+        }
+        let scale = (MAX_3D_W / w).min(MAX_3D_H / h).min(1.0);
+        let (iw, ih) = ((w * scale).round().max(1.0), (h * scale).round().max(1.0));
+        let cols = (iw as usize).min(MAX_3D_COLS);
+        let mut st = state.borrow_mut();
+        if let Ok(p) = self.pan.lock() {
+            let key = (
+                View3dKey {
+                    view: v,
+                    center_hz: self.center_hz,
+                    span_hz: self.span_hz,
+                    top_dbm: self.top_dbm,
+                    range_db: self.range_db,
+                    img: (iw as u32, ih as u32),
+                },
+                p.total(self.rx),
+            );
+            if st.d3.key != Some(key) {
+                let proj = Proj {
+                    w: iw,
+                    h: ih,
+                    tilt: v.tilt,
+                    depth: v.depth,
+                };
+                let rows = p.rows(self.rx);
+                let n = proj.rows_drawn(rows.len());
+                let levels: Vec<Vec<Option<f32>>> = rows
+                    .iter()
+                    .take(n)
+                    .map(|r| {
+                        row_levels(
+                            Row {
+                                bins: &r.bins,
+                                center_hz: r.center_hz,
+                                span_hz: r.span_hz,
+                            },
+                            cols,
+                            self.center_hz as i64,
+                            self.span_hz,
+                            self.top_dbm,
+                            self.range_db,
+                        )
+                    })
+                    .collect();
+                let rgba = render_rgba(&levels, proj, v.style, self.top_dbm, self.range_db);
+                st.d3.image = Some((
+                    image::Handle::from_rgba(iw as u32, ih as u32, rgba),
+                    Size::new(iw, ih),
+                ));
+                st.d3.key = Some(key);
+            }
+        }
+        if let Some((handle, _)) = &st.d3.image {
+            frame.draw_image(
+                Rectangle::new(Point::ORIGIN, Size::new(w, h)),
+                canvas::Image::new(handle.clone()).filter_method(image::FilterMethod::Linear),
+            );
+        }
+        // Along the front edge: the frequency labels and the passband, by frequency as in the
+        // classic view, so click-to-QSY agrees with them.
+        let label = Color::from_rgba8(150, 156, 168, 0.85);
+        const DIVS: u32 = 4;
+        for (i, hz) in axis_ticks(self.center_hz as i64, self.span_hz, DIVS)
+            .into_iter()
+            .enumerate()
+        {
+            let x = w * i as f32 / DIVS as f32;
+            let text = format!("{:.3}", hz as f64 / 1e6);
+            const EDGE: f32 = 3.0 * CHAR_W + 2.0;
+            frame.fill_text(Text {
+                content: text,
+                position: Point::new(x.clamp(EDGE, w - EDGE), h - 2.0),
+                color: label,
+                size: Pixels(TEXT_PX),
+                horizontal_alignment: iced::alignment::Horizontal::Center,
+                vertical_alignment: iced::alignment::Vertical::Bottom,
+                ..Text::default()
+            });
+        }
+        if let Some((lo, hi)) = self.passband_hz {
+            let x_of = |hz: u64| {
+                let frac = (hz as f64 - self.center_hz as f64) / self.span_hz as f64 + 0.5;
+                (frac as f32).clamp(0.0, 1.0) * w
+            };
+            let band = (1.0 - v.tilt) * h * 0.25;
+            let (x_lo, x_hi) = (x_of(lo), x_of(hi));
+            if x_hi > x_lo {
+                frame.fill_rectangle(
+                    Point::new(x_lo, h - band),
+                    Size::new(x_hi - x_lo, band),
+                    Color::from_rgba8(0x3D, 0x7E, 0xFF, 0.12),
+                );
+            }
+            let cx = x_of(self.vfo_hz);
+            frame.stroke(
+                &Path::line(Point::new(cx, h - band), Point::new(cx, h)),
+                Stroke::default()
+                    .with_width(1.0)
+                    .with_color(Color::from_rgba8(0x3D, 0x7E, 0xFF, 0.5)),
+            );
+        }
+    }
+
     /// `spec_h` tall and `w` wide. `None` when there is nothing to show or no room for a plate.
     fn spot_view(&self, w: f32, spec_h: f32) -> Option<SpotView> {
         use k4_spot::layout::{declutter, label_width, max_lanes, spot_x, Item};
@@ -281,13 +546,14 @@ pub(crate) fn trace_points(
 }
 
 impl<Message> canvas::Program<Message> for Spectrum<'_, Message> {
-    type State = ();
+    /// The CPU waterfall's ring of coloured rows (FR-UI-26) and the 3D view's image (FR-PAN-15).
+    type State = std::cell::RefCell<PaneState>;
 
     /// Click-to-QSY + wheel-tuning on the panadapter.
     /// trace: FR-PAN-04
     fn update(
         &self,
-        _state: &mut (),
+        _state: &mut Self::State,
         event: canvas::Event,
         bounds: Rectangle,
         cursor: mouse::Cursor,
@@ -341,7 +607,7 @@ impl<Message> canvas::Program<Message> for Spectrum<'_, Message> {
 
     fn draw(
         &self,
-        _state: &(),
+        state: &Self::State,
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
@@ -370,6 +636,11 @@ impl<Message> canvas::Program<Message> for Spectrum<'_, Message> {
             Size::new(w, bg_h),
             Color::from_rgb8(10, 10, 14),
         );
+        // The 3D view replaces trace and waterfall over the whole pane (FR-PAN-15).
+        if let Some(v) = self.view3d {
+            self.draw_3d(&mut frame, state, v, w, h);
+            return vec![frame.into_geometry()];
+        }
 
         // dB grid + scale over the spectrum area (drawn under the trace).
         let grid = Color::from_rgba8(255, 255, 255, 0.07);
@@ -552,25 +823,28 @@ impl<Message> canvas::Program<Message> for Spectrum<'_, Message> {
         // frequencies it was sampled at, so retuning still *scrolls* the
         // history (FR-PAN-06), rows sampled at another span still map at their
         // own scale, and anything scrolled off-canvas is simply transparent.
-        let cpu_rows: Vec<PanRow> = if self.gpu_waterfall {
-            Vec::new()
+        // Only the rows that arrived since the last frame are coloured, and never more rows than
+        // the band has pixels (FR-UI-26): the ring in the canvas state keeps the rest.
+        let (rgba, rows) = if self.gpu_waterfall || w < 1.0 || wf_h < 1.0 || self.span_hz == 0 {
+            (Vec::new(), 0)
         } else {
-            self.pan
-                .lock()
-                .map(|p| p.rows(self.rx).iter().cloned().collect())
-                .unwrap_or_default()
-        };
-        let rows = cpu_rows.len();
-        if rows > 0 && w >= 1.0 && wf_h >= 1.0 && self.span_hz > 0 {
             let tex_w = (w.round() as usize).clamp(1, MAX_TEXTURE_WIDTH);
-            let rgba = waterfall_rgba(
-                &cpu_rows,
-                self.center_hz as i64,
-                self.span_hz,
-                self.top_dbm,
-                self.range_db,
-                tex_w,
-            );
+            let cap = (wf_h.round() as usize).clamp(1, crate::worker::WATERFALL_ROWS);
+            match self.pan.lock() {
+                Ok(p) => state.borrow_mut().wf.update(
+                    p.rows(self.rx),
+                    p.total(self.rx),
+                    self.center_hz as i64,
+                    self.span_hz,
+                    self.top_dbm,
+                    self.range_db,
+                    tex_w,
+                    cap,
+                ),
+                Err(_) => (Vec::new(), 0),
+            }
+        };
+        if let Some(tex_w) = (rgba.len() / 4).checked_div(rows) {
             // One texel per row: let the GPU stretch it over the waterfall
             // band. `Nearest` keeps the columns crisp rather than smearing
             // adjacent bins together.
@@ -663,6 +937,59 @@ mod tests {
             center_hz,
             span_hz,
         }
+    }
+
+    /// FR-UI-26: the incremental ring gives exactly the full redraw — while rows trickle in, after
+    /// a retune and with more rows than pixels — and colours only the new rows between frames.
+    /// trace: FR-UI-26
+    #[test]
+    fn fr_ui_26_incremental_ring_equals_a_full_redraw() {
+        use std::collections::VecDeque;
+        let (w, span) = (301usize, 24_000u32);
+        let mk = |i: usize| {
+            let bins: Vec<f32> = (0..97)
+                .map(|b| -120.0 + ((b * 7 + i * 13) % 60) as f32)
+                .collect();
+            row(14_074_000 + (i as i64 % 5) * 900, span, bins)
+        };
+        let full = |h: &VecDeque<PanRow>, n: usize, centre: i64| {
+            let rows: Vec<PanRow> = h.iter().take(n).cloned().collect();
+            waterfall_rgba(&rows, centre, span, -40.0, 90.0, w)
+        };
+        let mut hist: VecDeque<PanRow> = VecDeque::new();
+        let mut ring = WfRing::default();
+        let mut total = 0u64;
+        let cap = 40;
+        for i in 0..70 {
+            hist.push_front(mk(i));
+            hist.truncate(256);
+            total += 1;
+            let (img, n) = ring.update(&hist, total, 14_074_000, span, -40.0, 90.0, w, cap);
+            assert_eq!(n, hist.len().min(cap), "never more rows than pixels");
+            assert_eq!(img, full(&hist, n, 14_074_000), "after row {i}");
+            if i > 0 {
+                assert_eq!(
+                    ring.coloured_last, 1,
+                    "only the new row is coloured (row {i})"
+                );
+            }
+        }
+        // A frame with no new row colours nothing.
+        let (img, n) = ring.update(&hist, total, 14_074_000, span, -40.0, 90.0, w, cap);
+        assert_eq!((ring.coloured_last, img), (0, full(&hist, n, 14_074_000)));
+        // Three rows between frames: three coloured.
+        for i in 70..73 {
+            hist.push_front(mk(i));
+            total += 1;
+        }
+        let (img, n) = ring.update(&hist, total, 14_074_000, span, -40.0, 90.0, w, cap);
+        assert_eq!((ring.coloured_last, img), (3, full(&hist, n, 14_074_000)));
+        // A retune re-maps every row: one full redraw, then incremental again.
+        let (img, n) = ring.update(&hist, total, 14_076_500, span, -40.0, 90.0, w, cap);
+        assert_eq!((ring.coloured_last, img), (cap, full(&hist, n, 14_076_500)));
+        // A taller band (a bigger window) holds more rows.
+        let (_, n) = ring.update(&hist, total, 14_076_500, span, -40.0, 90.0, w, 64);
+        assert_eq!(n, 64);
     }
 
     /// Alpha of texel `(col, r)` — 0 means "nothing drawn here".
@@ -813,6 +1140,7 @@ mod spot_click_tests {
             span_hz: SPAN,
             vfo_hz: CENTER,
             passband_hz: None,
+            view3d: None,
             on_qsy: qsy,
             on_wheel: wheel,
         };
@@ -822,7 +1150,7 @@ mod spot_click_tests {
     fn click(sp: &Spectrum<'_, (bool, u64)>, x: f32, y: f32) -> Option<(bool, u64)> {
         let bounds = Rectangle::new(Point::ORIGIN, Size::new(W, H));
         let (_, msg) = sp.update(
-            &mut (),
+            &mut Default::default(),
             canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
             bounds,
             mouse::Cursor::Available(Point::new(x, y)),
@@ -913,21 +1241,21 @@ mod spot_click_tests {
         with(&store, |sp| {
             let bounds = Rectangle::new(Point::ORIGIN, Size::new(W, H));
             let right = sp.update(
-                &mut (),
+                &mut Default::default(),
                 canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)),
                 bounds,
                 mouse::Cursor::Available(Point::new(500.0, 20.0)),
             );
             assert_eq!(right.1, None, "a right click does nothing");
             let outside = sp.update(
-                &mut (),
+                &mut Default::default(),
                 canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
                 bounds,
                 mouse::Cursor::Available(Point::new(W + 50.0, 20.0)),
             );
             assert_eq!(outside.1, None, "a click outside the pane does nothing");
             let unavailable = sp.update(
-                &mut (),
+                &mut Default::default(),
                 canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
                 bounds,
                 mouse::Cursor::Unavailable,
@@ -958,6 +1286,7 @@ mod spot_click_tests {
             span_hz: sp.span_hz,
             vfo_hz: sp.vfo_hz,
             passband_hz: sp.passband_hz,
+            view3d: sp.view3d,
             on_qsy: sp.on_qsy,
             on_wheel: sp.on_wheel,
         }

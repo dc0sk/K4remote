@@ -12,6 +12,7 @@ pub mod audio;
 pub mod gpu_waterfall;
 pub mod pan;
 pub mod render;
+pub mod view3d;
 
 pub use audio::{AudioPacket, EncodeMode};
 pub use pan::PanFrame;

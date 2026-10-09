@@ -1,7 +1,7 @@
 ---
 title: "R7 exemptions — acceptance citing a function production never calls"
 status: Draft
-version: "0.1"
+version: "0.2"
 updated: 2026-09-29
 authors:
   - Simon Keimer (DC0SK)
@@ -20,4 +20,6 @@ evidence although the product never calls it, such as a measuring instrument. An
 no longer applies (the row stopped citing the function, or production calls it now) fails the
 build, like a stale R6 baseline entry.
 
-No exemptions today.
+- `FR-PAN-06:waterfall_rgba` — the full-redraw reference; the product's CPU path (`WfRing`, FR-UI-26) is held equal to it row for row by `fr_ui_26_incremental_ring_equals_a_full_redraw`, including after a retune.
+- `FR-PAN-09:waterfall_rgba` — as above: the reference the incremental ring is held to.
+- `FR-PAN-12:waterfall_rgba` — the CPU reference the GPU golden test compares the shader against.

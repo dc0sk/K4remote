@@ -8,6 +8,7 @@
 //! buttons, and proportional S-meter bars (FR-UI-08..15).
 
 mod afterglow;
+mod graphics;
 mod http_fetch;
 mod kpa;
 mod meter;
@@ -62,6 +63,17 @@ fn active_theme() -> ui::EffectiveTheme {
 use worker::{ConnectTarget, UiSnapshot, WorkerCmd};
 
 pub fn main() -> iced::Result {
+    // The renderer for this start (FR-UI-27): decided from the saved GRAPHICS setting and the
+    // environment, and handed to iced through ICED_BACKEND — here, before iced or any other thread
+    // exists.
+    let renderer = k4_config::default_config_path()
+        .as_deref()
+        .map(Config::load)
+        .unwrap_or_default()
+        .prefs
+        .graphics
+        .renderer;
+    graphics::apply_at_start(renderer, waterfall_gpu::adapter_present);
     // Multi-window (daemon): the main window plus an optional detached
     // diagnostics window (FR-DIAG-04). Windows are opened in `App::new`.
     iced::daemon(App::title, App::update, App::view)
@@ -265,6 +277,9 @@ struct App {
     /// the spot worker was last told.
     propagation: k4_config::PropagationPrefs,
     station_locator: String,
+    /// The GRAPHICS settings (FR-UI-27), and the renderer this run started with.
+    graphics: k4_config::GraphicsPrefs,
+    renderer_at_start: k4_config::Renderer,
     prop_sent: Option<spot_sources::PropagationCfg>,
     /// The CAT server's settings (FR-CATSRV-01); bind and port as typed.
     cat_server: k4_config::CatServerPrefs,
@@ -728,6 +743,7 @@ enum SettingsTab {
     Kpa1500,
     CatServer,
     Propagation,
+    Graphics,
     Backup,
 }
 
@@ -764,6 +780,50 @@ impl std::fmt::Display for IntervalHours {
             1 => write!(f, "every hour"),
             h => write!(f, "every {h} hours"),
         }
+    }
+}
+
+/// A panadapter view choice on the GRAPHICS tab (FR-PAN-15).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ViewChoice(k4_config::PanView);
+
+impl ViewChoice {
+    const ALL: [ViewChoice; 3] = [
+        ViewChoice(k4_config::PanView::Classic),
+        ViewChoice(k4_config::PanView::Traces3d),
+        ViewChoice(k4_config::PanView::Surface3d),
+    ];
+}
+
+impl std::fmt::Display for ViewChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self.0 {
+            k4_config::PanView::Classic => "Spectrum + waterfall",
+            k4_config::PanView::Traces3d => "3D — stacked traces",
+            k4_config::PanView::Surface3d => "3D — shaded surface",
+        })
+    }
+}
+
+/// A renderer choice on the GRAPHICS tab (FR-UI-27).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RendererChoice(k4_config::Renderer);
+
+impl RendererChoice {
+    const ALL: [RendererChoice; 3] = [
+        RendererChoice(k4_config::Renderer::Auto),
+        RendererChoice(k4_config::Renderer::Gpu),
+        RendererChoice(k4_config::Renderer::Cpu),
+    ];
+}
+
+impl std::fmt::Display for RendererChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self.0 {
+            k4_config::Renderer::Auto => "Auto — use the GPU if there is one",
+            k4_config::Renderer::Gpu => "GPU",
+            k4_config::Renderer::Cpu => "CPU (software)",
+        })
     }
 }
 
@@ -1102,6 +1162,13 @@ enum Message {
     PropToggle(PropSwitch, bool),
     PropIntervalHours(IntervalHours),
     StationLocator(String),
+    // GRAPHICS settings (FR-UI-27).
+    GraphicsRenderer(RendererChoice),
+    GraphicsView(ViewChoice),
+    GraphicsTilt(u8),
+    GraphicsDepth(u16),
+    /// A slider was released: save the GRAPHICS settings once, not on every step of a drag.
+    GraphicsSave,
     // TX config (FR-KEY-01/FR-AUD-CFG-01), Fn VFO ops (FR-VFO-07), MENU (FR-MENU-01).
     SetTxTab(TxTab),
     Tx(TxMsg),
@@ -1269,7 +1336,11 @@ impl App {
             icon: app_icon(),
             ..Default::default()
         });
-        let mut window_tasks = vec![open_main.map(|_| Message::WindowOpened)];
+        // Opened maximised, so on a large screen the window manager gives it the screen's free area
+        // and the panadapter takes what the panels leave (FR-UI-26).
+        let mut window_tasks = vec![open_main
+            .then(|id| iced::window::maximize(id, true))
+            .map(|_: ()| Message::WindowOpened)];
         // Restore the detached diagnostics window if it was enabled.
         let diag_window = if diag_enabled {
             let (id, open) = iced::window::open(diag_window_settings());
@@ -1321,6 +1392,8 @@ impl App {
             spot_sent: SpotSent::default(),
             propagation: prefs.propagation.clone(),
             station_locator: prefs.station_locator.clone(),
+            graphics: prefs.graphics.clone(),
+            renderer_at_start: prefs.graphics.renderer,
             prop_sent: None,
             catsrv_bind: prefs.cat_server.bind.clone(),
             catsrv_port: prefs.cat_server.port.to_string(),
@@ -1329,7 +1402,8 @@ impl App {
             catsrv_tx_limit: prefs.cat_server.tx_limit_min().to_string(),
             catsrv_tx_limit_sent: None,
             spot_window_sent: None,
-            gpu_waterfall: waterfall_gpu::gpu_available(),
+            gpu_waterfall: graphics::decision()
+                .map_or_else(waterfall_gpu::adapter_present, |d| d.gpu),
             ui: initial,
             view_mode: ViewMode::default(),
             // Start on the spectrum/waterfall, not a pre-opened BAND screen.
@@ -1928,6 +2002,120 @@ impl App {
 
     /// The Settings tab for the CAT server (FR-CATSRV-01): the switch, where it listens, a
     /// warning when that is not this computer, what it is doing, and how to point software at it.
+    /// The 3D view to draw, from the GRAPHICS settings; `None` = spectrum + waterfall (FR-PAN-15).
+    fn view3d(&self) -> Option<spectrum::View3d> {
+        use k4_stream::view3d::Style;
+        let style = match self.graphics.pan_view {
+            k4_config::PanView::Classic => return None,
+            k4_config::PanView::Traces3d => Style::Traces,
+            k4_config::PanView::Surface3d => Style::Surface,
+        };
+        Some(spectrum::View3d {
+            style,
+            tilt: f32::from(self.graphics.tilt_pct()) / 100.0,
+            depth: usize::from(self.graphics.depth_rows()),
+        })
+    }
+
+    /// The GRAPHICS settings tab (FR-UI-27): the panadapter view and its 3D tilt and depth, the
+    /// renderer in use and why, and the one to start with next time.
+    fn graphics_settings_view(&self) -> Element<'_, Message> {
+        let dim = role_color(ui::ColorRole::Inactive);
+        let caution = role_color(ui::ColorRole::Caution);
+        let status = graphics::decision()
+            .map(|d| {
+                graphics::status_text(
+                    &d,
+                    graphics::GPU_DRAWING.load(std::sync::atomic::Ordering::Relaxed),
+                )
+            })
+            .unwrap_or_else(|| "Renderer not decided at start.".to_string());
+        let g = &self.graphics;
+        let mut col = Column::new().spacing(8).push(
+            Row::new()
+                .spacing(8)
+                .align_y(Alignment::Center)
+                .push(Text::new("View").size(12).width(Length::Fixed(72.0)))
+                .push(
+                    pick_list(
+                        ViewChoice::ALL,
+                        Some(ViewChoice(g.pan_view)),
+                        Message::GraphicsView,
+                    )
+                    .text_size(12),
+                ),
+        );
+        if g.pan_view != k4_config::PanView::Classic {
+            col = col
+                .push(
+                    Row::new()
+                        .spacing(8)
+                        .align_y(Alignment::Center)
+                        .push(Text::new("Tilt").size(12).width(Length::Fixed(72.0)))
+                        .push(
+                            slider(
+                                k4_config::TILT_MIN_PCT..=k4_config::TILT_MAX_PCT,
+                                g.tilt_pct(),
+                                Message::GraphicsTilt,
+                            )
+                            .on_release(Message::GraphicsSave)
+                            .width(Length::Fixed(240.0)),
+                        )
+                        .push(Text::new(format!("{} %", g.tilt_pct())).size(12)),
+                )
+                .push(
+                    Row::new()
+                        .spacing(8)
+                        .align_y(Alignment::Center)
+                        .push(Text::new("Depth").size(12).width(Length::Fixed(72.0)))
+                        .push(
+                            slider(
+                                k4_config::DEPTH_MIN_ROWS..=k4_config::DEPTH_MAX_ROWS,
+                                g.depth_rows(),
+                                Message::GraphicsDepth,
+                            )
+                            .on_release(Message::GraphicsSave)
+                            .width(Length::Fixed(240.0)),
+                        )
+                        .push(Text::new(format!("{} rows", g.depth_rows())).size(12)),
+                );
+        }
+        col = col
+            .push(Text::new("Renderer").size(12).color(dim))
+            .push(Text::new(status).size(12))
+            .push(
+                Row::new()
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                    .push(Text::new("Renderer").size(12).width(Length::Fixed(72.0)))
+                    .push(
+                        pick_list(
+                            RendererChoice::ALL,
+                            Some(RendererChoice(self.graphics.renderer)),
+                            Message::GraphicsRenderer,
+                        )
+                        .text_size(12),
+                    ),
+            );
+        if self.graphics.renderer != self.renderer_at_start {
+            col = col.push(
+                Text::new("Applies at the next start of the app.")
+                    .size(11)
+                    .color(caution),
+            );
+        }
+        col.push(
+            Text::new(
+                "The GPU draws the waterfall (and the 3D views) far more cheaply; the CPU renderer is \
+                 the fallback where there is no GPU. ICED_BACKEND or K4_WATERFALL in the environment \
+                 override this setting.",
+            )
+            .size(11)
+            .color(dim),
+        )
+        .into()
+    }
+
     /// The station locator to save: as typed if it is a valid Maidenhead square, else empty
     /// (FR-UI-25). A half-typed locator is never stored.
     fn locator_for_save(&self) -> String {
@@ -2260,6 +2448,7 @@ impl App {
                     cat_server: self.cat_server_for_save(),
                     station_locator: self.locator_for_save(),
                     propagation: self.propagation.clone(),
+                    graphics: self.graphics.clone(),
                     ..Default::default()
                 },
             };
@@ -3013,6 +3202,17 @@ impl App {
                 self.propagation.hamqsl_interval_secs = u64::from(h.0) * 3600;
                 self.save_config();
             }
+            Message::GraphicsRenderer(c) => {
+                self.graphics.renderer = c.0;
+                self.save_config();
+            }
+            Message::GraphicsView(v) => {
+                self.graphics.pan_view = v.0;
+                self.save_config();
+            }
+            Message::GraphicsTilt(t) => self.graphics.tilt_pct = t,
+            Message::GraphicsDepth(d) => self.graphics.depth_rows = d,
+            Message::GraphicsSave => self.save_config(),
             Message::StationLocator(v) => {
                 self.station_locator = v
                     .chars()
@@ -7152,7 +7352,9 @@ impl App {
             .style(panel_style)
             .padding(14)
             .width(Length::Fill)
-            .height(Length::Fixed(SCREEN_H))
+            // The same Fill as the pane it replaces, so the frame never resizes (FR-UI-19), at any
+            // window size (FR-UI-26).
+            .height(Length::Fill)
             .into()
     }
 
@@ -7849,6 +8051,7 @@ impl App {
             .push(settings_tab_btn(SettingsTab::Kpa1500, "KPA1500"))
             .push(settings_tab_btn(SettingsTab::CatServer, "CAT SERVER"))
             .push(settings_tab_btn(SettingsTab::Propagation, "PROPAGATION"))
+            .push(settings_tab_btn(SettingsTab::Graphics, "GRAPHICS"))
             .push(settings_tab_btn(SettingsTab::Backup, "BACKUP"));
         let settings_body: Element<Message> = match self.settings_tab {
             SettingsTab::Connection => Column::new()
@@ -7914,6 +8117,11 @@ impl App {
                         .color(dim),
                 )
                 .push(self.propagation_settings_view())
+                .into(),
+            SettingsTab::Graphics => Column::new()
+                .spacing(10)
+                .push(Text::new("Graphics").size(12).color(dim))
+                .push(self.graphics_settings_view())
                 .into(),
             SettingsTab::Backup => Column::new()
                 .spacing(10)
@@ -8988,11 +9196,15 @@ impl App {
                 .padding(8)
                 .into()
             } else {
+                let view3d = self.view3d();
+                // The 3D view draws the whole pane itself (FR-PAN-15): no GPU waterfall under it.
+                let gpu_waterfall = self.gpu_waterfall && view3d.is_none();
                 let canvas = Canvas::new(spectrum::Spectrum {
                     latest: &latest.bins,
                     pan: &self.pan,
                     rx: usize::from(p.is_b()),
-                    gpu_waterfall: self.gpu_waterfall,
+                    gpu_waterfall,
+                    view3d,
                     spots: &self.spots,
                     spot_max_age_secs: u64::from(k4_config::parse_spot_max_age_min(
                         &self.spot_max_age,
@@ -9009,7 +9221,7 @@ impl App {
                 })
                 .width(Length::Fill)
                 .height(Length::Fill);
-                if self.gpu_waterfall {
+                if gpu_waterfall {
                     // The waterfall is a GPU widget under the canvas (FR-PAN-12): the bottom 60 %
                     // of the pane, matching the canvas's own 40/60 split. The canvas sits on top,
                     // transparent over that band, and keeps the grid, overlays and all mouse
@@ -9109,8 +9321,9 @@ impl App {
                 .padding(8)
                 .width(Length::Fill)
                 // Match the menu-screen slot exactly so the frame doesn't resize
-                // when swapping the spectrum for a config screen (FR-UI-19).
-                .height(Length::Fixed(SCREEN_H));
+                // when swapping the spectrum for a config screen (FR-UI-19); both take all the
+                // height the other panels leave (FR-UI-26).
+                .height(Length::Fill);
             spectrum_panes.push(if dual {
                 mouse_area(pane)
                     .on_press(Message::SelectTxVfo(p.is_b()))
@@ -9398,7 +9611,12 @@ impl App {
             .push(primaries)
             .push(bottom);
 
-        let content = Container::new(scrollable(body)).width(Length::Fill);
+        // Not scrollable: a Fill height inside a scrollable collapses, and the panadapter must take
+        // the space a large screen leaves (FR-UI-26). `min_size` is what guarantees the fixed panels
+        // fit.
+        let content = Container::new(body)
+            .width(Length::Fill)
+            .height(Length::Fill);
 
         // Modal dialogs over a dimming scrim: About. Settings is a detached window now
         // (FR-UI-23), not an overlay here. The RX settings popup (FR-UI-POPUP-01) sits
@@ -10531,10 +10749,6 @@ const DANGER: Color = Color::from_rgb(0.898, 0.282, 0.235); // #E5483C
 /// Shared height of the VFO header band panels (Fill is not allowed inside the
 /// scrollable body, so the panels agree on a fixed height instead).
 const VFO_BAND_H: f32 = 160.0;
-
-/// Height of a menu screen shown in place of the spectrum frame (FR-UI-19).
-/// Matches the panadapter footprint so the layout doesn't jump.
-const SCREEN_H: f32 = 300.0;
 
 /// Height of the always-present mini-pan overview frame (FR-UI-14).
 const MINI_PAN_H: f32 = 56.0;
@@ -12223,6 +12437,7 @@ mod settings_tabs_wiring_tests {
             "Kpa1500",
             "CatServer",
             "Propagation",
+            "Graphics",
             "Backup",
         ] {
             assert!(
@@ -12243,6 +12458,7 @@ mod settings_tabs_wiring_tests {
             "self.backup_section_view()",
             "self.cat_server_settings_view()",
             "self.propagation_settings_view()",
+            "self.graphics_settings_view()",
             "Message::ToggleKpa1500Window", // KPA1500 configuration entry point
         ] {
             assert!(
@@ -12644,5 +12860,127 @@ mod propagation_ui_tests {
         ids.sort_unstable();
         ids.dedup();
         assert_eq!(ids.len(), BAND_TIP_IDS.len(), "tooltip ids are unique");
+    }
+}
+
+#[cfg(test)]
+mod large_screen_tests {
+    /// FR-UI-26: the main window opens maximised, and the panadapter can take the space a large
+    /// screen leaves — its pane and the menu screen that replaces it are both `Fill` (so they still
+    /// match exactly, FR-UI-19), and no `scrollable` wraps the body, under which `Fill` would
+    /// collapse. Structural, over the code above this module.
+    /// trace: FR-UI-26
+    #[test]
+    fn fr_ui_26_window_fits_and_the_panadapter_fills() {
+        let whole = include_str!("main.rs");
+        let code = &whole[..whole
+            .find(concat!("mod large_screen", "_tests {"))
+            .expect("this module")];
+        let squash = |t: &str| t.split_whitespace().collect::<String>();
+        let code = squash(code);
+        assert!(
+            code.contains(&squash(
+                "open_main.then(|id| iced::window::maximize(id, true)).map(|_: ()| Message::WindowOpened)"
+            )),
+            "the main window is not opened maximised"
+        );
+        assert!(
+            !code.contains("scrollable(body)"),
+            "the body is scrollable: a Fill height inside it collapses"
+        );
+        assert!(
+            code.contains(&squash(
+                "let content = Container::new(body).width(Length::Fill).height(Length::Fill);"
+            )),
+            "the body does not fill the window"
+        );
+        assert!(
+            !code.contains("SCREEN_H"),
+            "a slot is still pinned to the old fixed height"
+        );
+        let pane = code
+            .find(&squash(
+                "let pane = Container::new(Column::new().spacing(6).push(header).push(plot))",
+            ))
+            .expect("the pane");
+        assert!(
+            code[pane..pane + 400].contains(".height(Length::Fill);"),
+            "the pane does not fill"
+        );
+        let menu = code
+            .find(&squash("fn menu_screen(&self, p: ui::Primary)"))
+            .expect("menu_screen");
+        let menu_end = menu + code[menu..].find("fneq").unwrap_or(4000).min(4000);
+        assert!(
+            code[menu..menu_end].contains(".height(Length::Fill)"),
+            "the menu screen does not match the pane's Fill"
+        );
+    }
+
+    /// FR-UI-27: the renderer is decided before iced starts, from the saved setting; the GPU
+    /// waterfall follows that decision; a GPU frame marks the GPU as drawing; the setting is loaded,
+    /// saved and shown on its tab. FR-PAN-15: the 3D view is switched from it. Structural, over the
+    /// code above this module.
+    /// trace: FR-UI-27, FR-PAN-15
+    #[test]
+    fn fr_ui_27_renderer_is_decided_at_start_and_wired() {
+        let whole = include_str!("main.rs");
+        let code = &whole[..whole
+            .find(concat!("mod large_screen", "_tests {"))
+            .expect("this module")];
+        let squash = |t: &str| t.split_whitespace().collect::<String>();
+        let code = squash(code);
+        let main_fn = code.find("pubfnmain()->iced::Result{").expect("main");
+        let daemon = code[main_fn..].find("iced::daemon(").expect("daemon") + main_fn;
+        assert!(
+            code[main_fn..daemon]
+                .contains("graphics::apply_at_start(renderer,waterfall_gpu::adapter_present);"),
+            "the renderer is not decided before iced starts"
+        );
+        for (what, needle) in [
+            ("the GPU waterfall follows the decision", "gpu_waterfall: graphics::decision() .map_or_else(waterfall_gpu::adapter_present, |d| d.gpu),"),
+            ("loaded", "graphics: prefs.graphics.clone(),"),
+            ("saved", "graphics: self.graphics.clone(),"),
+            ("the choice persists", "self.graphics.renderer = c.0; self.save_config();"),
+            ("the tab", "settings_tab_btn(SettingsTab::Graphics"),
+        ] {
+            assert!(code.contains(&squash(needle)), "not wired ({what}): {needle}");
+        }
+        // FR-PAN-15: the view setting reaches the canvas, the 3D view suppresses the GPU waterfall
+        // under it, the sliders save on release, and the view choice persists.
+        for (what, needle) in [
+            ("the canvas gets the 3D view", "let view3d = self.view3d();"),
+            (
+                "no GPU waterfall under the 3D view",
+                "let gpu_waterfall = self.gpu_waterfall && view3d.is_none();",
+            ),
+            ("the GPU branch follows it", "if gpu_waterfall {"),
+            (
+                "the view persists",
+                "self.graphics.pan_view = v.0; self.save_config();",
+            ),
+            (
+                "a slider saves on release",
+                ".on_release(Message::GraphicsSave)",
+            ),
+            (
+                "the tilt reaches the view",
+                "tilt: f32::from(self.graphics.tilt_pct()) / 100.0,",
+            ),
+            (
+                "the depth reaches the view",
+                "depth: usize::from(self.graphics.depth_rows()),",
+            ),
+        ] {
+            assert!(
+                code.contains(&squash(needle)),
+                "not wired ({what}): {needle}"
+            );
+        }
+        let wf = include_str!("waterfall_gpu.rs");
+        assert!(
+            squash(wf).contains("crate::graphics::note_gpu_drawing();if!storage.has::<Gpu>(){"),
+            "the GPU primitive does not report drawing"
+        );
     }
 }

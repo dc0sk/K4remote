@@ -306,6 +306,7 @@ impl Gpu {
         rx: usize,
         pan: &PanShared,
         view: View,
+        band_px: u32,
     ) {
         let p = self.pane(device, rx);
         let rows = pan.rows(rx);
@@ -322,10 +323,12 @@ impl Gpu {
             );
         }
         p.uploaded = total;
+        // Never more rows than the band has pixel rows (FR-UI-26): a tall band shows more time, a
+        // short one the newest rows, and nothing is stretched over less than a pixel.
         p.shown = if view.span_hz == 0 {
             0
         } else {
-            rows.len() as u32
+            (rows.len() as u32).min(band_px.max(1))
         };
         if p.shown == 0 {
             return;
@@ -409,15 +412,9 @@ fn write_texture_rgba32f(queue: &wgpu::Queue, tex: &wgpu::Texture, floats: &[f32
     );
 }
 
-/// Whether a wgpu adapter is available — i.e. whether iced will be rendering through wgpu, so a
-/// shader widget will actually draw. Under iced's software fallback it would not, and the CPU
-/// waterfall is used instead. `K4_WATERFALL=cpu` (or `gpu`) overrides, for diagnosis.
-pub fn gpu_available() -> bool {
-    match std::env::var("K4_WATERFALL").as_deref() {
-        Ok("cpu") => return false,
-        Ok("gpu") => return true,
-        _ => {}
-    }
+/// Whether a wgpu adapter is available. Which renderer is actually used — with the GRAPHICS
+/// setting and the `ICED_BACKEND` / `K4_WATERFALL` overrides — is decided in [`crate::graphics`].
+pub fn adapter_present() -> bool {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
     iced::futures::executor::block_on(
         instance.request_adapter(&wgpu::RequestAdapterOptions::default()),
@@ -631,6 +628,8 @@ impl shader::Primitive for WaterfallPrimitive {
         bounds: &Rectangle,
         viewport: &Viewport,
     ) {
+        // Only ever runs under wgpu: the honest "the GPU is drawing" for the GRAPHICS tab (FR-UI-27).
+        crate::graphics::note_gpu_drawing();
         if !storage.has::<Gpu>() {
             storage.store(Gpu::new(device, queue, format));
             storage.store(Placement(vec![None, None]));
@@ -644,7 +643,14 @@ impl shader::Primitive for WaterfallPrimitive {
         ]);
         let gpu = storage.get_mut::<Gpu>().expect("stored above");
         if let Ok(pan) = self.pan.lock() {
-            gpu.prepare(device, queue, self.rx, &pan, self.view);
+            gpu.prepare(
+                device,
+                queue,
+                self.rx,
+                &pan,
+                self.view,
+                (bounds.height * sf).round() as u32,
+            );
         }
     }
 
@@ -698,10 +704,12 @@ mod golden {
     // Deliberately awkward sizes. At a round geometry (640 px, 300 rows, span 24 000, 1024 bins) a
     // pixel centre lands *exactly* on a bin or row boundary every few pixels, and there f32 and the
     // CPU's f64 legitimately break the tie in opposite directions, so the two disagree without
-    // either being wrong. H = 320 makes `(y + 0.5) * rows / H` never an integer for 64 (or 5) rows;
-    // an odd width and non-round spans make `frac * bins` essentially never one.
+    // either being wrong. `(y + 0.5) * rows / H` = `(2y + 1) * rows / 2H` must never be an integer:
+    // with H = 512 and 256 rows it is an odd number over 4, and for the 5-row cases an odd multiple
+    // of 5 over 1024 (H = 320 did this for 64 rows, but lands on every fifth row at 256). An odd
+    // width and non-round spans make `frac * bins` essentially never one.
     const W: u32 = 637;
-    const H: u32 = 320;
+    const H: u32 = 512;
     const SPAN: u32 = 47_993;
     const TOP: f32 = -40.0;
     const RANGE: f32 = 90.0;
@@ -755,7 +763,19 @@ mod golden {
         pan: &PanShared,
         view: View,
     ) -> Vec<u8> {
-        gpu.prepare(&rig.device, &rig.queue, 0, pan, view);
+        render_band(rig, gpu, format, pan, view, H)
+    }
+
+    /// As [`render`], telling the GPU the band is `band_px` pixel rows tall (FR-UI-26).
+    fn render_band(
+        rig: &Rig,
+        gpu: &mut Gpu,
+        format: wgpu::TextureFormat,
+        pan: &PanShared,
+        view: View,
+        band_px: u32,
+    ) -> Vec<u8> {
+        gpu.prepare(&rig.device, &rig.queue, 0, pan, view, band_px);
         let target = rig.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("golden target"),
             size: wgpu::Extent3d {
@@ -1070,11 +1090,13 @@ mod golden {
 
             // B: more rows than the ring holds, uploaded incrementally across the wrap.
             let mut gpu = Gpu::new(&rig.device, &rig.queue, format);
-            let all = mixed(100, 7);
+            // Derived from the ring size, so it keeps wrapping when the size changes (it was a
+            // literal 100 for a 64-row ring, and stopped wrapping at 256).
+            let all = mixed(WATERFALL_ROWS + 36, 7);
             let mut pan = PanShared::default();
             push_all(&mut pan, &all[..30]);
             let _ = render(&rig, &mut gpu, format, &pan, view()); // first upload
-            push_all(&mut pan, &all[30..]); // 70 more: the ring wraps
+            push_all(&mut pan, &all[30..]); // the rest: the ring wraps
             let rows: Vec<PanRow> = pan.rows(0).iter().cloned().collect();
             let got = render(&rig, &mut gpu, format, &pan, view());
             let (worst, off, _) = compare(&got, &reference(&rows, view()), 3);
@@ -1084,6 +1106,20 @@ mod golden {
             assert!(
                 off * 500 < (W * H) as usize,
                 "[{format:?}] wrapped: {off} pixels differ, worst {worst}"
+            );
+
+            // D (FR-UI-26): a band with fewer pixel rows than history shows only the newest rows —
+            // 100 of 256 here — exactly as the CPU ring does.
+            let mut gpu = Gpu::new(&rig.device, &rig.queue, format);
+            let mut pan = PanShared::default();
+            push_all(&mut pan, &mixed(WATERFALL_ROWS, 11));
+            let rows: Vec<PanRow> = pan.rows(0).iter().take(100).cloned().collect();
+            let got = render_band(&rig, &mut gpu, format, &pan, view(), 100);
+            let (worst, off, _) = compare(&got, &reference(&rows, view()), 3);
+            eprintln!("[{format:?}] capped band: worst {worst}, off {off}");
+            assert!(
+                off * 500 < (W * H) as usize,
+                "[{format:?}] capped band: {off} pixels differ, worst {worst}"
             );
 
             // C: a partial history (5 rows, stretched over the band like the CPU path).

@@ -1066,3 +1066,57 @@ fn fr_ui_25_propagation_defaults_on_and_persist() {
     };
     assert_eq!(long.hamqsl_interval_secs(), 86_400);
 }
+
+/// FR-UI-27: a configuration without the GRAPHICS section — or with it partly written — loads with
+/// the classic view and the Auto renderer; an unknown view or renderer (a newer version's, or a
+/// typo) loads as the default instead of failing the whole configuration; tilt and depth read
+/// within their bounds; the choices survive a round trip.
+/// trace: FR-UI-27, FR-PAN-15
+#[test]
+fn fr_ui_27_graphics_defaults_unknown_values_and_persistence() {
+    use k4_config::{GraphicsPrefs, PanView, Renderer};
+    let old: Prefs = toml::from_str("tune_step_hz = 100").expect("legacy config");
+    assert_eq!(old.graphics, GraphicsPrefs::default());
+    assert_eq!(old.graphics.pan_view, PanView::Classic);
+    assert_eq!(old.graphics.renderer, Renderer::Auto);
+    assert_eq!(
+        (old.graphics.tilt_pct(), old.graphics.depth_rows()),
+        (60, 64)
+    );
+
+    let partial: Prefs = toml::from_str(
+        "tune_step_hz = 100\n[graphics]\npan_view = \"hologram\"\nrenderer = \"quantum\"\n",
+    )
+    .expect("unknown values must not fail the whole configuration");
+    assert_eq!(partial.graphics.pan_view, PanView::Classic);
+    assert_eq!(partial.graphics.renderer, Renderer::Auto);
+    assert_eq!(
+        partial.graphics.tilt_pct, 60,
+        "an absent field is its default, not 0"
+    );
+    assert_eq!(partial.graphics.depth_rows, 64);
+
+    let wild = GraphicsPrefs {
+        tilt_pct: 0,
+        depth_rows: 10_000,
+        ..GraphicsPrefs::default()
+    };
+    assert_eq!((wild.tilt_pct(), wild.depth_rows()), (20, 256));
+
+    let prefs = Prefs {
+        graphics: GraphicsPrefs {
+            pan_view: PanView::Surface3d,
+            tilt_pct: 45,
+            depth_rows: 128,
+            renderer: Renderer::Cpu,
+        },
+        ..Default::default()
+    };
+    let text = toml::to_string(&prefs).unwrap();
+    assert!(
+        text.contains("pan_view = \"surface3d\"") && text.contains("renderer = \"cpu\""),
+        "{text}"
+    );
+    let back: Prefs = toml::from_str(&text).unwrap();
+    assert_eq!(back.graphics, prefs.graphics);
+}

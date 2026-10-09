@@ -199,7 +199,9 @@ guesswork):
 USB/serial path get their final validation against a live K4; most control paths
 are already confirmed.
 
-**New, in the next release** — band buttons whose label colour shows each
+**New, in the next release** — a 3D spectrum (stacked traces or a shaded
+surface, time receding into the background), use of the whole of a large
+screen, and a GRAPHICS settings tab with the GPU/CPU renderer choice; and band buttons whose label colour shows each
 band's current conditions (`FR-UI-25`), combining the HamQSL forecast with the
 spot activity the app already receives, configured on a PROPAGATION settings
 tab — and working normally with no internet connection.

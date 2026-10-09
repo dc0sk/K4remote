@@ -176,6 +176,99 @@ pub struct Prefs {
     /// Band-condition colours on the band buttons (FR-UI-25). Everything on by default.
     #[serde(default)]
     pub propagation: PropagationPrefs,
+    /// The panadapter view and the renderer (FR-PAN-15, FR-UI-27).
+    #[serde(default)]
+    pub graphics: GraphicsPrefs,
+}
+
+/// What the panadapter shows (FR-PAN-15).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PanView {
+    /// Spectrum trace and waterfall. Also what an unknown value loads as.
+    #[default]
+    Classic,
+    /// 3D: stacked traces receding into the background.
+    Traces3d,
+    /// 3D: a shaded surface receding into the background.
+    Surface3d,
+}
+
+/// Which renderer to start with (FR-UI-27); applied at the next start.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Renderer {
+    /// Use the GPU if there is one, as before. Also what an unknown value loads as.
+    #[default]
+    Auto,
+    Gpu,
+    Cpu,
+}
+
+/// 3D view tilt, percent of the pane height the history climbs (FR-PAN-15).
+pub const TILT_MIN_PCT: u8 = 20;
+pub const TILT_DEFAULT_PCT: u8 = 60;
+pub const TILT_MAX_PCT: u8 = 90;
+/// 3D view depth, rows of history shown (FR-PAN-15).
+pub const DEPTH_MIN_ROWS: u16 = 16;
+pub const DEPTH_DEFAULT_ROWS: u16 = 64;
+pub const DEPTH_MAX_ROWS: u16 = 256;
+
+fn default_tilt() -> u8 {
+    TILT_DEFAULT_PCT
+}
+
+fn default_depth() -> u16 {
+    DEPTH_DEFAULT_ROWS
+}
+
+/// The GRAPHICS settings (FR-UI-27).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GraphicsPrefs {
+    #[serde(default, deserialize_with = "lenient")]
+    pub pan_view: PanView,
+    /// Read through [`GraphicsPrefs::tilt_pct`].
+    #[serde(default = "default_tilt")]
+    pub tilt_pct: u8,
+    /// Read through [`GraphicsPrefs::depth_rows`].
+    #[serde(default = "default_depth")]
+    pub depth_rows: u16,
+    #[serde(default, deserialize_with = "lenient")]
+    pub renderer: Renderer,
+}
+
+/// Read an enum setting, taking a value this version does not know (a newer version's, a typo) as
+/// the default instead of failing the whole configuration.
+fn lenient<'de, D, T>(d: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned + Default,
+{
+    let v = toml::Value::deserialize(d)?;
+    Ok(T::deserialize(v).unwrap_or_default())
+}
+
+impl GraphicsPrefs {
+    /// The tilt, within its bounds whatever the file says.
+    pub fn tilt_pct(&self) -> u8 {
+        self.tilt_pct.clamp(TILT_MIN_PCT, TILT_MAX_PCT)
+    }
+
+    /// The depth, within its bounds whatever the file says.
+    pub fn depth_rows(&self) -> u16 {
+        self.depth_rows.clamp(DEPTH_MIN_ROWS, DEPTH_MAX_ROWS)
+    }
+}
+
+impl Default for GraphicsPrefs {
+    fn default() -> Self {
+        Self {
+            pan_view: PanView::Classic,
+            tilt_pct: TILT_DEFAULT_PCT,
+            depth_rows: DEPTH_DEFAULT_ROWS,
+            renderer: Renderer::Auto,
+        }
+    }
 }
 
 /// HamQSL's update interval bounds, seconds (FR-UI-25): its page asks for no more than hourly.
@@ -1042,6 +1135,7 @@ impl Default for Prefs {
             cat_server: CatServerPrefs::default(),
             station_locator: String::new(),
             propagation: PropagationPrefs::default(),
+            graphics: GraphicsPrefs::default(),
         }
     }
 }
