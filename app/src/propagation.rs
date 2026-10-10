@@ -43,11 +43,17 @@ pub fn band_views(
         ),
     };
     let forecast = inputs.forecast.as_ref().filter(|_| prefs.hamqsl);
-    let networks: Vec<&str> = inputs.counted.iter().map(|n| network_name(*n)).collect();
     bandcond::BANDS
         .iter()
         .zip(inputs.activity)
-        .map(|(band, heard)| {
+        .enumerate()
+        .map(|(i, (band, heard))| {
+            // Credit the networks that heard someone on this band, not every one that is ticked.
+            let networks: Vec<&str> = inputs
+                .heard_by
+                .get(i)
+                .map(|v| v.iter().map(|n| network_name(*n)).collect())
+                .unwrap_or_default();
             let label = band.replace('m', " m");
             let fc = forecast
                 .and_then(|f| bandcond::group_for_band(band).and_then(|g| f.rating(g, day)));
@@ -167,7 +173,16 @@ mod tests {
         BandInputs {
             forecast: forecast.then(|| parse_hamqsl(FIXTURE).unwrap()),
             activity,
-            counted: vec![Network::Rbn, Network::PskReporter],
+            counted: vec![Network::Rbn, Network::PskReporter, Network::FreeDvReporter],
+            heard_by: (0..11)
+                .map(|i| {
+                    if activity[i] > 0 {
+                        vec![Network::Rbn, Network::PskReporter]
+                    } else {
+                        Vec::new()
+                    }
+                })
+                .collect(),
             hamqsl: None,
         }
     }

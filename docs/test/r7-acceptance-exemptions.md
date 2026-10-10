@@ -2,7 +2,7 @@
 title: "R7 exemptions — acceptance citing a function production never calls"
 status: Draft
 version: "0.2"
-updated: 2026-09-29
+updated: 2026-10-08
 authors:
   - Simon Keimer (DC0SK)
 ---

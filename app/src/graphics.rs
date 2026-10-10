@@ -2,7 +2,7 @@
 //! overrides, and whether a GPU adapter exists, decided once before iced starts. Pure apart from
 //! [`apply_at_start`]; the design is `docs/concept/large-screen-3d-plan.md` v0.2 §4.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::OnceLock;
 
 use k4_config::Renderer;
@@ -120,16 +120,34 @@ pub fn decision() -> Option<Decision> {
     DECISION.get().copied()
 }
 
-/// Set by a GPU primitive's `prepare`, which only runs under wgpu: the honest "the GPU is drawing".
-pub static GPU_DRAWING: AtomicBool = AtomicBool::new(false);
+/// Which backend iced is drawing with, as observed in a canvas `draw` (FR-UI-27): 0 = not drawn
+/// yet, 1 = wgpu, 2 = software (tiny-skia). Observed rather than decided: iced falls back to
+/// software by itself when wgpu cannot get a surface, whatever the start-up decision said.
+static BACKEND: AtomicU8 = AtomicU8::new(0);
 
-/// Note that a GPU primitive was prepared.
-pub fn note_gpu_drawing() {
-    GPU_DRAWING.store(true, Ordering::Relaxed);
+/// Record the backend a draw ran on.
+pub fn note_backend(wgpu: bool) {
+    BACKEND.store(if wgpu { 1 } else { 2 }, Ordering::Relaxed);
 }
 
-/// The GRAPHICS tab's status line: what is drawing now, and why.
-pub fn status_text(d: &Decision, gpu_drawing: bool) -> String {
+/// The backend seen drawing: `Some(true)` = wgpu, `Some(false)` = software, `None` = nothing drawn
+/// yet.
+pub fn observed_backend() -> Option<bool> {
+    match BACKEND.load(Ordering::Relaxed) {
+        1 => Some(true),
+        2 => Some(false),
+        _ => None,
+    }
+}
+
+/// Whether a draw call's renderer is iced's wgpu backend (the primary of its fallback pair).
+pub fn is_wgpu(renderer: &iced::Renderer) -> bool {
+    matches!(renderer, iced_renderer::fallback::Renderer::Primary(_))
+}
+
+/// The GRAPHICS tab's status line: what is drawing now (observed), why (the start-up decision),
+/// and where the waterfall is drawn.
+pub fn status_text(d: &Decision, observed: Option<bool>, gpu_waterfall: bool) -> String {
     let why = match d.reason {
         Reason::Detected if d.gpu => "a GPU was found",
         Reason::Detected => "no GPU was found",
@@ -138,10 +156,15 @@ pub fn status_text(d: &Decision, gpu_drawing: bool) -> String {
         Reason::EnvIcedBackend => "set by ICED_BACKEND in the environment",
         Reason::EnvK4Waterfall => "set by K4_WATERFALL in the environment",
     };
-    match (d.gpu, gpu_drawing) {
-        (true, true) => format!("In use: GPU (wgpu) — {why}."),
-        (true, false) => format!("GPU selected — {why}; waiting for the first frame."),
-        (false, _) => format!("In use: CPU (software) — {why}."),
+    match observed {
+        None => format!("Starting — {why}; waiting for the first frame."),
+        Some(false) if d.gpu => {
+            "In use: CPU (software) — the GPU could not be used, so the waterfall is drawn on the CPU."
+                .to_string()
+        }
+        Some(false) => format!("In use: CPU (software) — {why}."),
+        Some(true) if gpu_waterfall => format!("In use: GPU (wgpu) — {why}."),
+        Some(true) => format!("In use: GPU (wgpu), waterfall on the CPU — {why}."),
     }
 }
 
@@ -251,25 +274,46 @@ mod tests {
         assert!(!d(Gpu, Some("tiny-skia"), Some("gpu"), true).gpu);
     }
 
-    /// FR-UI-27: the status line says what draws and why; "GPU" only once a GPU frame was drawn.
+    /// FR-UI-27: the status line reports the backend observed drawing, not the decision — in the
+    /// 3D view too (any canvas draw records it), when iced fell back to software although the GPU
+    /// was chosen, and when K4_WATERFALL moved only the waterfall to the CPU.
     /// trace: FR-UI-27
     #[test]
     fn fr_ui_27_status_line() {
         let gpu = decide(Renderer::Auto, None, None, || true);
         assert_eq!(
-            status_text(&gpu, true),
+            status_text(&gpu, Some(true), true),
             "In use: GPU (wgpu) — a GPU was found."
         );
-        assert!(status_text(&gpu, false).starts_with("GPU selected"));
+        assert!(status_text(&gpu, None, true).starts_with("Starting"));
+        assert!(
+            status_text(&gpu, Some(false), true).contains("could not be used"),
+            "GPU decided, software drawing: say so"
+        );
         let cpu = decide(Renderer::Cpu, None, None, || true);
         assert_eq!(
-            status_text(&cpu, true),
+            status_text(&cpu, Some(false), false),
             "In use: CPU (software) — chosen in Settings."
+        );
+        let k4 = decide(Renderer::Auto, None, Some("cpu"), || true);
+        assert_eq!(
+            status_text(&k4, Some(true), false),
+            "In use: GPU (wgpu), waterfall on the CPU — set by K4_WATERFALL in the environment."
         );
         let none = decide(Renderer::Gpu, None, None, || false);
         assert_eq!(
-            status_text(&none, false),
+            status_text(&none, Some(false), false),
             "In use: CPU (software) — GPU chosen, but none was found."
         );
+    }
+
+    /// FR-UI-27: the observed backend starts unknown and follows what is recorded.
+    /// trace: FR-UI-27
+    #[test]
+    fn fr_ui_27_backend_is_observed() {
+        note_backend(false);
+        assert_eq!(observed_backend(), Some(false));
+        note_backend(true);
+        assert_eq!(observed_backend(), Some(true));
     }
 }

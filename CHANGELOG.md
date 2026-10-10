@@ -35,7 +35,7 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
   and night. It keeps working — uncoloured — without an internet connection.
   (`FR-UI-25`)
 - A build gate (`cargo xtask`, rule R6) for public functions that no production
-  code calls. Today's 29 are listed with a reason each in
+  code calls. The ones that exist today are listed with a reason each in
   `docs/test/r6-reachability-baseline.md`; a new one fails the build, and so
   does an entry that has since been wired up or removed.
 - A second build gate (rule R7): a requirement's acceptance may not cite, as its

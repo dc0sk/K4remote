@@ -277,6 +277,9 @@ struct App {
     /// the spot worker was last told.
     propagation: k4_config::PropagationPrefs,
     station_locator: String,
+    /// The last valid locator (or an explicit clear): what is saved while the field holds a
+    /// half-typed one.
+    station_locator_saved: String,
     /// The GRAPHICS settings (FR-UI-27), and the renderer this run started with.
     graphics: k4_config::GraphicsPrefs,
     renderer_at_start: k4_config::Renderer,
@@ -802,6 +805,18 @@ impl std::fmt::Display for ViewChoice {
             k4_config::PanView::Traces3d => "3D — stacked traces",
             k4_config::PanView::Surface3d => "3D — shaded surface",
         })
+    }
+}
+
+/// The station locator to save (FR-UI-25): the field when it holds a valid square or is cleared,
+/// else the last valid one — so a save from anywhere while a locator is half-typed cannot erase
+/// the stored one.
+fn locator_to_save(typed: &str, saved: &str) -> String {
+    let t = typed.trim();
+    if t.is_empty() || k4_spot::bandcond::locator_centre(t).is_some() {
+        t.to_string()
+    } else {
+        saved.to_string()
     }
 }
 
@@ -1392,6 +1407,7 @@ impl App {
             spot_sent: SpotSent::default(),
             propagation: prefs.propagation.clone(),
             station_locator: prefs.station_locator.clone(),
+            station_locator_saved: prefs.station_locator.clone(),
             graphics: prefs.graphics.clone(),
             renderer_at_start: prefs.graphics.renderer,
             prop_sent: None,
@@ -2023,12 +2039,7 @@ impl App {
         let dim = role_color(ui::ColorRole::Inactive);
         let caution = role_color(ui::ColorRole::Caution);
         let status = graphics::decision()
-            .map(|d| {
-                graphics::status_text(
-                    &d,
-                    graphics::GPU_DRAWING.load(std::sync::atomic::Ordering::Relaxed),
-                )
-            })
+            .map(|d| graphics::status_text(&d, graphics::observed_backend(), self.gpu_waterfall))
             .unwrap_or_else(|| "Renderer not decided at start.".to_string());
         let g = &self.graphics;
         let mut col = Column::new().spacing(8).push(
@@ -2119,12 +2130,7 @@ impl App {
     /// The station locator to save: as typed if it is a valid Maidenhead square, else empty
     /// (FR-UI-25). A half-typed locator is never stored.
     fn locator_for_save(&self) -> String {
-        let l = self.station_locator.trim();
-        if k4_spot::bandcond::locator_centre(l).is_some() {
-            l.to_string()
-        } else {
-            String::new()
-        }
+        locator_to_save(&self.station_locator, &self.station_locator_saved)
     }
 
     /// Each band button's rating and tooltip now (FR-UI-25).
@@ -2190,6 +2196,11 @@ impl App {
                 None if self.spot_status_ui.bands.forecast.is_some() => {
                     format!("HamQSL: current — next update in {} min", st.next_in_min)
                 }
+                None if st.stale => format!(
+                    "HamQSL: its data is older than the feed's update cycle, so it is not used — \
+                     next update in {} min",
+                    st.next_in_min
+                ),
                 None => "HamQSL: waiting for the first update".to_string(),
             };
             let colour = if st.error.is_some() { caution } else { dim };
@@ -3219,10 +3230,12 @@ impl App {
                     .filter(char::is_ascii_alphanumeric)
                     .take(6)
                     .collect();
-                // Saved only when valid (or cleared); a half-typed one is shown as such.
+                // Saved only when valid (or cleared); a half-typed one is shown as such, and any
+                // other save meanwhile keeps the last valid locator.
                 if self.station_locator.is_empty()
                     || k4_spot::bandcond::locator_centre(&self.station_locator).is_some()
                 {
+                    self.station_locator_saved = self.station_locator.trim().to_string();
                     self.save_config();
                 }
             }
@@ -4103,6 +4116,11 @@ impl App {
                     .lock()
                     .map(|g| g.clone())
                     .unwrap_or_default();
+                // The GPU waterfall was chosen but iced is drawing in software (it fell back by
+                // itself): a shader widget draws nothing there, so use the CPU waterfall (FR-UI-27).
+                if self.gpu_waterfall && graphics::observed_backend() == Some(false) {
+                    self.gpu_waterfall = false;
+                }
                 {
                     use k4_spot::telnet::TelnetConfig;
                     let nets = self.spot_networks_for_save();
@@ -12842,6 +12860,35 @@ mod propagation_ui_tests {
         }
     }
 
+    /// FR-UI-25: a half-typed locator never erases the stored one — any save meanwhile keeps the
+    /// last valid square; a valid one or an explicit clear replaces it.
+    /// trace: FR-UI-25
+    #[test]
+    fn fr_ui_25_a_half_typed_locator_keeps_the_stored_one() {
+        use super::locator_to_save;
+        assert_eq!(
+            locator_to_save("JO31l", "JO31"),
+            "JO31",
+            "half-typed: the stored one stays"
+        );
+        assert_eq!(
+            locator_to_save("JO3", ""),
+            "",
+            "nothing stored, nothing invented"
+        );
+        assert_eq!(
+            locator_to_save("JN58td", "JO31"),
+            "JN58td",
+            "a valid one replaces it"
+        );
+        assert_eq!(
+            locator_to_save("", "JO31"),
+            "",
+            "an explicit clear clears it"
+        );
+        assert_eq!(locator_to_save(" JO31 ", "x"), "JO31");
+    }
+
     /// FR-UI-25: the interval offered is never under HamQSL's hour, nor over a day; each band
     /// button has its own tooltip id.
     /// trace: FR-UI-25
@@ -12960,10 +13007,6 @@ mod large_screen_tests {
                 "self.graphics.pan_view = v.0; self.save_config();",
             ),
             (
-                "a slider saves on release",
-                ".on_release(Message::GraphicsSave)",
-            ),
-            (
                 "the tilt reaches the view",
                 "tilt: f32::from(self.graphics.tilt_pct()) / 100.0,",
             ),
@@ -12977,9 +13020,29 @@ mod large_screen_tests {
                 "not wired ({what}): {needle}"
             );
         }
+        // FR-UI-27: the GPU waterfall falls back to the CPU when iced is drawing in software.
+        assert!(
+            code.contains(&squash("if self.gpu_waterfall && graphics::observed_backend() == Some(false) { self.gpu_waterfall = false; }")),
+            "no CPU fallback for the waterfall when iced draws in software"
+        );
+        let sp = squash(include_str!("spectrum.rs"));
+        assert!(
+            sp.contains(&squash(
+                "crate::graphics::note_backend(crate::graphics::is_wgpu(renderer));"
+            )),
+            "the canvas does not record which backend draws"
+        );
+        // Both sliders save on release — counted, so dropping either one fails (one needle would
+        // be satisfied by the other).
+        assert_eq!(
+            code.matches(&squash(".on_release(Message::GraphicsSave)"))
+                .count(),
+            2,
+            "the tilt and the depth slider each save on release"
+        );
         let wf = include_str!("waterfall_gpu.rs");
         assert!(
-            squash(wf).contains("crate::graphics::note_gpu_drawing();if!storage.has::<Gpu>(){"),
+            squash(wf).contains("crate::graphics::note_backend(true);if!storage.has::<Gpu>(){"),
             "the GPU primitive does not report drawing"
         );
     }

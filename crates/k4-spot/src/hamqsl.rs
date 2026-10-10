@@ -153,6 +153,9 @@ impl HamqslSource {
 
     fn start(&mut self, now: Instant) {
         self.attempts += 1;
+        // A started request counts against HamQSL's rate even if it is later dropped (switched off
+        // mid-flight): the next may not start before the back-off floor. Completion reschedules.
+        self.next_attempt = now + self.timing.initial_backoff;
         let (tx, rx) = mpsc::channel();
         let fetch = Arc::clone(&self.fetch);
         let spawned = thread::Builder::new()
@@ -178,6 +181,12 @@ impl HamqslSource {
         let f = self.forecast.as_ref()?;
         bandcond::forecast_current(ok_unix, f.updated, unix_now, self.interval.as_secs())
             .then_some(f)
+    }
+
+    /// Whether a forecast was fetched but no longer counts at `unix` — the feed's own data is
+    /// older than its update cycle, or fetches have been failing for two intervals.
+    pub fn stale(&self, unix_now: u64) -> bool {
+        self.last_ok.is_some() && self.current(unix_now).is_none()
     }
 
     /// The last failure, kept until a request succeeds — for the PROPAGATION tab's status line.
@@ -321,6 +330,35 @@ mod tests {
         assert_eq!(n.load(Ordering::SeqCst), 6, "off fetches nothing");
     }
 
+    /// FR-UI-25: switching HamQSL off and on while a request is in flight does not send a second
+    /// request at once (the dropped one still reached the server): the next waits at least the
+    /// back-off floor.
+    /// trace: FR-UI-25
+    #[test]
+    fn fr_ui_25_hamqsl_off_and_on_mid_request_does_not_refetch_at_once() {
+        let n = Arc::new(AtomicU64::new(0));
+        let c = Arc::clone(&n);
+        let fetch: Fetcher = Arc::new(move |_, _| {
+            c.fetch_add(1, Ordering::SeqCst);
+            thread::sleep(Duration::from_millis(300)); // still in flight when toggled
+            Ok(FIXTURE.to_vec())
+        });
+        let t0 = Instant::now();
+        let mut s = HamqslSource::new(fetch, 3600, t0);
+        s.poll(t0, UPDATED);
+        assert!(s.busy(), "the first request is in flight");
+        s.set_enabled(false);
+        s.set_enabled(true);
+        s.poll(t0 + Duration::from_secs(1), UPDATED);
+        assert!(!s.busy(), "no second request at once");
+        assert_eq!(s.attempts(), 1);
+        s.poll(t0 + Duration::from_secs(301), UPDATED);
+        assert!(
+            s.busy() && s.attempts() == 2,
+            "after the back-off floor it may ask again"
+        );
+    }
+
     /// FR-UI-25: a forecast stops counting when fetches keep failing past two intervals.
     /// trace: FR-UI-25
     #[test]
@@ -347,6 +385,10 @@ mod tests {
         assert!(
             s.current(UPDATED + 7201).is_none(),
             "two intervals without a good fetch"
+        );
+        assert!(
+            s.stale(UPDATED + 7201) && !s.stale(UPDATED + 7200),
+            "and is reported stale"
         );
     }
 }
