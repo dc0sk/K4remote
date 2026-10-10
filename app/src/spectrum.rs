@@ -139,6 +139,8 @@ struct D3Cache {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct View3dKey {
+    /// The receiver: a pane switched from A to B at the same centre and span shows B's rows.
+    rx: usize,
     view: View3d,
     center_hz: u64,
     span_hz: u32,
@@ -148,15 +150,37 @@ struct View3dKey {
 }
 
 /// What a coloured row depends on besides its own data: a change of any of these redraws the
-/// whole ring.
+/// whole ring. It is also all the ring is told, so a new dependency has to be added here to reach
+/// the ring at all.
 #[derive(Debug, Clone, Copy, PartialEq)]
-struct WfKey {
-    center_hz: i64,
-    span_hz: u32,
-    top_dbm: f32,
-    range_db: f32,
-    tex_w: usize,
-    cap: usize,
+pub(crate) struct WfKey {
+    /// The receiver whose history the rows are: a pane switched from A to B at the same centre
+    /// and span would otherwise keep A's rows until they scrolled out.
+    pub rx: usize,
+    pub center_hz: i64,
+    pub span_hz: u32,
+    pub top_dbm: f32,
+    pub range_db: f32,
+    pub tex_w: usize,
+    /// Rows the band can show: its height in physical pixel rows ([`band_rows`]).
+    pub cap: usize,
+}
+
+/// How many waterfall rows a band `logical_h` tall can show at most one row per pixel row, at
+/// `scale` physical pixels per logical one, within the history (FR-UI-26). The CPU and the GPU
+/// waterfall both ask this, so they keep the same history on any display.
+pub(crate) fn band_rows(logical_h: f32, scale: f32) -> usize {
+    let scale = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
+    let px = (logical_h * scale).round();
+    if px.is_finite() && px >= 1.0 {
+        (px as usize).min(crate::worker::WATERFALL_ROWS)
+    } else {
+        1
+    }
 }
 
 /// The CPU waterfall's incremental ring (FR-UI-26): rows already coloured are kept, so a frame
@@ -174,46 +198,16 @@ pub struct WfRing {
 }
 
 impl WfRing {
-    fn key(
-        center_hz: i64,
-        span_hz: u32,
-        top_dbm: f32,
-        range_db: f32,
-        tex_w: usize,
-        cap: usize,
-    ) -> WfKey {
-        WfKey {
-            center_hz,
-            span_hz,
-            top_dbm,
-            range_db,
-            tex_w,
-            cap,
-        }
-    }
-
     /// How many of the newest rows the next [`update`](Self::update) needs, given `available`
     /// rows and `total` ever pushed: all it will show after a view change, else only the rows that
     /// arrived since the last update. The caller copies just these out of the shared history, so
     /// the history's lock is never held while rows are coloured (the radio worker takes the same
     /// lock for every spectrum frame).
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn plan(
-        &self,
-        available: usize,
-        total: u64,
-        center_hz: i64,
-        span_hz: u32,
-        top_dbm: f32,
-        range_db: f32,
-        tex_w: usize,
-        cap: usize,
-    ) -> usize {
-        let n = available.min(cap);
-        if n == 0 || tex_w == 0 {
+    pub(crate) fn plan(&self, available: usize, total: u64, key: WfKey) -> usize {
+        let n = available.min(key.cap);
+        if n == 0 || key.tex_w == 0 {
             return 0;
         }
-        let key = Self::key(center_hz, span_hz, top_dbm, range_db, tex_w, cap);
         let fresh = total.saturating_sub(self.total);
         if self.key != Some(key) || total < self.total || fresh >= n as u64 {
             n
@@ -226,29 +220,21 @@ impl WfRing {
     /// `cap` rows, `tex_w` texels wide. `rows` holds the newest rows (at least as many as
     /// [`plan`](Self::plan) asked for), `available` how many the history has, `total` how many
     /// were ever pushed.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn update(
         &mut self,
         rows: &[PanRow],
         available: usize,
         total: u64,
-        center_hz: i64,
-        span_hz: u32,
-        top_dbm: f32,
-        range_db: f32,
-        tex_w: usize,
-        cap: usize,
+        key: WfKey,
     ) -> (Vec<u8>, usize) {
-        let colour = self.plan(
-            available, total, center_hz, span_hz, top_dbm, range_db, tex_w, cap,
-        );
+        let colour = self.plan(available, total, key);
+        let WfKey { tex_w, cap, .. } = key;
         let n = available.min(cap);
         let row_bytes = tex_w * 4;
         if n == 0 || tex_w == 0 {
             self.coloured_last = 0;
             return (Vec::new(), 0);
         }
-        let key = Self::key(center_hz, span_hz, top_dbm, range_db, tex_w, cap);
         if colour == n
             && (self.key != Some(key)
                 || self.slots.len() != cap * row_bytes
@@ -261,10 +247,10 @@ impl WfRing {
             let slot = ((total - 1 - k as u64) % cap as u64) as usize;
             rgba_row(
                 row,
-                center_hz,
-                span_hz,
-                top_dbm,
-                range_db,
+                key.center_hz,
+                key.span_hz,
+                key.top_dbm,
+                key.range_db,
                 &mut self.slots[slot * row_bytes..(slot + 1) * row_bytes],
             );
         }
@@ -297,6 +283,9 @@ pub struct Spectrum<'a, Message> {
     /// The waterfall is drawn by the GPU widget under this canvas (FR-PAN-12), so the canvas
     /// must leave that band transparent and skip the CPU rasteriser.
     pub gpu_waterfall: bool,
+    /// Physical pixels per logical one in this window, so the CPU waterfall keeps as many rows as
+    /// the band has pixel rows, as the GPU one does (FR-UI-26).
+    pub scale_factor: f32,
     /// dBm at the top of the spectrum window.
     pub top_dbm: f32,
     /// dB span of the spectrum window.
@@ -331,6 +320,32 @@ struct SpotView {
 }
 
 impl<Message> Spectrum<'_, Message> {
+    /// What this pane's CPU waterfall rows depend on, for a band `w` × `wf_h` logical pixels.
+    fn wf_key(&self, w: f32, wf_h: f32) -> WfKey {
+        WfKey {
+            rx: self.rx,
+            center_hz: self.center_hz as i64,
+            span_hz: self.span_hz,
+            top_dbm: self.top_dbm,
+            range_db: self.range_db,
+            tex_w: (w.round() as usize).clamp(1, MAX_TEXTURE_WIDTH),
+            cap: band_rows(wf_h, self.scale_factor),
+        }
+    }
+
+    /// What this pane's 3D image depends on besides the row count, for an `iw` × `ih` image.
+    fn view3d_key(&self, view: View3d, iw: f32, ih: f32) -> View3dKey {
+        View3dKey {
+            rx: self.rx,
+            view,
+            center_hz: self.center_hz,
+            span_hz: self.span_hz,
+            top_dbm: self.top_dbm,
+            range_db: self.range_db,
+            img: (iw as u32, ih as u32),
+        }
+    }
+
     /// Every fresh spot inside the view, and the layout of their plates for a spectrum band
     /// The 3D view over the whole pane (FR-PAN-15): the image from [`k4_stream::view3d`], rebuilt
     /// only when a row arrives or the view changes, stretched over the pane, with the frequency axis
@@ -363,17 +378,7 @@ impl<Message> Spectrum<'_, Message> {
         // Under the lock, only decide and copy the rows to draw; rasterise after releasing it —
         // the radio worker takes the same lock for every spectrum frame.
         let wanted = self.pan.lock().ok().and_then(|p| {
-            let key = (
-                View3dKey {
-                    view: v,
-                    center_hz: self.center_hz,
-                    span_hz: self.span_hz,
-                    top_dbm: self.top_dbm,
-                    range_db: self.range_db,
-                    img: (iw as u32, ih as u32),
-                },
-                p.total(self.rx),
-            );
+            let key = (self.view3d_key(v, iw, ih), p.total(self.rx));
             (st.d3.key != Some(key)).then(|| {
                 let n = proj.rows_drawn(p.rows(self.rx).len());
                 let rows: Vec<PanRow> = p.rows(self.rx).iter().take(n).cloned().collect();
@@ -962,30 +967,19 @@ impl<Message> canvas::Program<Message> for Spectrum<'_, Message> {
         let (rgba, rows) = if self.gpu_waterfall || w < 1.0 || wf_h < 1.0 || self.span_hz == 0 {
             (Vec::new(), 0)
         } else {
-            let tex_w = (w.round() as usize).clamp(1, MAX_TEXTURE_WIDTH);
-            let cap = (wf_h.round() as usize).clamp(1, crate::worker::WATERFALL_ROWS);
-            let (c, sp, top, range) = (
-                self.center_hz as i64,
-                self.span_hz,
-                self.top_dbm,
-                self.range_db,
-            );
+            let key = self.wf_key(w, wf_h);
             // Under the lock, copy only the rows this frame colours (usually one); colour them
             // after the lock is released — the radio worker takes it for every spectrum frame.
             let taken = self.pan.lock().ok().map(|p| {
                 let (available, total) = (p.rows(self.rx).len(), p.total(self.rx));
-                let need = state
-                    .borrow()
-                    .wf
-                    .plan(available, total, c, sp, top, range, tex_w, cap);
+                let need = state.borrow().wf.plan(available, total, key);
                 let rows: Vec<PanRow> = p.rows(self.rx).iter().take(need).cloned().collect();
                 (rows, available, total)
             });
             match taken {
-                Some((rows, available, total)) => state
-                    .borrow_mut()
-                    .wf
-                    .update(&rows, available, total, c, sp, top, range, tex_w, cap),
+                Some((rows, available, total)) => {
+                    state.borrow_mut().wf.update(&rows, available, total, key)
+                }
                 None => (Vec::new(), 0),
             }
         };
@@ -1101,7 +1095,6 @@ mod tests {
             let rows: Vec<PanRow> = h.iter().take(n).cloned().collect();
             waterfall_rgba(&rows, centre, span, -40.0, 90.0, w)
         };
-        // As the canvas does: copy only the rows the ring plans to colour, then update.
         #[allow(clippy::too_many_arguments)]
         fn planned(
             ring: &mut WfRing,
@@ -1114,9 +1107,16 @@ mod tests {
             w: usize,
             cap: usize,
         ) -> (Vec<u8>, usize) {
-            let need = ring.plan(hist.len(), total, c, sp, top, range, w, cap);
-            let rows: Vec<PanRow> = hist.iter().take(need).cloned().collect();
-            ring.update(&rows, hist.len(), total, c, sp, top, range, w, cap)
+            let key = WfKey {
+                rx: 0,
+                center_hz: c,
+                span_hz: sp,
+                top_dbm: top,
+                range_db: range,
+                tex_w: w,
+                cap,
+            };
+            planned_key(ring, hist, total, key)
         }
         let mut hist: VecDeque<PanRow> = VecDeque::new();
         let mut ring = WfRing::default();
@@ -1162,6 +1162,87 @@ mod tests {
             &mut ring, &hist, total, 14_076_500, span, -40.0, 90.0, w, 64,
         );
         assert_eq!(n, 64);
+    }
+
+    /// As the canvas does: copy only the rows the ring plans to colour, then update.
+    fn planned_key(
+        ring: &mut WfRing,
+        hist: &std::collections::VecDeque<PanRow>,
+        total: u64,
+        key: WfKey,
+    ) -> (Vec<u8>, usize) {
+        let need = ring.plan(hist.len(), total, key);
+        let rows: Vec<PanRow> = hist.iter().take(need).cloned().collect();
+        ring.update(&rows, hist.len(), total, key)
+    }
+
+    /// FR-UI-26: a pane switched from receiver A to B at the same centre, span and scale shows
+    /// B's rows at once. B has pushed one row more than A, so without the receiver in the key the
+    /// ring took it for one new row and kept A's rows (audit F, 2026-10-10).
+    /// trace: FR-UI-26
+    #[test]
+    fn fr_ui_26_switching_receiver_redraws_the_ring() {
+        use std::collections::VecDeque;
+        let (w, span, centre, cap) = (64usize, 24_000u32, 14_074_000i64, 30usize);
+        let hist = |level: f32, n: usize| -> VecDeque<PanRow> {
+            (0..n).map(|_| row(centre, span, vec![level; 48])).collect()
+        };
+        let (a, b) = (hist(-110.0, 40), hist(-50.0, 40));
+        let key_a = WfKey {
+            rx: 0,
+            center_hz: centre,
+            span_hz: span,
+            top_dbm: -40.0,
+            range_db: 90.0,
+            tex_w: w,
+            cap,
+        };
+        let mut ring = WfRing::default();
+        let (img_a, _) = planned_key(&mut ring, &a, 500, key_a);
+        let key_b = WfKey { rx: 1, ..key_a };
+        let (img_b, n) = planned_key(&mut ring, &b, 501, key_b);
+        let rows: Vec<PanRow> = b.iter().take(n).cloned().collect();
+        assert_ne!(img_a, img_b, "the two receivers' rows look different");
+        assert_eq!(
+            (ring.coloured_last, img_b),
+            (cap, waterfall_rgba(&rows, centre, span, -40.0, 90.0, w)),
+            "every row redrawn from B"
+        );
+    }
+
+    /// FR-UI-26: the waterfall's row count is the band's height in physical pixel rows, within
+    /// the history — and both the CPU and the GPU waterfall take it from [`band_rows`], so at a
+    /// scale of 2 the CPU path no longer kept half the GPU path's history (audit L, 2026-10-10).
+    /// trace: FR-UI-26
+    #[test]
+    fn fr_ui_26_both_waterfalls_count_physical_pixel_rows() {
+        assert_eq!(crate::worker::WATERFALL_ROWS, 256);
+        assert_eq!(band_rows(100.0, 1.0), 100);
+        assert_eq!(band_rows(100.0, 2.0), 200);
+        assert_eq!(band_rows(100.0, 1.5), 150);
+        assert_eq!(band_rows(200.0, 2.0), 256, "never more than the history");
+        assert_eq!(band_rows(0.2, 1.0), 1);
+        for bad in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            assert_eq!(band_rows(100.0, bad), 100, "scale {bad} is taken as 1");
+        }
+        assert_eq!(band_rows(f32::NAN, 1.0), 1);
+        // Both paths ask it, in their production code, exactly once each.
+        let prod = |src: &'static str, module: &str| -> &'static str {
+            &src[..src.find(module).expect("test module")]
+        };
+        let cpu = prod(include_str!("spectrum.rs"), concat!("mod ", "tests {"));
+        // The GPU file's first test module.
+        let gpu = prod(
+            include_str!("waterfall_gpu.rs"),
+            concat!("mod ", "golden {"),
+        );
+        assert_eq!(cpu.matches("let key = self.wf_key(w, wf_h);").count(), 1);
+        assert_eq!(
+            cpu.matches("cap: band_rows(wf_h, self.scale_factor),")
+                .count(),
+            1
+        );
+        assert_eq!(gpu.matches("band_rows(bounds.height, sf)").count(), 1);
     }
 
     /// FR-UI-26 / FR-PAN-15: the shared pan history's lock is held only to decide and copy rows —
@@ -1337,6 +1418,7 @@ mod spot_click_tests {
             pan: &pan,
             rx: 0,
             gpu_waterfall: true,
+            scale_factor: 1.0,
             spots,
             spot_max_age_secs: 900,
             top_dbm: -40.0,
@@ -1549,6 +1631,7 @@ mod spot_click_tests {
             pan: sp.pan,
             rx: sp.rx,
             gpu_waterfall: sp.gpu_waterfall,
+            scale_factor: sp.scale_factor,
             spots: sp.spots,
             spot_max_age_secs: sp.spot_max_age_secs,
             top_dbm: sp.top_dbm,
@@ -1562,6 +1645,34 @@ mod spot_click_tests {
             on_qsy: sp.on_qsy,
             on_wheel: sp.on_wheel,
         }
+    }
+
+    /// FR-UI-26 / FR-PAN-15: the keys the canvas builds for its waterfall ring and its 3D image
+    /// differ between receivers A and B with everything else equal, and the ring's row count
+    /// follows the window's scale (audit F and L, 2026-10-10).
+    /// trace: FR-UI-26, FR-PAN-15
+    #[test]
+    fn fr_ui_26_the_canvas_keys_carry_the_receiver_and_the_scale() {
+        let spots = store(&[]);
+        with(&spots, |a| {
+            let b = Spectrum {
+                rx: 1,
+                ..clone_view(a)
+            };
+            assert_ne!(a.wf_key(300.0, 100.0), b.wf_key(300.0, 100.0));
+            let v = View3d {
+                style: k4_stream::view3d::Style::Surface,
+                tilt: 0.5,
+                depth: 64,
+            };
+            assert_ne!(a.view3d_key(v, 300.0, 200.0), b.view3d_key(v, 300.0, 200.0));
+            let hidpi = Spectrum {
+                scale_factor: 2.0,
+                ..clone_view(a)
+            };
+            assert_eq!(a.wf_key(300.0, 100.0).cap, 100);
+            assert_eq!(hidpi.wf_key(300.0, 100.0).cap, 200);
+        });
     }
 }
 
