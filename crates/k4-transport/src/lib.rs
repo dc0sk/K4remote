@@ -417,14 +417,6 @@ impl SerialTransport<Box<dyn serialport::SerialPort>> {
     }
 }
 
-/// List available serial port names (e.g. for a UI picker).
-#[cfg(feature = "serial")]
-pub fn available_serial_ports() -> Vec<String> {
-    serialport::available_ports()
-        .map(|ports| ports.into_iter().map(|p| p.port_name).collect())
-        .unwrap_or_default()
-}
-
 impl<P: Read + Write> CatLink for SerialTransport<P> {
     fn send_frame(&mut self, payload: &[u8]) -> io::Result<()> {
         // Serial carries CAT only: write the ASCII of CAT payloads, drop others
