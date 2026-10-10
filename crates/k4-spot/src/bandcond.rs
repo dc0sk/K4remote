@@ -190,7 +190,16 @@ fn parse_updated(s: &str) -> Option<u64> {
     };
     let year: i64 = it.next()?.parse().ok()?;
     let hhmm = it.next()?;
-    if hhmm.len() != 4 || it.next()? != "GMT" || !(1..=31).contains(&day) {
+    // Four ASCII digits before slicing: a length check alone counts bytes, and a four-byte string
+    // with a multi-byte character would be sliced inside it (a panic on the spot-sources thread).
+    // The year is bounded so the date arithmetic cannot overflow, and the day must exist.
+    if hhmm.len() != 4
+        || !hhmm.bytes().all(|b| b.is_ascii_digit())
+        || it.next()? != "GMT"
+        || !(1970..=9999).contains(&year)
+        || day == 0
+        || day > days_in_month(year, month)
+    {
         return None;
     }
     let (h, m): (u64, u64) = (hhmm[..2].parse().ok()?, hhmm[2..].parse().ok()?);
@@ -201,6 +210,16 @@ fn parse_updated(s: &str) -> Option<u64> {
     u64::try_from(days)
         .ok()
         .map(|d| d * 86_400 + h * 3600 + m * 60)
+}
+
+/// The days in `month` (1–12) of `year`, Gregorian.
+fn days_in_month(year: i64, month: u32) -> u32 {
+    match month {
+        2 if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    }
 }
 
 /// Days since 1970-01-01 for a proleptic Gregorian date (Howard Hinnant's algorithm).
@@ -436,6 +455,38 @@ mod tests {
             "unknown value is unrated"
         );
         assert_eq!(f.rating(Group::B30_20, false), Some(Rating::Fair));
+    }
+
+    /// FR-UI-25: a malformed `<updated>` — a non-ASCII time that is four bytes long, a year that
+    /// would overflow the date arithmetic, a day the month does not have — is "no date", never a
+    /// panic: the parser runs on the spot-sources thread, and a panic there would stop every spot
+    /// source. The forecast itself still parses.
+    /// trace: FR-UI-25
+    #[test]
+    fn fr_ui_25_a_malformed_update_time_is_no_date_not_a_panic() {
+        for bad in [
+            "04 Oct 2026 1\u{e9}5 GMT",     // 4 bytes, 3 chars: byte 2 is inside the é
+            "04 Oct 2026 \u{e9}\u{e9} GMT", // 4 bytes, 2 chars
+            "04 Oct 99999999999999 1626 GMT",
+            "04 Oct -5 1626 GMT",
+            "31 Feb 2026 1626 GMT",
+            "31 Apr 2026 1626 GMT",
+            "29 Feb 2027 1626 GMT", // not a leap year
+        ] {
+            let got = std::panic::catch_unwind(|| parse_updated(bad));
+            assert_eq!(got.ok(), Some(None), "{bad:?}");
+        }
+        assert!(
+            parse_updated("29 Feb 2028 1626 GMT").is_some(),
+            "a leap day is a date"
+        );
+        let text = std::str::from_utf8(FIXTURE).unwrap();
+        let odd = text.replacen("1626 GMT", "1\u{e9}5 GMT", 1);
+        let f = std::panic::catch_unwind(|| parse_hamqsl(odd.as_bytes()))
+            .expect("must not panic")
+            .expect("the forecast still parses");
+        assert_eq!(f.updated, None);
+        assert_eq!(f.rating(Group::B30_20, true), Some(Rating::Fair));
     }
 
     /// FR-UI-25: every band maps to its HamQSL group; 160 m and 6 m are not rated by it.
