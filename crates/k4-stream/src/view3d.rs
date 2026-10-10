@@ -63,11 +63,17 @@ impl Proj {
         (sx, y0 - z.clamp(0.0, 1.0) * self.h0() * s)
     }
 
-    /// How many rows to draw: no more than the depth, the rows available, or the pixel rows the
-    /// history climbs (`t·H`), and at least one when there is a row.
+    /// How many history rows the view covers: the configured depth, or fewer if fewer exist.
     pub fn rows_drawn(&self, available: usize) -> usize {
+        self.depth.min(available)
+    }
+
+    /// Which of `n` covered rows to draw: all of them when they fit the pixel rows the history
+    /// climbs (`t·H`), else every `step`-th — so a deep history still spans the whole climb rather
+    /// than the newest rows crowding the front with the back of the scene empty.
+    pub fn draw_step(&self, n: usize) -> usize {
         let px = (self.tilt * self.h).floor().max(1.0) as usize;
-        self.depth.min(available).min(px)
+        n.div_ceil(px).max(1)
     }
 }
 
@@ -135,7 +141,8 @@ pub fn render_rgba(
     // The highest (smallest y) point drawn so far in each pixel column; `h` = nothing yet.
     let mut horizon = vec![h as f32; w];
     let min_db = top_dbm - range_db;
-    for (k, row) in levels.iter().take(n).enumerate() {
+    let step = proj.draw_step(n);
+    for (k, row) in levels.iter().take(n).enumerate().step_by(step) {
         let a = proj.age(k);
         let cols = row.len();
         if cols == 0 {
@@ -170,7 +177,9 @@ pub fn render_rgba(
                 } else {
                     0.0
                 };
-                let y = p0.1 + (p1.1 - p0.1) * t;
+                // The floor projects to `h`, one past the last pixel row: keep it on the last row,
+                // so the newest row is drawn along a quiet stretch instead of vanishing.
+                let y = (p0.1 + (p1.1 - p0.1) * t).min(h as f32 - 1.0);
                 let z = p0.2 + (p1.2 - p0.2) * t;
                 let top = horizon[x];
                 if y >= top {
@@ -267,8 +276,39 @@ mod tests {
         let deep = Proj { depth: 256, ..P };
         assert_eq!(
             deep.rows_drawn(256),
-            60,
-            "t·H = 60 pixel rows to put them on"
+            256,
+            "the whole configured depth is covered"
+        );
+        assert_eq!(
+            deep.draw_step(256),
+            5,
+            "t·H = 60 pixel rows: every 5th of 256"
+        );
+        assert_eq!(P.draw_step(11), 1, "11 rows fit 60 pixel rows: all drawn");
+    }
+
+    /// FR-PAN-15: a depth larger than the pixel rows the history climbs still shows that much
+    /// history across the whole climb — every n-th row — instead of the newest rows crowded into
+    /// the front with the back of the scene empty.
+    /// trace: FR-PAN-15
+    #[test]
+    fn fr_pan_15_a_deep_history_spans_the_whole_climb() {
+        let proj = Proj { depth: 256, ..P }; // t·H = 60 pixel rows for 256 history rows
+        let w = proj.w as usize;
+        let rows: Vec<Vec<Option<f32>>> = (0..256).map(|_| flat(0.0, 40)).collect();
+        let img = render_rgba(&rows, proj, Style::Traces, -40.0, 90.0);
+        // The oldest baseline is at y = H − t·H = 40; something must be drawn within a few pixels.
+        let highest = (0..proj.h as usize)
+            .find(|&y| (0..w).any(|x| px(&img, w, x, y)[3] == 0xFF))
+            .expect("something drawn");
+        assert!(
+            highest <= 43,
+            "the history climbs only to y = {highest}, not ~40"
+        );
+        assert_eq!(
+            proj.rows_drawn(256),
+            256,
+            "all of the configured depth is handed in"
         );
     }
 
@@ -376,6 +416,23 @@ mod tests {
             "the front row drew inside its gap: {:?}",
             &col[by as usize + 3..]
         );
+    }
+
+    /// FR-PAN-15: the newest row is drawn even where its level is at the display floor — on the
+    /// bottom pixel row, not one past it — in both styles.
+    /// trace: FR-PAN-15
+    #[test]
+    fn fr_pan_15_the_front_row_shows_at_the_floor() {
+        let proj = Proj { depth: 2, ..P };
+        let (w, h) = (proj.w as usize, proj.h as usize);
+        for style in [Style::Traces, Style::Surface] {
+            let img = render_rgba(&[flat(0.0, 40)], proj, style, -40.0, 90.0);
+            let lit = (0..w).filter(|&x| px(&img, w, x, h - 1)[3] == 0xFF).count();
+            assert!(
+                lit > w / 2,
+                "{style:?}: only {lit} of {w} bottom pixels lit"
+            );
+        }
     }
 
     /// FR-PAN-15: a retuned row is laid out at its own frequencies: a peak sampled 1/4 span higher

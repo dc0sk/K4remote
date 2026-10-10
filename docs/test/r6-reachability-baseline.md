@@ -2,7 +2,7 @@
 title: "R6 baseline — public functions with no production reference"
 status: Draft
 version: "0.4"
-updated: 2026-09-29
+updated: 2026-10-10
 authors:
   - Simon Keimer (DC0SK)
 ---

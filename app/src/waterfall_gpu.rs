@@ -629,7 +629,7 @@ impl shader::Primitive for WaterfallPrimitive {
         viewport: &Viewport,
     ) {
         // Only ever runs under wgpu: the honest "the GPU is drawing" for the GRAPHICS tab (FR-UI-27).
-        crate::graphics::note_gpu_drawing();
+        crate::graphics::note_backend(true);
         if !storage.has::<Gpu>() {
             storage.store(Gpu::new(device, queue, format));
             storage.store(Placement(vec![None, None]));

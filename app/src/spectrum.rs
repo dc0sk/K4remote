@@ -729,6 +729,9 @@ impl<Message> canvas::Program<Message> for Spectrum<'_, Message> {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
+        // Which backend is really drawing, for the GRAPHICS status and the waterfall fallback
+        // (FR-UI-27) — observed here, in both views, not inferred from the start-up decision.
+        crate::graphics::note_backend(crate::graphics::is_wgpu(renderer));
         let mut frame = Frame::new(renderer, bounds.size());
         let (w, h) = (bounds.width, bounds.height);
         let spec_h = h * 0.4;

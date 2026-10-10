@@ -68,6 +68,9 @@ pub struct BandInputs {
     pub activity: [usize; 11],
     /// Which networks were counted.
     pub counted: Vec<Network>,
+    /// Per band ([`bandcond::BANDS`] order), the counted networks that heard anyone there — what
+    /// the tooltip credits.
+    pub heard_by: Vec<Vec<Network>>,
     /// HamQSL's state; `None` = switched off.
     pub hamqsl: Option<HamqslStatus>,
 }
@@ -79,6 +82,8 @@ pub struct HamqslStatus {
     pub error: Option<String>,
     /// Seconds until the next request (rounded to the minute, so the snapshot does not churn).
     pub next_in_min: u64,
+    /// A forecast was fetched but no longer counts (the feed's data too old, or fetches failing).
+    pub stale: bool,
 }
 
 /// The band-condition settings the worker needs (FR-UI-25).
@@ -417,18 +422,26 @@ fn band_inputs(
         return BandInputs::default();
     };
     let mut counts = [0usize; 11];
+    let mut heard_by = vec![Vec::new(); 11];
     if let Ok(mut a) = activity.lock() {
         a.purge(unix);
-        for (n, band) in counts.iter_mut().zip(bandcond::BANDS) {
+        for ((n, by), band) in counts
+            .iter_mut()
+            .zip(heard_by.iter_mut())
+            .zip(bandcond::BANDS)
+        {
             *n = a.count(band, unix, networks);
+            *by = a.networks_on(band, unix, networks);
         }
     }
     BandInputs {
         forecast: hamqsl.current(unix).cloned(),
         activity: counts,
         counted: networks.to_vec(),
+        heard_by,
         hamqsl: hamqsl.enabled().then(|| HamqslStatus {
             error: hamqsl.error().map(str::to_string),
+            stale: hamqsl.stale(unix),
             next_in_min: hamqsl
                 .next_attempt()
                 .saturating_duration_since(Instant::now())

@@ -352,6 +352,23 @@ impl Activity {
         distinct.len()
     }
 
+    /// The networks among `networks` that heard anyone on `band` in the window before `now`, in
+    /// the order given — what a band's tooltip credits, rather than every network that is ticked.
+    pub fn networks_on(&self, band: &str, now: u64, networks: &[Network]) -> Vec<Network> {
+        let Some(calls) = self.bands.get(band) else {
+            return Vec::new();
+        };
+        networks
+            .iter()
+            .copied()
+            .filter(|n| {
+                calls.iter().any(|((_, net), &seen)| {
+                    net == n && now.saturating_sub(seen) < ACTIVITY_WINDOW_SECS
+                })
+            })
+            .collect()
+    }
+
     /// Drop every entry older than the window.
     pub fn purge(&mut self, now: u64) {
         for calls in self.bands.values_mut() {
@@ -575,6 +592,16 @@ mod tests {
         a.note("CQ", 14_074_000, Rbn, 120); // not a call
         assert_eq!(a.count("20m", 130, &both), 2, "DL1ABC once, G4XYZ");
         assert_eq!(a.count("20m", 130, &[Rbn]), 1, "only RBN asked for");
+        assert_eq!(
+            a.networks_on("20m", 130, &[Rbn, DxCluster, PskReporter]),
+            [Rbn, DxCluster]
+        );
+        assert_eq!(
+            a.networks_on("40m", 130, &[Rbn, DxCluster]),
+            [Rbn],
+            "only who heard someone there"
+        );
+        assert!(a.networks_on("15m", 130, &both).is_empty());
         assert_eq!(a.count("40m", 130, &both), 1);
         assert_eq!(
             a.count("20m", 110 + ACTIVITY_WINDOW_SECS, &both),

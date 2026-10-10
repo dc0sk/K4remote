@@ -2233,6 +2233,7 @@ version = "0.10.0"
 dependencies = [
  "bytemuck",
  "iced",
+ "iced_renderer",
  "k4-audio",
  "k4-catsrv",
  "k4-config",

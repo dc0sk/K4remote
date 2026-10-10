@@ -186,12 +186,12 @@ impl FreeDvSource {
         self.backoff = self.timing.initial_backoff;
     }
 
-    /// Keep only spots between `lo` and `hi` Hz (`None` = all).
     /// Hand every parsed spot, before the window, to `tap` (FR-UI-25); `None` stops it.
     pub fn set_activity_tap(&mut self, tap: Option<ActivityTap>) {
         self.tap = tap;
     }
 
+    /// Keep only spots between `lo` and `hi` Hz (`None` = all).
     pub fn set_window(&mut self, window: Option<(u64, u64)>) {
         self.window = window;
     }
