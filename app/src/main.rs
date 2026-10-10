@@ -306,6 +306,8 @@ struct App {
     window_w: f32,
     // current window height, to keep an anchored popup on screen (FR-UI-POPUP-01)
     window_h: f32,
+    /// The main window's physical pixels per logical one, for the waterfall's row count (FR-UI-26).
+    scale_factor: f32,
     // selected UI theme (FR-UI-17)
     theme_mode: ui::ThemeMode,
     // detected OS dark preference, for the `System` theme (FR-UI-17)
@@ -1214,6 +1216,9 @@ enum Message {
     // RX config sub-screens (FR-ANT-01/FR-AUD-CFG-01, Phase D).
     Rx(RxMsg),
     Resized(iced::window::Id, f32, f32),
+    /// The main window's scale factor, asked when it opens and whenever it is resized (moving it to
+    /// a screen with another scale resizes it).
+    ScaleFactor(f32),
     /// Pointer moved, in window coordinates — remembered so a popup can open
     /// at the control instead of the middle of the window (FR-UI-POPUP-01).
     CursorMoved(f32, f32),
@@ -1353,9 +1358,12 @@ impl App {
         });
         // Opened maximised, so on a large screen the window manager gives it the screen's free area
         // and the panadapter takes what the panels leave (FR-UI-26).
-        let mut window_tasks = vec![open_main
-            .then(|id| iced::window::maximize(id, true))
-            .map(|_: ()| Message::WindowOpened)];
+        let mut window_tasks = vec![open_main.then(|id| {
+            Task::batch([
+                iced::window::maximize(id, true).map(|_: ()| Message::WindowOpened),
+                iced::window::get_scale_factor(id).map(Message::ScaleFactor),
+            ])
+        })];
         // Restore the detached diagnostics window if it was enabled.
         let diag_window = if diag_enabled {
             let (id, open) = iced::window::open(diag_window_settings());
@@ -1426,6 +1434,7 @@ impl App {
             context: ui::ContextRow::default(),
             window_w: 1280.0,
             window_h: 964.0,
+            scale_factor: 1.0,
             theme_mode,
             system_is_dark: detect_system_dark(),
             about_open: false,
@@ -4102,8 +4111,10 @@ impl App {
                 if id == self.main_window {
                     self.window_w = w;
                     self.window_h = h;
+                    return iced::window::get_scale_factor(id).map(Message::ScaleFactor);
                 }
             }
+            Message::ScaleFactor(f) => self.scale_factor = f,
             Message::CursorMoved(x, y) => self.cursor = (x, y),
             Message::Tick => {
                 if let Ok(snap) = self.snapshot.lock() {
@@ -9222,6 +9233,7 @@ impl App {
                     pan: &self.pan,
                     rx: usize::from(p.is_b()),
                     gpu_waterfall,
+                    scale_factor: self.scale_factor,
                     view3d,
                     spots: &self.spots,
                     spot_max_age_secs: u64::from(k4_config::parse_spot_max_age_min(
@@ -12927,7 +12939,7 @@ mod large_screen_tests {
         let code = squash(code);
         assert!(
             code.contains(&squash(
-                "open_main.then(|id| iced::window::maximize(id, true)).map(|_: ()| Message::WindowOpened)"
+                "open_main.then(|id| { Task::batch([ iced::window::maximize(id, true).map(|_: ()| Message::WindowOpened)"
             )),
             "the main window is not opened maximised"
         );
