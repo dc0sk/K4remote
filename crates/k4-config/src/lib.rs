@@ -228,13 +228,37 @@ pub struct GraphicsPrefs {
     #[serde(default, deserialize_with = "lenient")]
     pub pan_view: PanView,
     /// Read through [`GraphicsPrefs::tilt_pct`].
-    #[serde(default = "default_tilt")]
+    #[serde(default = "default_tilt", deserialize_with = "lenient_tilt")]
     pub tilt_pct: u8,
     /// Read through [`GraphicsPrefs::depth_rows`].
-    #[serde(default = "default_depth")]
+    #[serde(default = "default_depth", deserialize_with = "lenient_depth")]
     pub depth_rows: u16,
     #[serde(default, deserialize_with = "lenient")]
     pub renderer: Renderer,
+}
+
+/// Read a number setting, taking a value that does not fit its type (a hand-edited 300 for a
+/// percentage, a negative interval) as the setting's default instead of failing the whole
+/// configuration — which would lose every other setting.
+fn lenient_number<'de, D, T>(d: D, default: T) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    let v = toml::Value::deserialize(d)?;
+    Ok(T::deserialize(v).unwrap_or(default))
+}
+
+fn lenient_tilt<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u8, D::Error> {
+    lenient_number(d, TILT_DEFAULT_PCT)
+}
+
+fn lenient_depth<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u16, D::Error> {
+    lenient_number(d, DEPTH_DEFAULT_ROWS)
+}
+
+fn lenient_interval<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u64, D::Error> {
+    lenient_number(d, HAMQSL_INTERVAL_DEFAULT_SECS)
 }
 
 /// Read an enum setting, taking a value this version does not know (a newer version's, a typo) as
@@ -299,7 +323,10 @@ pub struct PropagationPrefs {
     #[serde(default = "default_true")]
     pub activity_freedv: bool,
     /// Read through [`PropagationPrefs::hamqsl_interval_secs`].
-    #[serde(default = "default_hamqsl_interval")]
+    #[serde(
+        default = "default_hamqsl_interval",
+        deserialize_with = "lenient_interval"
+    )]
     pub hamqsl_interval_secs: u64,
 }
 
@@ -1201,11 +1228,23 @@ impl Config {
 
     /// Load from `path`, returning the default config on any error (missing file,
     /// parse failure) so startup never fails.
+    /// Load from `path`; a missing or unreadable file gives the defaults. A file that exists but
+    /// cannot be parsed is first copied aside to `<name>.unreadable-<unix time>`, so the next save
+    /// — which writes the defaults over it — cannot destroy the only copy of the operator's
+    /// settings.
     pub fn load(path: &Path) -> Self {
-        let mut cfg = std::fs::read_to_string(path)
-            .ok()
-            .and_then(|text| Self::from_toml(&text).ok())
-            .unwrap_or_default();
+        let mut cfg = match std::fs::read_to_string(path) {
+            Ok(text) => Self::from_toml(&text).unwrap_or_else(|_| {
+                let secs = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_secs());
+                let mut name = path.file_name().unwrap_or_default().to_os_string();
+                name.push(format!(".unreadable-{secs}"));
+                let _ = std::fs::write(path.with_file_name(name), &text);
+                Self::default()
+            }),
+            Err(_) => Self::default(),
+        };
         cfg.migrate();
         cfg
     }
