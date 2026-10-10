@@ -1120,3 +1120,61 @@ fn fr_ui_27_graphics_defaults_unknown_values_and_persistence() {
     let back: Prefs = toml::from_str(&text).unwrap();
     assert_eq!(back.graphics, prefs.graphics);
 }
+
+/// FR-UI-27 / FR-UI-25: an out-of-range number in the file for a GRAPHICS or PROPAGATION setting
+/// (hand-edited, or from a newer version) loads that setting at its default — it does not make the
+/// whole configuration unreadable, and every other setting is kept.
+/// trace: FR-UI-27, FR-UI-25
+#[test]
+fn fr_ui_27_out_of_range_numbers_do_not_lose_the_configuration() {
+    let prefs = Prefs {
+        tune_step_hz: 250, // something else, to show it survives
+        ..Default::default()
+    };
+    let mut text = toml::to_string(&prefs).unwrap();
+    for (key, bad) in [
+        ("tilt_pct = 60", "tilt_pct = 300"),
+        ("depth_rows = 64", "depth_rows = 70000"),
+        ("hamqsl_interval_secs = 3600", "hamqsl_interval_secs = -1"),
+    ] {
+        assert!(text.contains(key), "{key} in {text}");
+        text = text.replacen(key, bad, 1);
+    }
+    let back: Prefs = toml::from_str(&text).expect("one bad number must not fail the whole file");
+    assert_eq!(back.tune_step_hz, 250, "the other settings are kept");
+    assert_eq!(back.graphics.tilt_pct(), 60);
+    assert_eq!(back.graphics.depth_rows(), 64);
+    assert_eq!(back.propagation.hamqsl_interval_secs(), 3600);
+}
+
+/// FR-CFG-01: a configuration file that cannot be read at all (a type mismatch anywhere) is kept
+/// aside before the defaults are used, so the next save cannot overwrite the only copy.
+/// trace: FR-CFG-01
+#[test]
+fn fr_cfg_01_an_unreadable_file_is_kept_aside() {
+    let dir = std::env::temp_dir().join(format!("k4cfg-unreadable-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("config.toml");
+    let bad = "[prefs]\ntune_step_hz = \"a hundred\"\n";
+    std::fs::write(&path, bad).unwrap();
+    assert_eq!(Config::load(&path), Config::default());
+    let kept: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with("config.toml.unreadable-"))
+        .collect();
+    assert_eq!(kept.len(), 1, "kept aside: {kept:?}");
+    assert_eq!(
+        std::fs::read_to_string(dir.join(&kept[0])).unwrap(),
+        bad,
+        "byte for byte"
+    );
+    // A readable file is not copied.
+    std::fs::write(&path, toml::to_string(&Config::default()).unwrap()).unwrap();
+    let _ = Config::load(&path);
+    let n = std::fs::read_dir(&dir).unwrap().count();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(n, 2, "config.toml plus the one copy");
+}
