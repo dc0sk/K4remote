@@ -160,12 +160,63 @@ pub struct WfRing {
 }
 
 impl WfRing {
-    /// Bring the ring up to date with `rows` (newest first, `total` ever pushed) and return the
-    /// image newest-first with its row count: at most `cap` rows, `tex_w` texels wide.
+    fn key(
+        center_hz: i64,
+        span_hz: u32,
+        top_dbm: f32,
+        range_db: f32,
+        tex_w: usize,
+        cap: usize,
+    ) -> WfKey {
+        WfKey {
+            center_hz,
+            span_hz,
+            top_dbm,
+            range_db,
+            tex_w,
+            cap,
+        }
+    }
+
+    /// How many of the newest rows the next [`update`](Self::update) needs, given `available`
+    /// rows and `total` ever pushed: all it will show after a view change, else only the rows that
+    /// arrived since the last update. The caller copies just these out of the shared history, so
+    /// the history's lock is never held while rows are coloured (the radio worker takes the same
+    /// lock for every spectrum frame).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn plan(
+        &self,
+        available: usize,
+        total: u64,
+        center_hz: i64,
+        span_hz: u32,
+        top_dbm: f32,
+        range_db: f32,
+        tex_w: usize,
+        cap: usize,
+    ) -> usize {
+        let n = available.min(cap);
+        if n == 0 || tex_w == 0 {
+            return 0;
+        }
+        let key = Self::key(center_hz, span_hz, top_dbm, range_db, tex_w, cap);
+        let fresh = total.saturating_sub(self.total);
+        if self.key != Some(key) || total < self.total || fresh >= n as u64 {
+            n
+        } else {
+            fresh as usize
+        }
+    }
+
+    /// Bring the ring up to date and return the image newest-first with its row count: at most
+    /// `cap` rows, `tex_w` texels wide. `rows` holds the newest rows (at least as many as
+    /// [`plan`](Self::plan) asked for), `available` how many the history has, `total` how many
+    /// were ever pushed.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn update(
         &mut self,
-        rows: &std::collections::VecDeque<PanRow>,
+        rows: &[PanRow],
+        available: usize,
         total: u64,
         center_hz: i64,
         span_hz: u32,
@@ -174,26 +225,24 @@ impl WfRing {
         tex_w: usize,
         cap: usize,
     ) -> (Vec<u8>, usize) {
-        let n = rows.len().min(cap);
+        let colour = self.plan(
+            available, total, center_hz, span_hz, top_dbm, range_db, tex_w, cap,
+        );
+        let n = available.min(cap);
         let row_bytes = tex_w * 4;
         if n == 0 || tex_w == 0 {
             self.coloured_last = 0;
             return (Vec::new(), 0);
         }
-        let key = WfKey {
-            center_hz,
-            span_hz,
-            top_dbm,
-            range_db,
-            tex_w,
-            cap,
-        };
-        let fresh = total.saturating_sub(self.total);
-        let redo = self.key != Some(key) || total < self.total || fresh >= n as u64;
-        if redo {
+        let key = Self::key(center_hz, span_hz, top_dbm, range_db, tex_w, cap);
+        if colour == n
+            && (self.key != Some(key)
+                || self.slots.len() != cap * row_bytes
+                || total < self.total
+                || total.saturating_sub(self.total) >= n as u64)
+        {
             self.slots = vec![0u8; cap * row_bytes];
         }
-        let colour = if redo { n } else { fresh as usize };
         for (k, row) in rows.iter().take(colour).enumerate() {
             let slot = ((total - 1 - k as u64) % cap as u64) as usize;
             rgba_row(
@@ -207,7 +256,7 @@ impl WfRing {
         }
         self.key = Some(key);
         self.total = total;
-        self.coloured_last = colour;
+        self.coloured_last = colour.min(rows.len());
         let mut out = Vec::with_capacity(n * row_bytes);
         for k in 0..n {
             let slot = ((total - 1 - k as u64) % cap as u64) as usize;
@@ -288,7 +337,15 @@ impl<Message> Spectrum<'_, Message> {
         let (iw, ih) = ((w * scale).round().max(1.0), (h * scale).round().max(1.0));
         let cols = (iw as usize).min(MAX_3D_COLS);
         let mut st = state.borrow_mut();
-        if let Ok(p) = self.pan.lock() {
+        let proj = Proj {
+            w: iw,
+            h: ih,
+            tilt: v.tilt,
+            depth: v.depth,
+        };
+        // Under the lock, only decide and copy the rows to draw; rasterise after releasing it —
+        // the radio worker takes the same lock for every spectrum frame.
+        let wanted = self.pan.lock().ok().and_then(|p| {
             let key = (
                 View3dKey {
                     view: v,
@@ -300,18 +357,16 @@ impl<Message> Spectrum<'_, Message> {
                 },
                 p.total(self.rx),
             );
-            if st.d3.key != Some(key) {
-                let proj = Proj {
-                    w: iw,
-                    h: ih,
-                    tilt: v.tilt,
-                    depth: v.depth,
-                };
-                let rows = p.rows(self.rx);
-                let n = proj.rows_drawn(rows.len());
+            (st.d3.key != Some(key)).then(|| {
+                let n = proj.rows_drawn(p.rows(self.rx).len());
+                let rows: Vec<PanRow> = p.rows(self.rx).iter().take(n).cloned().collect();
+                (key, rows)
+            })
+        });
+        if let Some((key, rows)) = wanted {
+            {
                 let levels: Vec<Vec<Option<f32>>> = rows
                     .iter()
-                    .take(n)
                     .map(|r| {
                         row_levels(
                             Row {
@@ -830,18 +885,29 @@ impl<Message> canvas::Program<Message> for Spectrum<'_, Message> {
         } else {
             let tex_w = (w.round() as usize).clamp(1, MAX_TEXTURE_WIDTH);
             let cap = (wf_h.round() as usize).clamp(1, crate::worker::WATERFALL_ROWS);
-            match self.pan.lock() {
-                Ok(p) => state.borrow_mut().wf.update(
-                    p.rows(self.rx),
-                    p.total(self.rx),
-                    self.center_hz as i64,
-                    self.span_hz,
-                    self.top_dbm,
-                    self.range_db,
-                    tex_w,
-                    cap,
-                ),
-                Err(_) => (Vec::new(), 0),
+            let (c, sp, top, range) = (
+                self.center_hz as i64,
+                self.span_hz,
+                self.top_dbm,
+                self.range_db,
+            );
+            // Under the lock, copy only the rows this frame colours (usually one); colour them
+            // after the lock is released — the radio worker takes it for every spectrum frame.
+            let taken = self.pan.lock().ok().map(|p| {
+                let (available, total) = (p.rows(self.rx).len(), p.total(self.rx));
+                let need = state
+                    .borrow()
+                    .wf
+                    .plan(available, total, c, sp, top, range, tex_w, cap);
+                let rows: Vec<PanRow> = p.rows(self.rx).iter().take(need).cloned().collect();
+                (rows, available, total)
+            });
+            match taken {
+                Some((rows, available, total)) => state
+                    .borrow_mut()
+                    .wf
+                    .update(&rows, available, total, c, sp, top, range, tex_w, cap),
+                None => (Vec::new(), 0),
             }
         };
         if let Some(tex_w) = (rgba.len() / 4).checked_div(rows) {
@@ -956,6 +1022,23 @@ mod tests {
             let rows: Vec<PanRow> = h.iter().take(n).cloned().collect();
             waterfall_rgba(&rows, centre, span, -40.0, 90.0, w)
         };
+        // As the canvas does: copy only the rows the ring plans to colour, then update.
+        #[allow(clippy::too_many_arguments)]
+        fn planned(
+            ring: &mut WfRing,
+            hist: &VecDeque<PanRow>,
+            total: u64,
+            c: i64,
+            sp: u32,
+            top: f32,
+            range: f32,
+            w: usize,
+            cap: usize,
+        ) -> (Vec<u8>, usize) {
+            let need = ring.plan(hist.len(), total, c, sp, top, range, w, cap);
+            let rows: Vec<PanRow> = hist.iter().take(need).cloned().collect();
+            ring.update(&rows, hist.len(), total, c, sp, top, range, w, cap)
+        }
         let mut hist: VecDeque<PanRow> = VecDeque::new();
         let mut ring = WfRing::default();
         let mut total = 0u64;
@@ -964,7 +1047,9 @@ mod tests {
             hist.push_front(mk(i));
             hist.truncate(256);
             total += 1;
-            let (img, n) = ring.update(&hist, total, 14_074_000, span, -40.0, 90.0, w, cap);
+            let (img, n) = planned(
+                &mut ring, &hist, total, 14_074_000, span, -40.0, 90.0, w, cap,
+            );
             assert_eq!(n, hist.len().min(cap), "never more rows than pixels");
             assert_eq!(img, full(&hist, n, 14_074_000), "after row {i}");
             if i > 0 {
@@ -975,21 +1060,63 @@ mod tests {
             }
         }
         // A frame with no new row colours nothing.
-        let (img, n) = ring.update(&hist, total, 14_074_000, span, -40.0, 90.0, w, cap);
+        let (img, n) = planned(
+            &mut ring, &hist, total, 14_074_000, span, -40.0, 90.0, w, cap,
+        );
         assert_eq!((ring.coloured_last, img), (0, full(&hist, n, 14_074_000)));
         // Three rows between frames: three coloured.
         for i in 70..73 {
             hist.push_front(mk(i));
             total += 1;
         }
-        let (img, n) = ring.update(&hist, total, 14_074_000, span, -40.0, 90.0, w, cap);
+        let (img, n) = planned(
+            &mut ring, &hist, total, 14_074_000, span, -40.0, 90.0, w, cap,
+        );
         assert_eq!((ring.coloured_last, img), (3, full(&hist, n, 14_074_000)));
         // A retune re-maps every row: one full redraw, then incremental again.
-        let (img, n) = ring.update(&hist, total, 14_076_500, span, -40.0, 90.0, w, cap);
+        let (img, n) = planned(
+            &mut ring, &hist, total, 14_076_500, span, -40.0, 90.0, w, cap,
+        );
         assert_eq!((ring.coloured_last, img), (cap, full(&hist, n, 14_076_500)));
         // A taller band (a bigger window) holds more rows.
-        let (_, n) = ring.update(&hist, total, 14_076_500, span, -40.0, 90.0, w, 64);
+        let (_, n) = planned(
+            &mut ring, &hist, total, 14_076_500, span, -40.0, 90.0, w, 64,
+        );
         assert_eq!(n, 64);
+    }
+
+    /// FR-UI-26 / FR-PAN-15: the shared pan history's lock is held only to decide and copy rows —
+    /// never while rows are coloured or the 3D image is rasterised (the radio worker takes the same
+    /// lock for every spectrum frame; holding it through a 16 ms redraw stalls the CAT/audio loop).
+    /// Structural, over the code above this module: each `self.pan.lock()` closure in the waterfall
+    /// and 3D paths is free of the heavy calls.
+    /// trace: FR-UI-26, FR-PAN-15
+    #[test]
+    fn fr_ui_26_pan_lock_is_never_held_while_drawing() {
+        let whole = include_str!("spectrum.rs");
+        let code: String = whole[..whole.find(concat!("mod ", "tests {")).expect("tests")]
+            .split_whitespace()
+            .collect();
+        let mut closures = 0;
+        let mut at = 0;
+        while let Some(i) = code[at..].find("self.pan.lock().ok().") {
+            let start = at + i;
+            // The closure ends at the first `});` after it.
+            let end = start + code[start..].find("});").expect("closure end");
+            let body = &code[start..end];
+            for heavy in ["rgba_row(", ".update(", "row_levels(", "render_rgba("] {
+                assert!(
+                    !body.contains(heavy),
+                    "`{heavy}` runs under the pan lock: {body}"
+                );
+            }
+            closures += 1;
+            at = end;
+        }
+        assert!(
+            closures >= 2,
+            "expected the waterfall and 3D lock closures, found {closures}"
+        );
     }
 
     /// Alpha of texel `(col, r)` — 0 means "nothing drawn here".
