@@ -65,11 +65,6 @@ pub fn ks(s: &RadioState) -> Option<String> {
     s.keyer_speed.map(|w| format!("KS{w:03};"))
 }
 
-/// `TQn;` — transmit state.
-pub fn tq(s: &RadioState) -> Option<String> {
-    s.transmitting.map(|tx| format!("TQ{};", u8::from(tx)))
-}
-
 /// `IF[f]*****+yyyyrx*00tm0spbd1*;` (PRG D12 p16), 37 characters before the `;`. `b` is always
 /// `0` (its K22 meaning, "sent because of a band change", does not apply to a poll); `d` is the
 /// DATA sub-mode when the client is in K31 meta mode, else `0`. Needs the frequency and mode;

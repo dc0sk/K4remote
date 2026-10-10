@@ -43,7 +43,6 @@ fn fr_catsrv_03_simple_replies_are_exact_and_round_trip() {
         (resp::dt(&s, false), "DT0;"),
         (resp::dt(&s, true), "DT$3;"),
         (resp::ft(&s), "FT1;"),
-        (resp::tq(&s), "TQ0;"),
         (resp::ks(&s), "KS025;"),
     ];
     for (got, want) in &cases {
@@ -83,7 +82,6 @@ fn fr_catsrv_03_unknown_state_has_no_reply_and_modes_round_trip() {
     assert_eq!(resp::md(&empty, false), None);
     assert_eq!(resp::bw(&empty, false), None);
     assert_eq!(resp::ft(&empty), None);
-    assert_eq!(resp::tq(&empty), None);
     assert_eq!(resp::if_(&empty, false), None);
     for d in *b"12345679" {
         let m = Mode::from_md_digit(d).unwrap();

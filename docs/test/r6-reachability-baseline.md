@@ -1,7 +1,7 @@
 ---
 title: "R6 baseline — public functions with no production reference"
 status: Draft
-version: "0.3"
+version: "0.4"
 updated: 2026-09-29
 authors:
   - Simon Keimer (DC0SK)
@@ -33,7 +33,6 @@ found that day; the reasons were checked against each function's callers.
 
 ## Superseded
 
-- `crates/k4-protocol/src/cat_resp.rs:tq` — the CAT server answers `TQ` from what the app knows is on air (`Cache::on_air`), because the radio's reported TX state is stale by construction; delete when convenient.
 
 ## CAT encoders already waived under R5
 
@@ -56,6 +55,7 @@ See `r5-unreached-encoders.md` for each one's reason.
 - `crates/k4-transport/src/lib.rs:push_inbound` — feeds the mock transport in `tests/transport.rs`.
 - `crates/k4-transport/src/lib.rs:psk_loopback` — the TLS-PSK loopback server in `tls_support`, for `tests/tls.rs`.
 - `crates/k4-stream/src/audio.rs:is_opus` — asserted by `tests/codecs.rs`.
+- `crates/k4-audio/src/codec.rs:stereo` — builds the stereo Opus packet `tests/opus.rs` decodes, the shape the K4 streams for RX (FR-AUD-04); the app itself only encodes mono.
 - `crates/k4-config/src/lib.rs:any_enabled` — asserted by `tests/config.rs`.
 - `crates/k4-spot/src/style.rs:contrast` — WCAG ratio; its in-file tests use it to hold spot nameplate colours readable.
 - `crates/k4-spot/src/mqtt.rs:buffered` — lets the in-file tests bound the decoder's buffer.
@@ -76,6 +76,4 @@ Held beside the production mapping as a second derivation, so a test can check `
 
 ## Unused — API for a feature not built
 
-- `crates/k4-audio/src/codec.rs:stereo` — Opus stereo encoder; K4 TX audio is mono. Used only by `tests/opus.rs`.
 - `crates/k4-kpod/src/lib.rs:configure_packet` — K-Pod encoder scale/beeper packet; no setting sends it.
-- `crates/k4-transport/src/lib.rs:available_serial_ports` — serial port picker (feature `serial`); no UI lists ports.
