@@ -565,7 +565,8 @@ The colours combine every source that is switched on and reachable:
   15 minutes. Activity can only **raise** the forecast, by one step at most (a busy band is in use
   somewhere, not necessarily open from your station), and it never makes a band look worse: a quiet
   band may be open with nobody reporting. On its own (160 m, 6 m) it shows at most amber. RBN, the DX
-  cluster and FreeDV count every band; PSK Reporter counts only the bands in view. A network counts
+  cluster and FreeDV count every band (FreeDV only stations another station reports hearing, not
+  everyone connected); PSK Reporter counts only the bands in view. A network counts
   only while it is switched on under **Spotting → Networks…**.
 
 **Settings → Propagation** has a checkbox for the colouring and one per source, all **on** until you

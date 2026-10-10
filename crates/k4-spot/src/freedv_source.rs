@@ -333,10 +333,16 @@ impl FreeDvSource {
         Ok(())
     }
 
-    /// Hand a spot to the sink if it is inside the window and the rate allows.
-    fn emit(&mut self, spot: Spot, now_ms: u64, sink: &mut dyn FnMut(Spot)) {
-        if let Some(tap) = self.tap.as_mut() {
-            tap(&spot);
+    /// Hand a spot to the sink if it is inside the window and the rate allows. `heard` marks a
+    /// spot made by an `rx_report` — another station receiving it — which is the only thing this
+    /// network reports that is evidence of propagation; only those reach the activity tap
+    /// (FR-UI-25). A station being connected, or its periodic re-stamp, says nothing about whether
+    /// anyone hears it.
+    fn emit(&mut self, spot: Spot, heard: bool, now_ms: u64, sink: &mut dyn FnMut(Spot)) {
+        if heard {
+            if let Some(tap) = self.tap.as_mut() {
+                tap(&spot);
+            }
         }
         if let Some((lo, hi)) = self.window {
             if spot.freq_hz < lo || spot.freq_hz > hi {
@@ -407,9 +413,10 @@ impl FreeDvSource {
                     }
                     Packet::Event { name, args } if live => {
                         let changed = self.roster.on_event(&name, &args);
+                        let heard = name == "rx_report";
                         for sid in changed {
                             if let Some(spot) = self.roster.spot(&sid, unix) {
-                                self.emit(spot, now_ms, sink);
+                                self.emit(spot, heard, now_ms, sink);
                             }
                         }
                     }
@@ -520,7 +527,7 @@ impl FreeDvSource {
             let sids: Vec<String> = self.roster.sids().cloned().collect();
             for sid in sids {
                 if let Some(spot) = self.roster.spot(&sid, unix) {
-                    self.emit(spot, now_ms, sink);
+                    self.emit(spot, false, now_ms, sink);
                 }
             }
         }
