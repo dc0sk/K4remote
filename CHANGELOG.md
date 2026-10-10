@@ -21,7 +21,8 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
 - **3D spectrum.** Instead of the spectrum and waterfall, the panadapter can
   show the spectrum in 3D with time receding into the background — as stacked
   traces or as a shaded surface — with adjustable tilt and depth. Choose it in
-  **Settings → Graphics**. (`FR-PAN-15`)
+  **Settings → Graphics**. Spot nameplates show in 3D too, ticked down to the
+  front row. (`FR-PAN-15`)
 - **Settings → Graphics** also shows whether the GPU or the CPU is drawing and
   why, and chooses the renderer for the next start: Auto, GPU or CPU.
   (`FR-UI-27`)

@@ -92,6 +92,20 @@ fn rgba_row(
     }
 }
 
+/// Which trace a nameplate's tick reaches down to.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum TraceGeom {
+    /// The spectrum band, `spec_h` tall, of the classic view.
+    Classic { spec_h: f32 },
+    /// The 3D view's front row, in a `w × h` pane.
+    Front3d {
+        w: f32,
+        h: f32,
+        tilt: f32,
+        depth: usize,
+    },
+}
+
 /// The 3D view's settings, from the GRAPHICS tab (FR-PAN-15).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct View3d {
@@ -272,6 +286,7 @@ impl<Message> Spectrum<'_, Message> {
     /// The 3D view over the whole pane (FR-PAN-15): the image from [`k4_stream::view3d`], rebuilt
     /// only when a row arrives or the view changes, stretched over the pane, with the frequency axis
     /// and the passband along the front edge.
+    #[allow(clippy::too_many_arguments)]
     fn draw_3d(
         &self,
         frame: &mut Frame,
@@ -279,6 +294,8 @@ impl<Message> Spectrum<'_, Message> {
         v: View3d,
         w: f32,
         h: f32,
+        latest: &[f32],
+        pointer: Option<Point>,
     ) {
         use k4_stream::view3d::{render_rgba, row_levels, Proj, Row};
         if w < 2.0 || h < 2.0 || self.span_hz == 0 {
@@ -384,6 +401,55 @@ impl<Message> Spectrum<'_, Message> {
                     .with_color(Color::from_rgba8(0x3D, 0x7E, 0xFF, 0.5)),
             );
         }
+        // Spot nameplates in the same lanes as the classic view (so a click or a hover finds the
+        // same plate), each tick reaching down to the front row (FR-PAN-15, FR-SPOT-01).
+        self.draw_spots(
+            frame,
+            w,
+            h * 0.4,
+            latest,
+            pointer,
+            TraceGeom::Front3d {
+                w,
+                h,
+                tilt: v.tilt,
+                depth: v.depth,
+            },
+        );
+    }
+
+    /// Where a nameplate's tick ends: on the trace at the plate's frequency — the spectrum band's
+    /// trace in the classic view, the front row in 3D (through the same projection that draws it,
+    /// so the tick and the row cannot disagree). The band's floor when there is no trace.
+    fn spot_tick_y(&self, x: f32, w: f32, latest: &[f32], trace: TraceGeom) -> f32 {
+        let n = latest.len();
+        let floor = match trace {
+            TraceGeom::Classic { spec_h } => spec_h,
+            TraceGeom::Front3d { h, .. } => h,
+        };
+        if n < 2 || w <= 0.0 {
+            return floor;
+        }
+        let bin = (((x / w) * n as f32) as usize).min(n - 1);
+        let dbm = latest[bin];
+        match trace {
+            TraceGeom::Classic { spec_h } => dbm_to_y(dbm, self.top_dbm, self.range_db, spec_h),
+            TraceGeom::Front3d { w, h, tilt, depth } => {
+                let z = if self.range_db > 0.0 {
+                    (dbm - (self.top_dbm - self.range_db)) / self.range_db
+                } else {
+                    0.0
+                };
+                let z = if z.is_finite() {
+                    z.clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                k4_stream::view3d::Proj { w, h, tilt, depth }
+                    .project(x / w, z, 0)
+                    .1
+            }
+        }
     }
 
     /// `spec_h` tall and `w` wide. `None` when there is nothing to show or no room for a plate.
@@ -441,6 +507,7 @@ impl<Message> Spectrum<'_, Message> {
         spec_h: f32,
         latest: &[f32],
         pointer: Option<Point>,
+        trace: TraceGeom,
     ) {
         use k4_spot::layout::{hit_test, LANES_TOP, LANE_H, PLATE_H, PLATE_PAD};
         use k4_spot::style::{age_alpha, source_rgb};
@@ -457,13 +524,7 @@ impl<Message> Spectrum<'_, Message> {
             let y = LANES_TOP + p.lane as f32 * LANE_H;
             // The tick runs from the plate down to the trace at this frequency (never upward, so a
             // strong signal above the labels still gets a short tick rather than a backwards one).
-            let n = latest.len();
-            let trace_y = if n > 1 {
-                let bin = (((it.x / w) * n as f32) as usize).min(n - 1);
-                dbm_to_y(latest[bin], self.top_dbm, self.range_db, spec_h)
-            } else {
-                spec_h
-            };
+            let trace_y = self.spot_tick_y(it.x, w, latest, trace);
             let top = y + PLATE_H;
             frame.stroke(
                 &Path::line(Point::new(it.x, top), Point::new(it.x, trace_y.max(top))),
@@ -638,7 +699,15 @@ impl<Message> canvas::Program<Message> for Spectrum<'_, Message> {
         );
         // The 3D view replaces trace and waterfall over the whole pane (FR-PAN-15).
         if let Some(v) = self.view3d {
-            self.draw_3d(&mut frame, state, v, w, h);
+            self.draw_3d(
+                &mut frame,
+                state,
+                v,
+                w,
+                h,
+                latest,
+                cursor.position_in(bounds),
+            );
             return vec![frame.into_geometry()];
         }
 
@@ -809,7 +878,14 @@ impl<Message> canvas::Program<Message> for Spectrum<'_, Message> {
         }
 
         // Spot nameplates over the spectrum (FR-SPOT-01/02).
-        self.draw_spots(&mut frame, w, spec_h, latest, cursor.position_in(bounds));
+        self.draw_spots(
+            &mut frame,
+            w,
+            spec_h,
+            latest,
+            cursor.position_in(bounds),
+            TraceGeom::Classic { spec_h },
+        );
 
         // Waterfall (newest row at the top of its band), rasterised into one
         // RGBA image and drawn with a single `draw_image`.
@@ -1167,6 +1243,72 @@ mod spot_click_tests {
     /// FR-SPOT-10: a click on a nameplate tunes to that spot's own frequency, not to wherever on the
     /// plate the pointer happened to be; a click anywhere else still tunes to the pointer's position;
     /// a spot that has aged out or lies outside the view cannot be clicked.
+    /// FR-PAN-15 / FR-SPOT-01: in the 3D view a nameplate's tick ends on the front row at the
+    /// spot's frequency — where the 3D projection puts that bin — and in the classic view on the
+    /// spectrum trace, as before; with no trace, on the band's floor.
+    /// trace: FR-PAN-15, FR-SPOT-01
+    #[test]
+    fn fr_pan_15_spot_ticks_reach_the_front_row_in_3d() {
+        let store = store(&[]);
+        with(&store, |sp| {
+            // A trace with one strong bin at 3/4 of the width, the rest at the floor.
+            let mut latest = vec![-130.0f32; 400];
+            latest[300] = -49.0; // 90 % up a -130..-40 window
+            let x = (300.0 + 0.5) / 400.0 * W;
+            let geom = TraceGeom::Front3d {
+                w: W,
+                h: H,
+                tilt: 0.6,
+                depth: 64,
+            };
+            let want = k4_stream::view3d::Proj {
+                w: W,
+                h: H,
+                tilt: 0.6,
+                depth: 64,
+            }
+            .project(x / W, 0.9, 0)
+            .1;
+            let got = sp.spot_tick_y(x, W, &latest, geom);
+            assert!(
+                (got - want).abs() < 1e-3,
+                "3D tick ends at {got}, front row at {want}"
+            );
+            assert!(
+                got < H - 1.0,
+                "a strong signal lifts the tick off the floor: {got}"
+            );
+            // At a floor-level bin the tick reaches the front row's baseline, the pane's bottom.
+            let low = sp.spot_tick_y(10.5 / 400.0 * W, W, &latest, geom);
+            assert!((low - H).abs() < 1e-3, "{low}");
+            // The classic view is unchanged.
+            let spec_h = H * 0.4;
+            assert_eq!(
+                sp.spot_tick_y(x, W, &latest, TraceGeom::Classic { spec_h }),
+                dbm_to_y(-49.0, -40.0, 90.0, spec_h)
+            );
+            // No trace yet: the floor of whichever band.
+            assert_eq!(sp.spot_tick_y(x, W, &[], geom), H);
+            assert_eq!(
+                sp.spot_tick_y(x, W, &[], TraceGeom::Classic { spec_h }),
+                spec_h
+            );
+        });
+        // And the 3D path draws them, against the front row (structural, over the code above this
+        // module).
+        let whole = include_str!("spectrum.rs");
+        let code: String = whole[..whole.find(concat!("mod ", "tests {")).expect("tests")]
+            .split_whitespace()
+            .collect();
+        let d3 = code.find("fndraw_3d(").expect("draw_3d");
+        let end = d3 + code[d3..].find("fnspot_tick_y(").expect("after draw_3d");
+        assert!(
+            code[d3..end].contains("self.draw_spots(")
+                && code[d3..end].contains("TraceGeom::Front3d{"),
+            "the 3D view does not draw the spot nameplates against its front row"
+        );
+    }
+
     /// trace: FR-SPOT-10
     #[test]
     fn fr_spot_10_click_on_a_nameplate_tunes_to_the_spot() {

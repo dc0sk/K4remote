@@ -40,8 +40,10 @@ finding was checked against the source and taken:
   frame — and a frame is rebuilt only when a row arrives or the view changes. That is well inside
   budget, so the **dedicated GPU shader path (§3.4 GPU) is deferred**: re-open it if the 3D view is
   measured to cost too much on a target (e.g. the Pi) or needs per-pixel columns on the GPU.
-- **Spot nameplates are not drawn in the 3D view** (v1); the frequency axis and the passband are,
-  along the front edge.
+- **Spot nameplates** are drawn in the 3D view in the classic view's lanes (so a click or a hover finds
+  the same plate), each tick reaching the front row through the same projection that draws it;
+  the frequency axis and the passband sit along the front edge. (v0.3 first shipped without them;
+  added afterwards.)
 - The GPU golden gained a capped-band case; the waterfall golden's H became 512 (§2).
 
 ## 1. What exists (read from the code, 2026-10-08)

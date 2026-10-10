@@ -595,7 +595,7 @@ shows as many as its height has pixels: a taller pane shows more time.
 
 For the 3D views, **Tilt** sets how far the history climbs up the pane (20–90 %) and **Depth** how many
 rows of history are shown (16–256). The frequency axis and the passband sit along the front edge, and
-clicking or wheel-tuning there works as in the classic view. Spot nameplates are not shown in 3D.
+clicking or wheel-tuning there works as in the classic view. Spot nameplates are shown as in the classic view, each tick reaching down to the front row.
 
 **Renderer** shows what is drawing now — *GPU (wgpu)* or *CPU (software)* — and why, and chooses the
 renderer for the **next start**: *Auto* (use the GPU if there is one, the default), *GPU*, or *CPU*.
