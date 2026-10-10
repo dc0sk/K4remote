@@ -61,7 +61,9 @@ The spot worker (`app/src/spot_sources.rs`) runs RBN and a DX cluster (telnet), 
 window **inside its own `poll`**, before a spot reaches the worker, and the window also picks which
 PSK Reporter band topics are subscribed. What reaches the *network* side:
 
-- **RBN, DX cluster, FreeDV:** every band, whatever the window.
+- **RBN, DX cluster, FreeDV:** every band, whatever the window. For FreeDV only stations another
+  station reports *hearing* (`rx_report`) count — its roster also lists stations that are merely
+  connected and re-stamps them every refresh, which is presence, not propagation (audit, 2026-10-10).
 - **PSK Reporter:** only the subscribed bands. The design does **not** subscribe to more, which would
   multiply its traffic and undercut the spot feeds' bounds (`FR-SPOT-05`/`-14`); its activity covers
   the bands in view.
