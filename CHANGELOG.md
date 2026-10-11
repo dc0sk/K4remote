@@ -73,6 +73,12 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
 
 ### Fixed
 
+- **The CPU renderer (Settings → Graphics → CPU) works.** It crashed after a few
+  frames whenever a frequency label changed, drew no spectrum trace in the right
+  pane and a flickering one in the left, left out the dB grid and the spot pins,
+  and smeared a copy of the waterfall over the controls above it. All four were
+  defects in the GUI library's software renderer, fixed upstream after the
+  version we use; the app now carries those fixes.
 - **The first moment of a transmission could be audio from before you keyed.**
   The microphone was captured all the time but read only while transmitting, so
   a transmission could begin with up to a second of sound recorded beforehand.
