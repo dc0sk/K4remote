@@ -649,7 +649,7 @@ impl shader::Primitive for WaterfallPrimitive {
                 self.rx,
                 &pan,
                 self.view,
-                (bounds.height * sf).round() as u32,
+                crate::spectrum::band_rows(bounds.height, sf) as u32,
             );
         }
     }
