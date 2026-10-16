@@ -6,13 +6,24 @@
 //! `send_cw` (#227) were all "covered" while nothing in the product ever called them. R5 watched
 //! only one module's CAT encoders; this watches every public function.
 //!
-//! A heuristic, hence a ratchet: names are matched as words across all production code (test code
-//! removed per item, comments and strings masked — `regions`), so a common name (`new`) is never
-//! flagged and dynamic dispatch is invisible. Today's unreferenced set lives in a baseline file,
-//! each entry with a reason; a **new** unreferenced function fails the build, and so does a
-//! **stale** baseline entry (now referenced, or gone), so the list can only shrink.
+//! How: a **liveness pass over a name-level call graph** of the production code (test code removed
+//! per item and per out-of-line test module, comments and strings masked — `regions`). Live
+//! contexts are code outside any function, `main`, a method of an `impl Trait for Type` block
+//! (the framework calls it), and the strings of an attribute (`deserialize_with = "…"`); a
+//! function is live when its name occurs in a live context, and its own body is then live too.
+//! So a definition is not a use, a call from a dead function does not keep its callee alive (an
+//! orphan chain is caught whole), recursion does not keep a uniquely named function alive (a
+//! same-named call may be delegation, `fn len(&self) { self.0.len() }`, so it counts), several functions of
+//! one name with no caller are all caught, and a `use` line is not a call.
+//!
+//! Still a heuristic, hence a ratchet: names, not types — two functions of one name share a fate
+//! when either is called (a trait method and an inherent one of the same name), a field or variant
+//! of a function's name keeps it alive, and functions a macro defines from a metavariable are not
+//! seen. Today's unreferenced set lives in a baseline file, each entry with a reason; a **new**
+//! unreferenced function fails the build, and so does a **stale** baseline entry (now referenced,
+//! or gone), so the list can only shrink.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -44,47 +55,6 @@ fn rust_sources(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// Production code with test regions removed and comments/strings blanked to spaces.
-fn production_code(text: &str) -> String {
-    let live = regions::without_tests(text);
-    let mask = regions::code_mask(&live);
-    live.char_indices()
-        .map(|(i, c)| if mask[i] || c == '\n' { c } else { ' ' })
-        .collect()
-}
-
-/// The name of a public function defined on this (masked) line, if any: `pub`, an optional
-/// visibility scope, optional `const`/`async`/`unsafe`/`extern`, then `fn <name>`.
-fn pub_fn_name(line: &str) -> Option<&str> {
-    let mut rest = line.trim_start().strip_prefix("pub")?;
-    if let Some(r) = rest.strip_prefix('(') {
-        rest = &r[r.find(')')? + 1..];
-    } else if !rest.starts_with(char::is_whitespace) {
-        return None;
-    }
-    rest = rest.trim_start();
-    loop {
-        let before = rest;
-        for kw in ["const ", "async ", "unsafe ", "extern "] {
-            if let Some(r) = rest.strip_prefix(kw) {
-                rest = r.trim_start();
-            }
-        }
-        if rest == before {
-            break;
-        }
-    }
-    let rest = rest.strip_prefix("fn ")?.trim_start();
-    let end = rest
-        .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-        .unwrap_or(rest.len());
-    (end > 0).then(|| &rest[..end])
-}
-
-fn is_ident(c: char) -> bool {
-    c.is_ascii_alphanumeric() || c == '_'
-}
-
 /// How many times `name` occurs as a whole word in `code`.
 fn word_count(code: &str, name: &str) -> usize {
     code.match_indices(name)
@@ -96,14 +66,195 @@ fn word_count(code: &str, name: &str) -> usize {
         .count()
 }
 
-/// Every public function (as `path:name`, path relative to `root`) whose name occurs nowhere in
-/// production code but its own definition.
-pub fn unreferenced(root: &Path) -> BTreeSet<String> {
+/// The sources scanned: production files under the trees, minus the files of out-of-line test
+/// modules (`#[cfg(test)] mod tests;` → `tests.rs` or `tests/mod.rs` beside the declaring module)
+/// and everything below them.
+fn production_files(root: &Path) -> Vec<PathBuf> {
     let mut files = Vec::new();
     for tree in TREES {
         rust_sources(&root.join(tree), &mut files);
     }
-    let code: Vec<(String, String)> = files
+    let mut test_dirs: Vec<PathBuf> = Vec::new();
+    let mut test_files: HashSet<PathBuf> = HashSet::new();
+    for f in &files {
+        let Ok(text) = fs::read_to_string(f) else {
+            continue;
+        };
+        let stem = f.file_stem().unwrap_or_default().to_string_lossy();
+        let parent = f.parent().unwrap_or(root);
+        // A module's children live beside it (`lib.rs`, `main.rs`, `mod.rs`) or in its own
+        // directory (`foo.rs` → `foo/`).
+        let dir = if ["lib", "main", "mod"].contains(&stem.as_ref()) {
+            parent.to_path_buf()
+        } else {
+            parent.join(stem.as_ref())
+        };
+        for name in regions::out_of_line_test_mods(&text) {
+            test_files.insert(dir.join(format!("{name}.rs")));
+            test_dirs.push(dir.join(&name));
+        }
+    }
+    files.retain(|f| !test_files.contains(f) && !test_dirs.iter().any(|d| f.starts_with(d)));
+    files
+}
+
+/// Production code with test regions removed and comments/strings blanked to spaces, byte for
+/// byte (a blanked multi-byte character becomes as many spaces), plus the identifiers inside the
+/// strings of its attributes.
+fn production_code(text: &str) -> (String, Vec<String>) {
+    let live = regions::without_tests(text);
+    let mask = regions::code_mask(&live);
+    let code: String = live
+        .char_indices()
+        .flat_map(|(i, c)| {
+            let keep = mask[i] || c == '\n';
+            let n = if keep { 1 } else { c.len_utf8() };
+            std::iter::repeat_n(if keep { c } else { ' ' }, n)
+        })
+        .collect();
+    let b = live.as_bytes();
+    let mut attr_names = Vec::new();
+    let mut from = 0;
+    while let Some(p) = live[from..].find("#[") {
+        let start = from + p;
+        from = start + 2;
+        if !mask[start] {
+            continue;
+        }
+        let (mut j, mut depth) = (start + 1, 0i32);
+        while j < b.len() {
+            if mask[j] {
+                match b[j] {
+                    b'[' => depth += 1,
+                    b']' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            j += 1;
+        }
+        let strings: String = (start..j.min(b.len()))
+            .map(|k| if mask[k] { ' ' } else { b[k] as char })
+            .collect();
+        attr_names.extend(idents(&strings).map(|(_, w)| w.to_string()));
+        from = j.max(from);
+    }
+    (code, attr_names)
+}
+
+fn is_ident(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_'
+}
+
+/// The identifier tokens of `code` with their byte offsets.
+fn idents(code: &str) -> impl Iterator<Item = (usize, &str)> {
+    let b = code.as_bytes();
+    let mut i = 0;
+    std::iter::from_fn(move || {
+        while i < b.len() {
+            let c = b[i] as char;
+            if c.is_ascii_alphabetic() || c == '_' {
+                let start = i;
+                while i < b.len() && is_ident(b[i] as char) {
+                    i += 1;
+                }
+                return Some((start, &code[start..i]));
+            }
+            if c.is_ascii_digit() {
+                // A number (with a suffix such as `1u8`): not an identifier.
+                while i < b.len() && is_ident(b[i] as char) {
+                    i += 1;
+                }
+                continue;
+            }
+            i += 1;
+        }
+        None
+    })
+}
+
+/// The previous token before `at` in `code`, past whitespace: an identifier, or one character.
+fn prev_token(code: &str, at: usize) -> Option<(usize, &str)> {
+    let head = code[..at].trim_end();
+    let end = head.len();
+    let last = head.chars().next_back()?;
+    if is_ident(last) {
+        let start = head.trim_end_matches(is_ident).len();
+        Some((start, &code[start..end]))
+    } else {
+        Some((end - last.len_utf8(), &code[end - last.len_utf8()..end]))
+    }
+}
+
+/// Whether the `fn` at `at` is public: `pub` or `pub(…)` before it, past `const`, `async`,
+/// `unsafe` and `extern` (an ABI string is already blank) — across lines and after attributes.
+fn is_pub_fn(code: &str, at: usize) -> bool {
+    let mut at = at;
+    loop {
+        match prev_token(code, at) {
+            Some((p, "const" | "async" | "unsafe" | "extern")) => at = p,
+            Some((_, "pub")) => return true,
+            Some((p, ")")) => {
+                // `pub(crate)`, `pub(super)`, `pub(in path)`.
+                let Some(open) = code[..p].rfind('(') else {
+                    return false;
+                };
+                return matches!(prev_token(code, open), Some((_, "pub")));
+            }
+            _ => return false,
+        }
+    }
+}
+
+/// The matching `}` of the `{` at `open` in masked code, or the end.
+fn brace_end(code: &str, open: usize) -> usize {
+    let mut depth = 0i32;
+    for (k, c) in code[open..].bytes().enumerate() {
+        match c {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return open + k + 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    code.len()
+}
+
+/// The first `{` or `;` after `from` outside parentheses and brackets: an item's body or end.
+fn body_or_end(code: &str, from: usize) -> Option<(usize, u8)> {
+    let mut depth = 0i32;
+    for (k, c) in code[from..].bytes().enumerate() {
+        match c {
+            b'(' | b'[' => depth += 1,
+            b')' | b']' => depth -= 1,
+            b'{' | b';' if depth == 0 => return Some((from + k, c)),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// A function definition in the scanned code.
+struct FnDef {
+    file: usize,
+    name: String,
+    public: bool,
+    /// Called from outside the code: `main`, or a method of an `impl Trait for Type` block.
+    entry: bool,
+}
+
+/// Every public function (as `path:name`, path relative to `root`) that the liveness pass does not
+/// reach from production code.
+pub fn unreferenced(root: &Path) -> BTreeSet<String> {
+    let sources: Vec<(String, String, Vec<String>)> = production_files(root)
         .iter()
         .filter_map(|p| {
             let text = fs::read_to_string(p).ok()?;
@@ -112,25 +263,122 @@ pub fn unreferenced(root: &Path) -> BTreeSet<String> {
                 .unwrap_or(p)
                 .to_string_lossy()
                 .replace('\\', "/");
-            Some((rel, production_code(&text)))
+            let (code, attrs) = production_code(&text);
+            Some((rel, code, attrs))
         })
         .collect();
-    let all: String = code
-        .iter()
-        .map(|(_, c)| c.as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
-    let mut out = BTreeSet::new();
-    for (rel, text) in &code {
-        for line in text.lines() {
-            if let Some(name) = pub_fn_name(line) {
-                if word_count(&all, name) <= 1 {
-                    out.insert(format!("{rel}:{name}"));
+
+    // Pass 1: definitions, their bodies, trait-impl spans and `use` spans, per file.
+    let mut defs: Vec<FnDef> = Vec::new();
+    let mut owners: Vec<Vec<u32>> = Vec::new(); // per file: innermost function per byte
+    let mut skip: Vec<Vec<bool>> = Vec::new(); // per file: definition names and `use` lines
+    for (file, (_, code, _)) in sources.iter().enumerate() {
+        let toks: Vec<(usize, &str)> = idents(code).collect();
+        let mut owner = vec![u32::MAX; code.len()];
+        let mut skipped = vec![false; code.len()];
+        let mut trait_impls: Vec<std::ops::Range<usize>> = Vec::new();
+        for (t, &(at, word)) in toks.iter().enumerate() {
+            match word {
+                "use" => {
+                    let end = code[at..].find(';').map_or(code.len(), |e| at + e);
+                    skipped[at..end].fill(true);
+                }
+                "impl" => {
+                    if let Some((open, b'{')) = body_or_end(code, at) {
+                        let header = &code[at..open];
+                        let is_trait = idents(header).any(|(p, w)| {
+                            w == "for" && !header[p + 3..].trim_start().starts_with('<')
+                        });
+                        if is_trait {
+                            trait_impls.push(open..brace_end(code, open));
+                        }
+                    }
+                }
+                "fn" => {
+                    let Some(&(nat, name)) = toks.get(t + 1) else {
+                        continue;
+                    };
+                    if !code[at + 2..nat].trim().is_empty() {
+                        continue; // `fn(` — a pointer type, not a definition
+                    }
+                    skipped[nat..nat + name.len()].fill(true);
+                    let idx = defs.len() as u32;
+                    defs.push(FnDef {
+                        file,
+                        name: name.to_string(),
+                        public: is_pub_fn(code, at),
+                        entry: name == "main" || trait_impls.iter().any(|r| r.contains(&at)),
+                    });
+                    if let Some((open, b'{')) = body_or_end(code, nat + name.len()) {
+                        // Bodies nest and are met in order, so an inner one overwrites its outer.
+                        owner[open..brace_end(code, open)].fill(idx);
+                    }
+                }
+                _ => {}
+            }
+        }
+        owners.push(owner);
+        skip.push(skipped);
+    }
+
+    // Pass 2: which names each function body (and the code outside functions) refers to.
+    let names: HashSet<&str> = defs.iter().map(|d| d.name.as_str()).collect();
+    let mut def_count: HashMap<&str, usize> = HashMap::new();
+    for d in &defs {
+        *def_count.entry(d.name.as_str()).or_default() += 1;
+    }
+    let mut refs: Vec<HashSet<String>> = vec![HashSet::new(); defs.len()];
+    let mut live_names: HashSet<String> = HashSet::new();
+    for (file, (_, code, attrs)) in sources.iter().enumerate() {
+        live_names.extend(attrs.iter().filter(|a| names.contains(a.as_str())).cloned());
+        for (at, word) in idents(code) {
+            if skip[file][at] || !names.contains(word) {
+                continue;
+            }
+            match owners[file][at] {
+                u32::MAX => {
+                    live_names.insert(word.to_string());
+                }
+                // Its own name in its own body is recursion only when no other function has
+                // that name; otherwise it may be a call to one (`fn len(&self) { self.0.len() }`).
+                o if defs[o as usize].name == word && def_count[word] == 1 => {}
+                o => {
+                    refs[o as usize].insert(word.to_string());
                 }
             }
         }
     }
-    out
+
+    // Pass 3: liveness, from the entry points and the code outside functions.
+    let mut by_name: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (i, d) in defs.iter().enumerate() {
+        by_name.entry(d.name.as_str()).or_default().push(i);
+    }
+    let mut live = vec![false; defs.len()];
+    let mut work: Vec<usize> = (0..defs.len()).filter(|&i| defs[i].entry).collect();
+    for n in &live_names {
+        work.extend(by_name.get(n.as_str()).into_iter().flatten().copied());
+    }
+    while let Some(i) = work.pop() {
+        if std::mem::replace(&mut live[i], true) {
+            continue;
+        }
+        for n in &refs[i] {
+            work.extend(
+                by_name
+                    .get(n.as_str())
+                    .into_iter()
+                    .flatten()
+                    .copied()
+                    .filter(|&j| !live[j]),
+            );
+        }
+    }
+    defs.iter()
+        .zip(&live)
+        .filter(|(d, &l)| d.public && !l)
+        .map(|(d, _)| format!("{}:{}", sources[d.file].0, d.name))
+        .collect()
 }
 
 /// A list file's entries: each line `- `key` — reason`.
@@ -193,27 +441,159 @@ pub fn check_acceptance(
 
 #[cfg(test)]
 mod tests {
-    use super::{check, check_acceptance, cites, pub_fn_name, word_count, BASELINE, EXEMPTIONS};
+    use super::{
+        check, check_acceptance, cites, is_pub_fn, unreferenced, word_count, BASELINE, EXEMPTIONS,
+    };
+    use std::collections::BTreeSet;
     use std::fs;
 
-    /// NFR-TEST-01: public function definitions are recognised in their forms, private ones not.
+    /// NFR-TEST-01: a definition is public with `pub` or `pub(…)` before it, past `const`,
+    /// `async`, `unsafe` and `extern`, across lines and after an attribute; private ones are not.
     /// trace: NFR-TEST-01
     #[test]
     fn nfr_test_01_pub_fn_definitions_are_recognised() {
-        for (line, want) in [
-            ("pub fn a() {}", Some("a")),
-            ("    pub(crate) fn b_2(x: u8) -> u8 {", Some("b_2")),
-            ("pub const fn c() {}", Some("c")),
-            ("pub async unsafe fn d() {}", Some("d")),
-            ("pub(super) extern fn e() {}", Some("e")),
-            ("fn private() {}", None),
-            ("pub struct S;", None),
-            ("pub fnord: u8,", None),
-            ("publish(x);", None),
+        for (code, want) in [
+            ("pub fn a() {}", true),
+            ("    pub(crate) fn b_2(x: u8) -> u8 {", true),
+            ("pub const fn c() {}", true),
+            ("pub async unsafe fn d() {}", true),
+            ("pub(super) extern     fn e() {}", true),
+            ("#[inline] pub fn f() {}", true),
+            ("pub\n    fn g() {}", true),
+            ("pub(in crate::x) fn h() {}", true),
+            ("fn private() {}", false),
+            ("#[inline]\nfn private2() {}", false),
+            ("x.publish(); fn p3() {}", false),
         ] {
-            assert_eq!(pub_fn_name(line), want, "{line:?}");
+            let at = code.rfind("fn ").unwrap();
+            assert_eq!(is_pub_fn(code, at), want, "{code:?}");
         }
         assert_eq!(word_count("a(x); ab(); a_b(); a;", "a"), 2);
+    }
+
+    /// A scratch workspace of `files` (path, text); returns what R6 finds unreferenced, as names.
+    fn scan(tag: &str, files: &[(&str, &str)]) -> BTreeSet<String> {
+        let root = std::env::temp_dir().join(format!("xtask-r6-{tag}-{}", std::process::id()));
+        for (path, text) in files {
+            let p = root.join(path);
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(p, text).unwrap();
+        }
+        let found = unreferenced(&root);
+        let _ = fs::remove_dir_all(&root);
+        found
+            .iter()
+            .map(|k| k.rsplit(':').next().unwrap().to_string())
+            .collect()
+    }
+
+    /// NFR-TEST-01 (audit T, U, X, 2026-10-10): each way the old name count let an unused public
+    /// function through is flagged now — and each live context still keeps a function alive.
+    /// The old rule ("the name occurs at least twice in production code") passed every one of the
+    /// `flagged` cases.
+    /// trace: NFR-TEST-01
+    #[test]
+    fn nfr_test_01_r6_sees_what_the_name_count_missed() {
+        let lib = "
+            // T: an orphan chain — `chain_top` is never called, so neither is `chain_mid`.
+            pub fn chain_top() { chain_mid(); }
+            pub fn chain_mid() {}
+            // T: one name, several definitions, no caller.
+            pub struct A; pub struct B;
+            impl A { pub fn twin(&self) {} }
+            impl B { pub fn twin(&self) {} }
+            // Recursion is not a caller.
+            pub fn recurse(n: u8) { if n > 0 { recurse(n - 1) } }
+            // A `use` line is not a caller.
+            pub mod m { pub fn imported() {} }
+            use crate::m::imported;
+            // X: an attribute on the same line, and `pub` split from `fn`.
+            #[inline] pub fn attributed() {}
+            pub
+            fn split() {}
+            // U: an item behind `cfg(all(test, …))`, and one whose generics hold a comma.
+            #[cfg(all(test, feature = \"x\"))]
+            fn all_test() { only_in_all_test(); }
+            pub fn only_in_all_test() {}
+            #[cfg(test)]
+            fn generic<A, B>() { only_in_generic(); }
+            pub fn only_in_generic() {}
+            // U: an out-of-line test module.
+            #[cfg(test)]
+            mod tests;
+            pub fn only_in_test_file() {}
+
+            // Live: called from main; through a live chain; from a trait impl the framework calls;
+            // named in an attribute string; used outside any function; behind `any(test, …)`.
+            // Each `cfg`-gated function is called, so its `cfg` alone decides what its body counts as.
+            fn main() { live_top(); all_test(); generic::<u8, u8>(); any_test(); }
+            pub fn live_top() { live_mid(); }
+            pub fn live_mid() {}
+            pub struct S;
+            impl std::fmt::Display for S {
+                fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { from_impl(); Ok(()) }
+            }
+            pub fn from_impl() {}
+            #[derive(serde::Deserialize)]
+            pub struct C { #[serde(deserialize_with = \"by_attribute\")] x: u8 }
+            pub fn by_attribute<'de, D>(d: D) -> Result<u8, D::Error> { todo!() }
+            pub const TABLE: [fn(); 1] = [in_const];
+            pub fn in_const() {}
+            #[cfg(any(test, feature = \"x\"))]
+            fn any_test() { only_in_any_test(); }
+            pub fn only_in_any_test() {}
+            // Delegation to a same-named method from a live trait impl keeps the callee alive.
+            pub struct Inner;
+            impl Inner { pub fn draw(&self) {} }
+            pub struct Outer(Inner);
+            impl Drawable for Outer { fn draw(&self) { self.0.draw() } }
+            pub fn fn_pointer_user(f: fn(u8) -> u8) -> u8 { f(1) }
+            fn uses_pointer() { fn_pointer_user(|x| x); }
+        ";
+        let found = scan(
+            "fixtures",
+            &[
+                ("crates/demo/src/main.rs", lib),
+                (
+                    "crates/demo/src/tests.rs",
+                    "fn t() { super::only_in_test_file(); }",
+                ),
+            ],
+        );
+        let flagged = [
+            "chain_top",
+            "chain_mid",
+            "twin",
+            "recurse",
+            "imported",
+            "attributed",
+            "split",
+            "only_in_all_test",
+            "only_in_generic",
+            "only_in_test_file",
+        ];
+        for name in flagged {
+            assert!(
+                found.contains(name),
+                "{name} should be unreferenced: {found:?}"
+            );
+        }
+        for name in [
+            "live_top",
+            "live_mid",
+            "from_impl",
+            "by_attribute",
+            "in_const",
+            "only_in_any_test",
+            "draw",
+        ] {
+            assert!(!found.contains(name), "{name} is live: {found:?}");
+        }
+        // `fn_pointer_user` is called by `uses_pointer`, which nothing calls: dead too, and the
+        // `fn(u8) -> u8` pointer type in its signature is not a definition.
+        assert!(found.contains("fn_pointer_user"), "{found:?}");
+        assert!(!found.iter().any(|n| n == "u8"), "{found:?}");
+        assert_eq!(found.len(), flagged.len() + 1, "{found:?}");
     }
 
     /// NFR-TEST-01, in a scratch workspace: a function used only by tests or named only in a
@@ -230,7 +610,7 @@ mod tests {
             src.join("lib.rs"),
             "pub fn used() {}\npub fn wired_later() {}\npub fn orphan() {}\npub fn baselined() {}\n\
              /// see orphan() and wired_later()\npub fn caller() { used(); wired_later(); }\n\
-             fn main_path() { caller(); }\n\
+             fn main() { caller(); }\n\
              #[cfg(test)]\nmod tests { #[test] fn t() { super::orphan(); super::baselined(); } }\n",
         )
         .unwrap();
@@ -283,7 +663,7 @@ mod tests {
         fs::create_dir_all(root.join("docs/test")).unwrap();
         fs::write(
             src.join("lib.rs"),
-            "pub fn live() {}\npub fn ghost() {}\npub fn gauge() {}\nfn main_path() { live(); }\n",
+            "pub fn live() {}\npub fn ghost() {}\npub fn gauge() {}\nfn main() { live(); }\n",
         )
         .unwrap();
         fs::write(

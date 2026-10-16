@@ -23,11 +23,38 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-fn workspace_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
+/// The workspace to check: the parent of the manifest this binary was built from — but only if
+/// `cargo run` started it for that same manifest (cargo sets `CARGO_MANIFEST_DIR` at run time too).
+/// Checkouts that share one target directory each get their own build, yet `target/debug/xtask`
+/// is re-linked only when something is rebuilt, so `cargo run` in an up-to-date checkout can start
+/// the binary another checkout built last — which checks *that* checkout and reports it as this
+/// one (seen 2026-10-16: main's gate printed a worktree's baseline count). Refused instead.
+fn root_for(built: &Path, run: Option<&str>) -> Result<PathBuf, String> {
+    if let Some(run) = run {
+        if Path::new(run) != built {
+            return Err(format!(
+                "this xtask binary was built for {} but cargo started it for {run} — a stale \
+                 binary from another checkout sharing the target directory. Rebuild it \
+                 (touch xtask/src/main.rs) or give each checkout its own target directory.",
+                built.display()
+            ));
+        }
+    }
+    Ok(built
         .parent()
         .expect("xtask manifest has a parent")
-        .to_path_buf()
+        .to_path_buf())
+}
+
+fn workspace_root() -> PathBuf {
+    let run = std::env::var("CARGO_MANIFEST_DIR").ok();
+    match root_for(Path::new(env!("CARGO_MANIFEST_DIR")), run.as_deref()) {
+        Ok(root) => root,
+        Err(why) => {
+            eprintln!("error: {why}");
+            std::process::exit(2);
+        }
+    }
 }
 
 fn is_req_id(tok: &str) -> bool {
@@ -524,7 +551,27 @@ fn write_coverage_report(
 
 #[cfg(test)]
 mod gate_tests {
-    use super::{srs_cells, traced_requirements, unreachable_encoders};
+    use super::{root_for, srs_cells, traced_requirements, unreachable_encoders};
+    use std::path::Path;
+
+    /// NFR-TEST-01: the gate checks the checkout cargo ran it for, and refuses a binary built for
+    /// another one (a target directory shared between checkouts); run outside cargo, it uses the
+    /// checkout it was built for.
+    /// trace: NFR-TEST-01
+    #[test]
+    fn nfr_test_01_a_binary_from_another_checkout_is_refused() {
+        let built = Path::new("/w/main/xtask");
+        assert_eq!(
+            root_for(built, Some("/w/main/xtask")).unwrap(),
+            Path::new("/w/main")
+        );
+        assert_eq!(root_for(built, None).unwrap(), Path::new("/w/main"));
+        let err = root_for(built, Some("/w/worktree/xtask")).unwrap_err();
+        assert!(
+            err.contains("/w/main/xtask") && err.contains("/w/worktree/xtask"),
+            "{err}"
+        );
+    }
 
     /// NFR-TEST-01: an escaped `\|` inside a cell does not split it, so a row's priority and
     /// verification are read from their own columns (`FR-PAN-12` was read as priority "S" from
