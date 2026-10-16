@@ -110,23 +110,196 @@ pub fn code_mask(text: &str) -> Vec<bool> {
     mask
 }
 
+/// Whether a `cfg` predicate (its code text, strings already blanked) holds only under test:
+/// `test`, or `all(…)` with one such argument, or `any(…)` whose every argument is one. `not(…)`,
+/// `feature = …` and the rest do not — `any(test, feature = "x")` is live in a normal build.
+fn implies_test(pred: &str) -> bool {
+    let p: String = pred.chars().filter(|c| !c.is_whitespace()).collect();
+    fn args(inner: &str) -> Vec<&str> {
+        let (mut out, mut depth, mut from) = (Vec::new(), 0i32, 0);
+        for (i, c) in inner.char_indices() {
+            match c {
+                '(' => depth += 1,
+                ')' => depth -= 1,
+                ',' if depth == 0 => {
+                    out.push(&inner[from..i]);
+                    from = i + 1;
+                }
+                _ => {}
+            }
+        }
+        if from < inner.len() {
+            out.push(&inner[from..]);
+        }
+        out
+    }
+    fn eval(p: &str) -> bool {
+        if p == "test" {
+            return true;
+        }
+        let Some(open) = p.find('(') else {
+            return false;
+        };
+        if !p.ends_with(')') {
+            return false;
+        }
+        let inner = &p[open + 1..p.len() - 1];
+        match &p[..open] {
+            "all" => args(inner).into_iter().any(eval),
+            "any" => {
+                let a = args(inner);
+                !a.is_empty() && a.into_iter().all(eval)
+            }
+            _ => false,
+        }
+    }
+    eval(&p)
+}
+
+/// The test-cfg attributes of `text`: `(start, end, inner)` for each real `#[cfg(…)]` (or inner
+/// `#![cfg(…)]`) whose predicate implies test, `end` just past its `]`.
+fn test_attrs(text: &str, code: &dyn Fn(usize) -> bool) -> Vec<(usize, usize, bool)> {
+    let b = text.as_bytes();
+    let mut out = Vec::new();
+    let mut from = 0;
+    while let Some(p) = text[from..].find("cfg") {
+        let at = from + p;
+        from = at + 3;
+        if !code(at) {
+            continue;
+        }
+        // Back over whitespace to `[`, then `#` or `#!`.
+        let head = text[..at].trim_end();
+        let Some(head) = head.strip_suffix('[') else {
+            continue;
+        };
+        let head = head.trim_end();
+        let (start, inner) = if let Some(h) = head.strip_suffix("#!") {
+            (h.len(), true)
+        } else if let Some(h) = head.strip_suffix('#') {
+            (h.len(), false)
+        } else {
+            continue;
+        };
+        // The predicate: the balanced parentheses after `cfg`, then `]`.
+        let rest = text[at + 3..].trim_start();
+        let open = text.len() - rest.len();
+        if b.get(open) != Some(&b'(') {
+            continue;
+        }
+        let (mut j, mut depth) = (open, 0i32);
+        while j < b.len() {
+            if code(j) {
+                match b[j] {
+                    b'(' => depth += 1,
+                    b')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            j += 1;
+        }
+        let pred: String = text[open + 1..j.min(text.len())]
+            .char_indices()
+            .map(|(i, c)| if code(open + 1 + i) { c } else { ' ' })
+            .collect();
+        let close = text[j + 1..].trim_start();
+        if !close.starts_with(']') || !implies_test(&pred) {
+            continue;
+        }
+        let end = text.len() - close.len() + 1;
+        out.push((start, end, inner));
+        from = end;
+    }
+    out
+}
+
+/// Keywords that open an item ending at its `;` or its braces — never at a `,`, which inside an
+/// item's generics (`fn f<A, B>()`) is not the item's end.
+const ITEM_KEYWORDS: &[&str] = &[
+    "fn",
+    "mod",
+    "impl",
+    "struct",
+    "enum",
+    "trait",
+    "union",
+    "type",
+    "const",
+    "static",
+    "use",
+    "extern",
+    "unsafe",
+    "async",
+    "macro_rules",
+];
+
+/// Past any further attributes and a visibility after `from`: the offset there.
+fn skip_attrs_and_vis(text: &str, mut from: usize) -> usize {
+    loop {
+        let rest = text[from..].trim_start();
+        let at = text.len() - rest.len();
+        if rest.starts_with("#[") {
+            let mut depth = 0i32;
+            let mut end = text.len();
+            for (i, c) in rest.char_indices() {
+                match c {
+                    '[' => depth += 1,
+                    ']' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = at + i + 1;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            from = end;
+        } else if let Some(r) = rest.strip_prefix("pub") {
+            if r.starts_with(|c: char| c.is_alphanumeric() || c == '_') {
+                return at;
+            }
+            let r2 = r.trim_start();
+            from = if let Some(paren) = r2.strip_prefix('(') {
+                text.len() - paren.len() + paren.find(')').map_or(0, |e| e + 1)
+            } else {
+                text.len() - r2.len()
+            };
+        } else {
+            return at;
+        }
+    }
+}
+
 /// The byte ranges of `text` that are test code: each real test-cfg attribute and the item it
-/// is attached to.
+/// is attached to — or the whole file, for an inner `#![cfg(test)]`.
 pub fn test_regions(text: &str) -> Vec<Range<usize>> {
-    const ATTR: &str = "#[cfg(test)]";
     let b = text.as_bytes();
     let mask = code_mask(text);
     let code = |i: usize| mask.get(i).copied().unwrap_or(false);
     let mut out = Vec::new();
-    let mut from = 0;
-    while let Some(p) = text[from..].find(ATTR) {
-        let start = from + p;
-        from = start + ATTR.len();
-        if !(start..start + ATTR.len()).all(code) {
-            continue; // in a comment or a string
+    let mut resume = 0;
+    for (start, from, inner) in test_attrs(text, &code) {
+        if inner {
+            // The whole file is test code.
+            return std::iter::once(0..text.len()).collect();
         }
-        // The item: the first `{` (brace-matched, then a following `;` if any), or `;` / `,`
-        // at depth 0, whichever comes first — counting code bytes only.
+        if start < resume {
+            continue; // inside an item already cut
+        }
+        let item = skip_attrs_and_vis(text, from);
+        let word: String = text[item..]
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        let keyword_item = ITEM_KEYWORDS.contains(&word.as_str());
+        // The item: the first `{` (brace-matched, then a following `;` if any), or `;` at depth 0
+        // — or, for a field, variant or arm, a `,` at depth 0 — counting code bytes only.
         let (mut j, mut depth) = (from, 0i32);
         let mut end = b.len();
         while j < b.len() {
@@ -137,7 +310,11 @@ pub fn test_regions(text: &str) -> Vec<Range<usize>> {
             match b[j] {
                 b'(' | b'[' => depth += 1,
                 b')' | b']' => depth -= 1,
-                b';' | b',' if depth == 0 => {
+                b';' if depth == 0 => {
+                    end = j + 1;
+                    break;
+                }
+                b',' if depth == 0 && !keyword_item => {
                     end = j + 1;
                     break;
                 }
@@ -171,9 +348,32 @@ pub fn test_regions(text: &str) -> Vec<Range<usize>> {
             j += 1;
         }
         out.push(start..end);
-        from = end.max(from);
+        resume = end;
     }
     out
+}
+
+/// The names of the test-only modules `text` declares out of line (`#[cfg(test)] mod tests;`):
+/// their files are test code too.
+pub fn out_of_line_test_mods(text: &str) -> Vec<String> {
+    test_regions(text)
+        .into_iter()
+        .filter_map(|r| {
+            let region = &text[r];
+            if !region.trim_end().ends_with(';') {
+                return None;
+            }
+            let attr_end = region.find(']')? + 1;
+            let item = skip_attrs_and_vis(region, attr_end);
+            let rest = region[item..].strip_prefix("mod")?.trim_start();
+            let name: String = rest
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            let after = rest[name.len()..].trim_start();
+            (!name.is_empty() && after.starts_with(';')).then_some(name)
+        })
+        .collect()
 }
 
 /// `text` with its test regions removed.
@@ -195,7 +395,54 @@ pub fn in_regions(regions: &[Range<usize>], at: usize) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{code_mask, in_regions, test_regions, without_tests};
+    use super::{
+        code_mask, implies_test, in_regions, out_of_line_test_mods, test_regions, without_tests,
+    };
+
+    /// NFR-TEST-01 (audit U): a `cfg` predicate is test-only when it cannot hold outside a test
+    /// build — `test`, `all(test, …)`, `any(…)` of test-only parts — and `any(test, feature)`,
+    /// `not(test)` or a feature are live code.
+    /// trace: NFR-TEST-01
+    #[test]
+    fn nfr_test_01_cfg_predicates_that_mean_test() {
+        for (pred, want) in [
+            ("test", true),
+            (" test ", true),
+            ("all(test, feature = )", true),
+            ("all(unix, all(test))", true),
+            ("any(test, all(test, unix))", true),
+            ("any(test, feature = )", false),
+            ("not(test)", false),
+            ("feature = ", false),
+            ("unix", false),
+            ("any()", false),
+        ] {
+            assert_eq!(implies_test(pred), want, "{pred:?}");
+        }
+    }
+
+    /// NFR-TEST-01 (audit U): an inner `#![cfg(test)]` makes the whole file test code; an item
+    /// behind `cfg(all(test, …))` is test code, one behind `cfg(any(test, feature))` is not; an
+    /// item's generics do not end it at their comma; and an out-of-line test module is named.
+    /// trace: NFR-TEST-01
+    #[test]
+    fn nfr_test_01_test_regions_in_their_other_forms() {
+        let whole = "//! helpers\n#![cfg(test)]\npub fn helper() { call_me(); }\n";
+        assert_eq!(test_regions(whole), vec![0..whole.len()]);
+        let t = "#[cfg(all(test, feature = \"x\"))]\nfn a() { gone_a(); }\n\
+                 #[cfg(any(test, feature = \"x\"))]\nfn b() { kept_b(); }\n\
+                 #[cfg(test)]\nfn g<A, B>(x: A, y: B) { gone_g(); }\n\
+                 #[cfg(test)]\n#[path = \"t.rs\"]\nmod helpers;\n\
+                 #[cfg(test)]\npub(crate) mod tests;\nfn live() { kept_live(); }\n";
+        let cut = without_tests(t);
+        assert!(!cut.contains("gone_a") && !cut.contains("gone_g"), "{cut}");
+        assert!(cut.contains("kept_b") && cut.contains("kept_live"), "{cut}");
+        assert!(
+            !cut.contains("mod tests;") && !cut.contains("mod helpers;"),
+            "{cut}"
+        );
+        assert_eq!(out_of_line_test_mods(t), vec!["helpers", "tests"]);
+    }
 
     /// NFR-TEST-01: comments, strings (plain, byte, raw), and character literals are not code;
     /// lifetimes and labels are.
