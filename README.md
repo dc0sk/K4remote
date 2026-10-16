@@ -9,8 +9,8 @@ stakeholder needs down to individual tests, enforced by a build gate.
 
 ![K4 Remote main window](docs/screenshots/main.png)
 
-> **Status:** v0.10.0 — feature-complete; hardware bring-up in progress.
-> 508 hardware-free tests pass · clippy/fmt clean · traceability gate green · CI green on Linux/macOS/Windows.
+> **Status:** v0.11.0 — feature-complete; hardware bring-up in progress.
+> 612 hardware-free tests pass · clippy/fmt clean · traceability gate green · CI green on Linux/macOS/Windows.
 > VFO tuning, RIT/XIT, split, band, panadapter click-to-QSY, and the K-Pod (incl. F1–F8 tap/hold macros)
 > are validated against a real K4; audio / PTT / waterfall rendering / serial bring-up is ongoing.
 > 0.4.0 closed **four transmit-safety faults** found on a live K4 — most seriously, the transmitter
@@ -25,6 +25,14 @@ stakeholder needs down to individual tests, enforced by a build gate.
 > sense, a waterfall that scrolls with the VFO, and labelled frequency/level scales synced to the
 > radio — plus **ATU and TUNE control**, an About-box **update check**, and **switchable control
 > tooltips**.
+>
+> **New in 0.11.0:** a **CAT server** — WSJT-X, JTDX, fldigi, flrig, Log4OM, CQRLOG or N1MM Logger+
+> on the same computer drive the remote K4 through the app, set up exactly as for a K4 on the LAN, with
+> **CAT PTT** only when you allow it. A **3D spectrum** (stacked traces or a shaded surface, time
+> receding into the background), the **whole of a large screen** for the panadapter, a **Graphics**
+> settings tab with the GPU/CPU choice — and a CPU renderer that now works. **Band buttons coloured by
+> band conditions** from the HamQSL forecast and the spots the app already receives, set up on a
+> **Propagation** tab and fine without internet. Plus **stored DTMF sequences**.
 >
 > **New in 0.10.0:** **spot nameplates on the spectrum** — callsigns from the **Reverse Beacon
 > Network**, **DX clusters**, **PSK Reporter** (optionally over TLS), **POTA** and **FreeDV Reporter**
@@ -174,16 +182,18 @@ Windows on every push and pull request; **release** builds are in `release.yml`.
 The rig-control **operating backlog is essentially complete** —
 VFO/mode/filter control, metering, panadapter, memories, transmit (voice + CW),
 the audio path, K-Pod, on-screen macros, DTMF, and transverter setup are all in,
-and 0.10.0 added spot nameplates and KPA1500 support. Most of it has been
+and 0.10.0 added spot nameplates and KPA1500 support, 0.11.0 the CAT server, the
+3D spectrum and band-condition colours. Most of it has been
 validated against a real K4; what's left is a short, honest list.
 
-**In progress — a CAT server for logging and digital-mode software.** WSJT-X /
-JTDX, fldigi / flrig, Log4OM, CQRLOG and N1MM Logger+ will be able to drive the
-remote K4 *through* K4 Remote, which emulates the K4's own network CAT service on
-`127.0.0.1:9200` — so the software is set up exactly as for a K4 on the LAN.
-Reading and setting frequency and mode works (Settings → **CAT SERVER**, off by
-default), and so does **CAT PTT** — behind ARM TX, a one-shot opt-in and a
-separate CAT audio device, bounded in time. The design, checked against Hamlib's
+**Being checked on the radio — the CAT server for logging and digital-mode
+software** (new in 0.11.0). WSJT-X / JTDX, fldigi / flrig, Log4OM, CQRLOG and
+N1MM Logger+ drive the remote K4 *through* K4 Remote, which emulates the K4's own
+network CAT service on `127.0.0.1:9200` — so the software is set up exactly as for
+a K4 on the LAN. Reading and setting the frequency is confirmed with Hamlib's
+`rigctl` against a real K4 (Settings → **CAT SERVER**, off by default); WSJT-X and
+**CAT PTT** — behind ARM TX, a one-shot opt-in and a separate CAT audio device,
+bounded in time — are still being checked on the radio. The design, checked against Hamlib's
 and flrig's source, is in [`docs/concept/cat-server-plan.md`](docs/concept/cat-server-plan.md).
 
 **Blocked on hardware answers** (each unblocks a feature that is otherwise
@@ -198,13 +208,6 @@ guesswork):
 **Remaining hardware bring-up** — audio, PTT, waterfall rendering and the
 USB/serial path get their final validation against a live K4; most control paths
 are already confirmed.
-
-**New, in the next release** — a 3D spectrum (stacked traces or a shaded
-surface, time receding into the background), use of the whole of a large
-screen, and a GRAPHICS settings tab with the GPU/CPU renderer choice; and band buttons whose label colour shows each
-band's current conditions (`FR-UI-25`), combining the HamQSL forecast with the
-spot activity the app already receives, configured on a PROPAGATION settings
-tab — and working normally with no internet connection.
 
 **Deferred, lower priority** — `SI`-based V/I metering (whose response format
 the K4 Programmer's Reference leaves for a future revision).
