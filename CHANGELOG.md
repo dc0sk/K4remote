@@ -12,6 +12,8 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-10-16
+
 ### Added
 
 - **Large screens are used.** The main window opens maximised, and the
@@ -90,11 +92,23 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
 - **The radio-side CW fail-safe was never set.** The app now sets the K4's key
   fail-safe (`KZF`, 3 minutes — the radio's default) when it connects, so a
   stalled CW stream cannot hold the key down.
+- **A configuration file the app could not read was overwritten.** One bad
+  value made the app start with all defaults, and the next save replaced the
+  file. Now a file it cannot read is first kept beside it as
+  `config.toml.unreadable-<time>`, and the new graphics settings (view, renderer,
+  tilt, depth) and the HamQSL interval fall back on their own when out of range.
 - **The RF power meter read QRP power ten times too high.** In the QRP range
   the K4 reports power in tenths of a watt, but the meter showed the number as
   watts — 5.0 W read as "50 W". It now follows the power range: watts in QRO,
   tenths of a watt in QRP, and **milliwatts on a transverter band**, where the
   radio itself switches its power scale to mW.
+
+### Security
+
+- **rustls 0.23.46**, for four advisories of 2026-10-14 (RUSTSEC-2026-0346,
+  -0347, -0348 and -0349). rustls carries the encrypted spot connections (PSK
+  Reporter over TLS, FreeDV over wss) and the web fetches (update check,
+  HamQSL, POTA); the link to the radio uses OpenSSL and is not affected.
 
 ## [0.10.0] — 2026-09-25
 
@@ -210,6 +224,7 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
   before you click Connect instead of looking like an unexplained connection
   failure.
 
+[0.11.0]: https://github.com/dc0sk/K4remote/releases/tag/v0.11.0
 [0.10.0]: https://github.com/dc0sk/K4remote/releases/tag/v0.10.0
 
 ## [0.9.0] — 2026-07-27
