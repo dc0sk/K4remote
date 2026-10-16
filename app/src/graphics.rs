@@ -307,6 +307,54 @@ mod tests {
         );
     }
 
+    /// FR-UI-27: the CPU renderer survives centred canvas text. iced 0.13 gives a canvas label an
+    /// infinite width, so a centred or right-aligned one is a region at x = -inf, width = inf,
+    /// whose centre is NaN; its software renderer sorts the regions it redraws with a comparator
+    /// that is no total order on NaN, and Rust's sort panics on that. The app crashed on the CPU
+    /// renderer whenever a frequency label changed (DC0SK, 2026-10-10). The workspace patches
+    /// `iced_graphics` with upstream's fix (`vendor/README.md`); this calls the
+    /// patched function as the renderer does, with regions of the shape iced makes.
+    /// trace: FR-UI-27
+    #[test]
+    fn fr_ui_27_the_cpu_renderer_survives_centred_canvas_text() {
+        use iced::{Point, Rectangle, Size};
+        // Scattered, as a real frame's regions are: neatly ordered ones never trip the sort's
+        // check. Every third is a centred label; 21 regions is past the sort's small-slice path.
+        let mut seed = 1u64;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % 3000) as f32
+        };
+        let regions: Vec<Rectangle> = (0..21)
+            .map(|i| {
+                if i % 3 == 0 {
+                    // A centred label: x -= inf / 2.
+                    Rectangle::new(
+                        Point::new(f32::NEG_INFINITY, i as f32),
+                        Size::new(f32::INFINITY, 12.0),
+                    )
+                } else {
+                    let x = next();
+                    let y = next() % 1400.0;
+                    Rectangle::new(Point::new(x, y), Size::new(20.0, 10.0))
+                }
+            })
+            .collect();
+        assert!(regions[0].center().x.is_nan(), "the shape iced makes");
+        let bounds = Rectangle::new(Point::ORIGIN, Size::new(3440.0, 1440.0));
+        let grouped = iced_graphics::damage::group(regions, bounds);
+        assert!(!grouped.is_empty(), "the regions are still redrawn");
+        assert!(
+            grouped.iter().all(|r| r.x.is_finite()
+                && r.y.is_finite()
+                && r.width.is_finite()
+                && r.height.is_finite()),
+            "every region to redraw is finite: {grouped:?}"
+        );
+    }
+
     /// FR-UI-27: the observed backend starts unknown and follows what is recorded.
     /// trace: FR-UI-27
     #[test]

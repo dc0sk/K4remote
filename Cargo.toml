@@ -20,6 +20,8 @@ members = [
     "app",
     "xtask",
 ]
+# Patched copies of dependencies, not ours to lint or test: see vendor/README.md.
+exclude = ["vendor"]
 
 [workspace.package]
 edition = "2021"
@@ -31,3 +33,8 @@ repository = "https://github.com/dc0sk/K4remote"
 
 [workspace.dependencies]
 sha2 = "0.10"
+
+# Two iced 0.13 crates, each with one upstream fix the CPU renderer needs (see vendor/README.md).
+[patch.crates-io]
+iced_graphics = { path = "vendor/iced_graphics" }
+iced_tiny_skia = { path = "vendor/iced_tiny_skia" }

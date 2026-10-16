@@ -102,3 +102,9 @@ winresource = "0.1"
 [dev-dependencies]
 # The protocol simulator stands in for the radio in end-to-end worker tests.
 k4-sim = { path = "../crates/k4-sim" }
+# The software renderer's damage grouping, tested against a NaN region (FR-UI-27); the patched copy
+# in vendor/ via the workspace's [patch.crates-io].
+iced_graphics = "0.13"
+# The software renderer itself, to draw a pane through it at a pane's offset (FR-UI-27).
+iced_tiny_skia = "0.13"
+tiny-skia = "0.11"

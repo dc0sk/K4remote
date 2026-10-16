@@ -1674,6 +1674,206 @@ mod spot_click_tests {
             assert_eq!(hidpi.wf_key(300.0, 100.0).cap, 200);
         });
     }
+
+    /// Draw `sp` as a pane at `pane_at` through the software renderer, the way the window does,
+    /// into a 1400 × 900 pixmap on black (pixels come back BGRA, as the window buffer wants them).
+    fn render_on_cpu(
+        sp: &Spectrum<'_, (bool, u64)>,
+        pane_at: Point,
+        pane: Size,
+    ) -> tiny_skia::Pixmap {
+        use iced::advanced::graphics::geometry::Renderer as _;
+        use iced::advanced::Renderer as _;
+        type Geometry = iced::widget::canvas::Geometry<iced::Renderer>;
+        use iced::Vector;
+        use iced_renderer::fallback::Renderer;
+        let renderer: iced::Renderer = Renderer::Secondary(iced_tiny_skia::Renderer::new(
+            iced::Font::default(),
+            iced::Pixels(14.0),
+        ));
+        let geometry = sp.draw(
+            &Default::default(),
+            &renderer,
+            &iced::Theme::Dark,
+            Rectangle::new(pane_at, pane),
+            iced::mouse::Cursor::Unavailable,
+        );
+        let Renderer::Secondary(mut cpu) = renderer else {
+            unreachable!("built as the software renderer")
+        };
+        cpu.with_translation(Vector::new(pane_at.x, pane_at.y), |r| {
+            for g in geometry {
+                let Geometry::Secondary(g) = g else {
+                    unreachable!("drawn by the software renderer")
+                };
+                r.draw_geometry(g);
+            }
+        });
+        let (vw, vh) = (1400u32, 900u32);
+        let mut pixmap = tiny_skia::Pixmap::new(vw, vh).expect("pixmap");
+        let mut mask = tiny_skia::Mask::new(vw, vh).expect("mask");
+        let viewport =
+            iced::advanced::graphics::Viewport::with_physical_size(Size::new(vw, vh), 1.0);
+        cpu.draw::<&str>(
+            &mut pixmap.as_mut(),
+            &mut mask,
+            &viewport,
+            &[Rectangle::new(
+                Point::ORIGIN,
+                Size::new(vw as f32, vh as f32),
+            )],
+            Color::BLACK,
+            &[],
+        );
+        pixmap
+    }
+
+    /// FR-UI-27 / FR-PAN-09: on the CPU renderer the waterfall stays inside its pane. iced_tiny_skia
+    /// 0.13 drew an image with no clip at all whenever it lay inside the region being redrawn, and
+    /// the draw overshoots the image's rectangle, so the waterfall's newest row was smeared upward
+    /// over the widgets above the pane, flashing as regions were redrawn (DC0SK, 2026-10-11, with a
+    /// screenshot). The workspace patches it with upstream's fix: the image is always clipped to its
+    /// own bounds (`vendor/README.md`).
+    /// trace: FR-UI-27
+    #[test]
+    fn fr_ui_27_the_cpu_renderer_keeps_the_waterfall_inside_its_pane() {
+        let spots = store(&[]);
+        let bins: Vec<f32> = (0..400).map(|i| -110.0 + (i % 50) as f32).collect();
+        let pane = Size::new(600.0, 300.0);
+        // The draw rounds the image's window position down to a whole row of the image, so where
+        // it lands depends on the pane's position and the row count: sweep both, from one row (just
+        // after start, each row stretched over the whole band) up. A pane at y = 410 with one row
+        // put the waterfall's top 50 px above the pane.
+        let mut cases = 0;
+        for rows in 1..=4 {
+            let pan: PanHandle = Arc::new(Mutex::new(PanShared::default()));
+            if let Ok(mut p) = pan.lock() {
+                for _ in 0..rows {
+                    p.push(
+                        1,
+                        PanRow {
+                            bins: bins.clone(),
+                            center_hz: CENTER as i64,
+                            span_hz: SPAN,
+                        },
+                    );
+                }
+            }
+            for pane_y in [410.0, 437.0, 455.0, 500.0, 521.0] {
+                let pane_at = Point::new(700.0, pane_y);
+                let (inside, outside) = with(&spots, |a| {
+                    let sp = Spectrum {
+                        latest: &bins,
+                        pan: &pan,
+                        rx: 1,
+                        is_b: true,
+                        gpu_waterfall: false,
+                        ..clone_view(a)
+                    };
+                    let pixmap = render_on_cpu(&sp, pane_at, pane);
+                    // The pane plus one pixel all round: a grid line on the pane's edge is
+                    // anti-aliased half a pixel beyond it, as on the GPU.
+                    let in_pane = |x: u32, y: u32| {
+                        (pane_at.x as u32 - 1..=(pane_at.x + pane.width) as u32).contains(&x)
+                            && (pane_at.y as u32 - 1..=(pane_at.y + pane.height) as u32)
+                                .contains(&y)
+                    };
+                    let (mut inside, mut outside) = (0, 0);
+                    for y in 0..pixmap.height() {
+                        for x in 0..pixmap.width() {
+                            let p = pixmap.pixel(x, y).expect("in the pixmap");
+                            if p.red() as u32 + p.green() as u32 + p.blue() as u32 > 0 {
+                                if in_pane(x, y) {
+                                    inside += 1;
+                                } else {
+                                    outside += 1;
+                                }
+                            }
+                        }
+                    }
+                    (inside, outside)
+                });
+                assert!(
+                    inside > 100_000,
+                    "{rows} rows, pane at y = {pane_y}: the pane is drawn ({inside} pixels)"
+                );
+                assert_eq!(
+                    outside, 0,
+                    "{rows} rows, pane at y = {pane_y}: painted outside the pane"
+                );
+                cases += 1;
+            }
+        }
+        assert_eq!(cases, 20);
+    }
+
+    /// FR-UI-27 / FR-PAN-01: on the CPU renderer the spectrum trace and the grid of a pane that is
+    /// not at the window's top-left corner are drawn. iced_tiny_skia 0.13 clipped a canvas's shapes to the
+    /// canvas's own rectangle taken as window coordinates, so pane B (to the right) lost its trace
+    /// and grid entirely and pane A flickered (DC0SK, 2026-10-10, on the radio). The workspace
+    /// patches it with upstream's fix (`vendor/README.md`), and with the one for straight lines:
+    /// a horizontal or vertical stroke (the dB grid, the spot pins) has a zero-height or zero-width
+    /// box, which 0.13 took for off-screen and never drew (DC0SK, 2026-10-11). Through the real path: the program's
+    /// `draw` on a tiny-skia renderer, placed at pane B's offset, rendered to pixels.
+    /// trace: FR-UI-27
+    #[test]
+    fn fr_ui_27_the_cpu_renderer_draws_the_trace_of_a_pane_away_from_the_corner() {
+        let spots = store(&[]);
+        let mut bins = vec![-110.0f32; 400];
+        for b in &mut bins[180..220] {
+            *b = -60.0;
+        }
+        let (pane_at, pane) = (Point::new(700.0, 500.0), Size::new(600.0, 300.0));
+        let green = with(&spots, |a| {
+            let sp = Spectrum {
+                latest: &bins,
+                rx: 1,
+                is_b: true,
+                gpu_waterfall: false,
+                ..clone_view(a)
+            };
+            let pixmap = render_on_cpu(&sp, pane_at, pane);
+            // Trace-green pixels inside the pane (no waterfall rows exist, so nothing else is green).
+            // The trace is rgb(0, 230, 120); the software renderer stores pixels as BGRA for the
+            // window buffer, so it reads back as (120, 230, 0).
+            let mut n = 0;
+            for y in pane_at.y as u32..(pane_at.y + pane.height) as u32 {
+                for x in pane_at.x as u32..(pane_at.x + pane.width) as u32 {
+                    let p = pixmap.pixel(x, y).expect("in the pixmap");
+                    if p.green() > 150 && p.blue() < 60 && (60..180).contains(&p.red()) {
+                        n += 1;
+                    }
+                }
+            }
+            // Grid lines: horizontal ones have a zero-height box and vertical ones (like the spot
+            // pins) a zero-width one, which iced_tiny_skia 0.13 skipped as off-screen. The grid is
+            // white at 7 % over the background, so its green channel (not moved by BGRA) lies
+            // between the background's 10 and the trace's 230.
+            let grid = |x: u32, y: u32| (14..60).contains(&pixmap.pixel(x, y).unwrap().green());
+            let (x0, y0) = (pane_at.x as u32, pane_at.y as u32);
+            let (pw, ph) = (pane.width as u32, pane.height as u32);
+            let rows = (y0..y0 + ph)
+                .filter(|&y| (x0..x0 + pw).filter(|&x| grid(x, y)).count() as u32 > pw * 8 / 10)
+                .count();
+            let cols = (x0..x0 + pw)
+                .filter(|&x| (y0..y0 + ph).filter(|&y| grid(x, y)).count() > 40)
+                .count();
+            (n, rows, cols)
+        });
+        let (green, rows, cols) = green;
+        assert!(
+            green > 400,
+            "the trace is drawn in pane B: {green} green pixels"
+        );
+        assert!(
+            rows >= 2,
+            "the horizontal grid lines are drawn: {rows} rows"
+        );
+        assert!(
+            cols >= 3,
+            "the vertical grid lines are drawn: {cols} columns"
+        );
+    }
 }
 
 #[cfg(test)]
