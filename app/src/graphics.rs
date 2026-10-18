@@ -102,17 +102,33 @@ static DECISION: OnceLock<Decision> = OnceLock::new();
 /// same one.
 pub fn apply_at_start(setting: Renderer, adapter: impl Fn() -> bool) -> Decision {
     *DECISION.get_or_init(|| {
-        let iced = std::env::var(ICED_BACKEND).ok();
-        let k4 = std::env::var(K4_WATERFALL).ok();
-        // What to set does not depend on the adapter, so set it first: the probe creates a wgpu
-        // instance, and a driver may start threads, after which `set_var` would race their reads.
-        let set = decide(setting, iced.as_deref(), k4.as_deref(), || false).set_iced_backend;
-        if let Some(v) = set {
+        apply(
+            setting,
+            |k| std::env::var(k).ok(),
             // Edition 2021, and no other thread exists yet (iced has not started, nothing probed).
-            std::env::set_var(ICED_BACKEND, v);
-        }
-        decide(setting, iced.as_deref(), k4.as_deref(), adapter)
+            |k, v| std::env::set_var(k, v),
+            adapter,
+        )
     })
+}
+
+/// The start-up decision, with the environment and the adapter probe passed in: read both
+/// variables, set `ICED_BACKEND` if the decision says so, and only then probe. What to set does
+/// not depend on the adapter, so it is set first: the probe creates a wgpu instance, and a driver
+/// may start threads, after which setting a variable would race their reads.
+fn apply(
+    setting: Renderer,
+    get: impl Fn(&str) -> Option<String>,
+    mut set: impl FnMut(&str, &str),
+    adapter: impl Fn() -> bool,
+) -> Decision {
+    let iced = get(ICED_BACKEND);
+    let k4 = get(K4_WATERFALL);
+    let to_set = decide(setting, iced.as_deref(), k4.as_deref(), || false).set_iced_backend;
+    if let Some(v) = to_set {
+        set(ICED_BACKEND, v);
+    }
+    decide(setting, iced.as_deref(), k4.as_deref(), adapter)
 }
 
 /// The decision made at start, if [`apply_at_start`] ran (it does, in `main`).
@@ -304,6 +320,58 @@ mod tests {
         assert_eq!(
             status_text(&none, Some(false), false),
             "In use: CPU (software) — GPU chosen, but none was found."
+        );
+    }
+
+    /// FR-UI-27 (audit R): at start the environment is set before the adapter is probed — the
+    /// probe can start driver threads, and setting a variable after that races their reads. The
+    /// probe sees the value already set; CPU sets software and never probes; Auto and the user's
+    /// own `ICED_BACKEND` set nothing.
+    /// trace: FR-UI-27
+    #[test]
+    fn fr_ui_27_the_environment_is_set_before_the_adapter_probe() {
+        use std::cell::RefCell;
+        use std::collections::HashMap;
+        let run = |setting: Renderer, user: Option<&str>| {
+            let env: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
+            if let Some(v) = user {
+                env.borrow_mut().insert(ICED_BACKEND.into(), v.into());
+            }
+            let events: RefCell<Vec<String>> = RefCell::new(Vec::new());
+            let d = apply(
+                setting,
+                |k| env.borrow().get(k).cloned(),
+                |k, v| {
+                    events.borrow_mut().push(format!("set {k}={v}"));
+                    env.borrow_mut().insert(k.into(), v.into());
+                },
+                || {
+                    let seen = env.borrow().get(ICED_BACKEND).cloned();
+                    events.borrow_mut().push(format!("probe sees {seen:?}"));
+                    true
+                },
+            );
+            (d, events.into_inner())
+        };
+        let (d, ev) = run(Renderer::Gpu, None);
+        assert!(d.gpu);
+        assert_eq!(
+            ev,
+            [
+                "set ICED_BACKEND=wgpu,tiny-skia",
+                "probe sees Some(\"wgpu,tiny-skia\")"
+            ]
+        );
+        let (d, ev) = run(Renderer::Cpu, None);
+        assert!(!d.gpu);
+        assert_eq!(ev, ["set ICED_BACKEND=tiny-skia"], "software, and no probe");
+        let (_, ev) = run(Renderer::Auto, None);
+        assert_eq!(ev, ["probe sees None"], "Auto leaves iced to choose");
+        let (_, ev) = run(Renderer::Gpu, Some("wgpu"));
+        assert_eq!(
+            ev,
+            ["probe sees Some(\"wgpu\")"],
+            "the user's value is kept"
         );
     }
 

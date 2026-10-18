@@ -21,7 +21,7 @@ use k4_spot::bandcond::{self, Activity, Forecast};
 use k4_spot::freedv_source::{FreeDvConfig, FreeDvSource};
 use k4_spot::hamqsl::HamqslSource;
 use k4_spot::mqtt_source::{CertInfo, MqttConfig, MqttSource};
-use k4_spot::polled::{PolledConfig, PolledSource};
+use k4_spot::polled::{Fetcher, PolledConfig, PolledSource};
 use k4_spot::pota;
 use k4_spot::psk::{bands_overlapping, topic_for_band};
 use k4_spot::telnet::{ConnState, Stats, TelnetConfig, TelnetSource};
@@ -280,12 +280,29 @@ fn topics_for(window: Option<(u64, u64)>) -> Vec<String> {
 
 /// Start the worker. It ends when the UI drops its end of the command channel.
 pub fn spawn(rx: Receiver<Cmd>, store: SpotHandle, status: StatusHandle, pins: tls::Pins) {
-    let _ = thread::Builder::new()
-        .name("spot-sources".into())
-        .spawn(move || run(&rx, &store, &status, &pins));
+    spawn_with(rx, store, status, pins, crate::http_fetch::fetcher());
 }
 
-fn run(rx: &Receiver<Cmd>, store: &SpotHandle, status: &StatusHandle, pins: &tls::Pins) {
+/// As [`spawn`], fetching HamQSL through `hamqsl_fetch` (a test serves a fixture with it).
+fn spawn_with(
+    rx: Receiver<Cmd>,
+    store: SpotHandle,
+    status: StatusHandle,
+    pins: tls::Pins,
+    hamqsl_fetch: Fetcher,
+) {
+    let _ = thread::Builder::new()
+        .name("spot-sources".into())
+        .spawn(move || run(&rx, &store, &status, &pins, hamqsl_fetch));
+}
+
+fn run(
+    rx: &Receiver<Cmd>,
+    store: &SpotHandle,
+    status: &StatusHandle,
+    pins: &tls::Pins,
+    hamqsl_fetch: Fetcher,
+) {
     let mut slots = [
         Slot::default(),
         Slot::default(),
@@ -301,12 +318,13 @@ fn run(rx: &Receiver<Cmd>, store: &SpotHandle, status: &StatusHandle, pins: &tls
     // the hour; off until the UI sends the settings, so an opted-out source is never asked.
     let activity: Arc<Mutex<Activity>> = Arc::default();
     let mut hamqsl = HamqslSource::new(
-        crate::http_fetch::fetcher(),
+        hamqsl_fetch,
         bandcond::HAMQSL_INTERVAL_DEFAULT_SECS,
         Instant::now(),
     );
     hamqsl.set_enabled(false);
     let mut counted: Option<Vec<Network>> = None;
+    let mut bands_cache = BandsCache::default();
     loop {
         loop {
             match rx.try_recv() {
@@ -355,6 +373,7 @@ fn run(rx: &Receiver<Cmd>, store: &SpotHandle, status: &StatusHandle, pins: &tls
                     hamqsl.set_interval(p.hamqsl_interval_secs);
                     hamqsl.set_enabled(p.hamqsl);
                     counted = Some(p.activity);
+                    bands_cache.invalidate();
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => return,
@@ -385,7 +404,9 @@ fn run(rx: &Receiver<Cmd>, store: &SpotHandle, status: &StatusHandle, pins: &tls
 
         let unix = unix_now();
         hamqsl.poll(Instant::now(), unix);
-        let bands = band_inputs(&hamqsl, &activity, counted.as_deref(), unix);
+        let bands = bands_cache.get(unix, || {
+            band_inputs(&hamqsl, &activity, counted.as_deref(), unix)
+        });
         let now = Statuses {
             rbn: slots[0].status(),
             dx_cluster: slots[1].status(),
@@ -412,6 +433,31 @@ fn unix_now() -> u64 {
 
 /// The band-condition snapshot for this pass (FR-UI-25). Nothing is reported until the settings
 /// have arrived; activity older than its window is dropped as it goes.
+/// The band inputs, recomputed at most once a second or when the settings change. Purging and
+/// counting every band is the worker's heaviest step, and it ran every pass (~10 ms): under a
+/// flood, 2.9 ms of each 10 (audit M). The colours follow a 15-minute window and an hourly
+/// forecast, so a second's delay is invisible.
+#[derive(Default)]
+struct BandsCache {
+    at: Option<u64>,
+    value: BandInputs,
+}
+
+impl BandsCache {
+    fn get(&mut self, unix: u64, compute: impl FnOnce() -> BandInputs) -> BandInputs {
+        if self.at != Some(unix) {
+            self.value = compute();
+            self.at = Some(unix);
+        }
+        self.value.clone()
+    }
+
+    /// Recompute on the next call, whatever the second.
+    fn invalidate(&mut self) {
+        self.at = None;
+    }
+}
+
 fn band_inputs(
     hamqsl: &HamqslSource,
     activity: &Mutex<Activity>,
@@ -719,6 +765,116 @@ mod tests {
             let s = status.lock().unwrap();
             s.rbn.is_none() && s.dx_cluster.is_none() && s.psk_reporter.is_none()
         });
+    }
+
+    /// FR-UI-25 (audit M): the band inputs are computed at most once a second, and at once after
+    /// a settings change — not on every pass of the worker.
+    /// trace: FR-UI-25
+    #[test]
+    fn fr_ui_25_band_inputs_are_computed_once_a_second() {
+        let mut cache = BandsCache::default();
+        let mut computed = 0;
+        {
+            let mut get = |cache: &mut BandsCache, unix: u64| {
+                cache.get(unix, || {
+                    computed += 1;
+                    BandInputs::default()
+                })
+            };
+            for _ in 0..100 {
+                get(&mut cache, 1_000);
+            }
+            get(&mut cache, 1_001);
+            get(&mut cache, 1_001);
+            cache.invalidate();
+            get(&mut cache, 1_001);
+        }
+        assert_eq!(
+            computed, 3,
+            "once in second 1000, once in 1001, once after the change"
+        );
+    }
+
+    /// FR-UI-25 (audit P): through the real worker, a HamQSL forecast reaches the bands status the
+    /// UI colours from — fetched once HamQSL is switched on, and parsed as the source reads it.
+    /// The fixture is re-dated to now, so it is as fresh as a live reply.
+    /// trace: FR-UI-25
+    #[test]
+    fn fr_ui_25_worker_carries_the_hamqsl_forecast() {
+        const FIXTURE: &[u8] =
+            include_bytes!("../../crates/k4-spot/tests/fixtures/hamqsl-2026-10-04.xml");
+        // `<updated>` as HamQSL writes it ("04 Oct 2026 1626 GMT"), for the current minute.
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let (days, secs) = ((now / 86_400) as i64, now % 86_400);
+        let z = days + 719_468;
+        let era = z.div_euclid(146_097);
+        let doe = z - era * 146_097;
+        let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2) / 153;
+        let day = doy - (153 * mp + 2) / 5 + 1;
+        let month = if mp < 10 { mp + 3 } else { mp - 9 };
+        let year = yoe + era * 400 + i64::from(month <= 2);
+        const MONTHS: [&str; 12] = [
+            "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+        ];
+        let stamp = format!(
+            " {day:02} {} {year} {:02}{:02} GMT",
+            MONTHS[(month - 1) as usize],
+            secs / 3600,
+            secs % 3600 / 60
+        );
+        let text = String::from_utf8(FIXTURE.to_vec()).unwrap();
+        let (a, b) = (
+            text.find("<updated>").unwrap() + "<updated>".len(),
+            text.find("</updated>").unwrap(),
+        );
+        let body = format!("{}{stamp}{}", &text[..a], &text[b..]).into_bytes();
+        let expected = bandcond::parse_hamqsl(&body).unwrap();
+        assert_eq!(
+            expected.updated,
+            Some(now - now % 60),
+            "the re-dated fixture is fresh"
+        );
+
+        let fetches = Arc::new(Mutex::new(0u32));
+        let counter = Arc::clone(&fetches);
+        let served = body.clone();
+        let fetch: Fetcher = Arc::new(move |_, _| {
+            *counter.lock().unwrap() += 1;
+            Ok(served.clone())
+        });
+        let store: SpotHandle = Arc::default();
+        let status: StatusHandle = Arc::default();
+        let (tx, rx) = mpsc::channel();
+        spawn_with(rx, store, Arc::clone(&status), Arc::default(), fetch);
+        tx.send(Cmd::Propagation(PropagationCfg {
+            hamqsl: false,
+            hamqsl_interval_secs: 3600,
+            activity: vec![],
+        }))
+        .unwrap();
+        thread::sleep(Duration::from_millis(300));
+        assert_eq!(
+            *fetches.lock().unwrap(),
+            0,
+            "switched off, nothing is fetched"
+        );
+        assert_eq!(status.lock().unwrap().bands.forecast, None);
+        tx.send(Cmd::Propagation(PropagationCfg {
+            hamqsl: true,
+            hamqsl_interval_secs: 3600,
+            activity: vec![],
+        }))
+        .unwrap();
+        wait("the forecast reaches the status", || {
+            status.lock().unwrap().bands.forecast.is_some()
+        });
+        assert_eq!(status.lock().unwrap().bands.forecast, Some(expected));
+        assert_eq!(*fetches.lock().unwrap(), 1);
     }
 
     /// FR-UI-25: through the real worker, a spot on another band than the one in view counts as

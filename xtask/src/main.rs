@@ -25,10 +25,12 @@ use std::path::{Path, PathBuf};
 
 /// The workspace to check: the parent of the manifest this binary was built from — but only if
 /// `cargo run` started it for that same manifest (cargo sets `CARGO_MANIFEST_DIR` at run time too).
-/// Checkouts that share one target directory each get their own build, yet `target/debug/xtask`
-/// is re-linked only when something is rebuilt, so `cargo run` in an up-to-date checkout can start
-/// the binary another checkout built last — which checks *that* checkout and reports it as this
-/// one (seen 2026-10-16: main's gate printed a worktree's baseline count). Refused instead.
+/// Checkouts that share one target directory share one build of an identical crate, and cargo
+/// judges it fresh by *this* checkout's source times: a checkout whose files are older than the
+/// other's last build compiles nothing and runs the other's binary — which checks *that* checkout
+/// and reports it as this one (seen 2026-10-16: main's gate printed a worktree's baseline count).
+/// Refused instead. The same goes for `cargo test` and clippy, which this cannot see: the real
+/// remedy is a target directory per checkout.
 fn root_for(built: &Path, run: Option<&str>) -> Result<PathBuf, String> {
     if let Some(run) = run {
         if Path::new(run) != built {

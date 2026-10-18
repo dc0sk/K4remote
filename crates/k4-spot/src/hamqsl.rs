@@ -330,6 +330,71 @@ mod tests {
         assert_eq!(n.load(Ordering::SeqCst), 6, "off fetches nothing");
     }
 
+    /// FR-UI-25 (audit O): a reply that arrives but cannot be read — an error page instead of the
+    /// XML — is a failed fetch: the error is shown, the forecast already held keeps counting until
+    /// its own limits drop it, and the next try is backed off as after a network failure. A reply
+    /// whose `<updated>` is not ASCII (the input that once panicked the spot thread, audit A) is read
+    /// for its ratings, with its date unknown.
+    /// trace: FR-UI-25
+    #[test]
+    fn fr_ui_25_hamqsl_unreadable_reply_is_a_failed_fetch() {
+        let fixture = String::from_utf8(FIXTURE.to_vec()).unwrap();
+        let start = fixture.find("<updated>").unwrap() + "<updated>".len();
+        let end = fixture.find("</updated>").unwrap();
+        let bad_date = format!(
+            "{} 04 Oct 2026 1é5 GMT{}",
+            &fixture[..start],
+            &fixture[end..]
+        );
+        let replies: Vec<Vec<u8>> = vec![
+            FIXTURE.to_vec(),
+            b"<html><body>502 Bad Gateway</body></html>".to_vec(),
+            bad_date.into_bytes(),
+        ];
+        let n = Arc::new(AtomicU64::new(0));
+        let c = Arc::clone(&n);
+        let fetch: Fetcher = Arc::new(move |_, _| {
+            let i = c.fetch_add(1, Ordering::SeqCst) as usize;
+            Ok(replies[i.min(2)].clone())
+        });
+        let t0 = Instant::now();
+        let unix = UPDATED + 60;
+        let mut s = HamqslSource::new(fetch, 3600, t0);
+        s.poll(t0, unix);
+        settle(&mut s, t0, unix);
+        let good = s.current(unix).cloned().expect("the first reply is read");
+        assert_eq!(good.updated, Some(UPDATED));
+
+        // The error page, at the next scheduled fetch.
+        let t1 = s.next_attempt();
+        s.poll(t1, unix);
+        settle(&mut s, t1, unix);
+        assert!(
+            s.error().is_some_and(|e| e.starts_with("unexpected reply")),
+            "{:?}",
+            s.error()
+        );
+        assert_eq!(
+            s.current(unix),
+            Some(&good),
+            "the forecast held still counts"
+        );
+        assert_eq!(
+            s.next_attempt().saturating_duration_since(t1).as_secs(),
+            300,
+            "backed off like a network failure"
+        );
+
+        // The reply with an unreadable date: read, its date unknown, the error cleared.
+        let t2 = s.next_attempt();
+        s.poll(t2, unix);
+        settle(&mut s, t2, unix);
+        assert_eq!(s.error(), None);
+        let read = s.current(unix).expect("its ratings are read");
+        assert_eq!(read.updated, None);
+        assert_eq!(n.load(Ordering::SeqCst), 3);
+    }
+
     /// FR-UI-25: switching HamQSL off and on while a request is in flight does not send a second
     /// request at once (the dropped one still reached the server): the next waits at least the
     /// back-off floor.
