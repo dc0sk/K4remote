@@ -1819,6 +1819,9 @@ mod spot_click_tests {
             let after_row = image_id(&state).unwrap();
             assert_ne!(after_row, first, "a new row rebuilds it");
 
+            // B gets the same number of rows, so only the receiver differs (the row count is part
+            // of the key as well: unequal counts would rebuild whatever the key said of `rx`).
+            push(1, 1);
             render_on_cpu_with(&sp(1, 0.5), &state, pane_at, pane);
             let after_rx = image_id(&state).unwrap();
             assert_ne!(after_rx, after_row, "another receiver rebuilds it");
