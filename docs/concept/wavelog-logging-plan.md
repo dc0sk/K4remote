@@ -1,7 +1,7 @@
 ---
 title: "QSO logging to Wavelog (API v2) — design (FR-LOG)"
 status: Draft
-version: "0.3"
+version: "0.4"
 updated: 2026-10-27
 authors:
   - Simon Keimer (DC0SK)
@@ -221,6 +221,22 @@ Tests:
   `{"name":"Wavelog API","status":"ok"}` on both path forms, so it runs 3.1.0 or later.
 - No KPA1500 at DC0SK's station: `tx_pwr` is the K4's set power. (With an amplifier, the radiated
   power would be its output — not handled.)
+
+## 10a. As built (v0.4, 2026-10-27) — where the build departs from or adds to the text above
+
+- **The token is read in two places, both in `app/src/wavelog.rs`:** the transport's
+  `Authorization` header and the secret-store write. The structural test allows exactly these two.
+- **No keychain I/O on the UI thread:** storing and removing the token run on a thread, as the
+  connection password's do; the tab says "saving…" and then the result. Found on screen: a
+  synchronous save froze the window for the D-Bus timeout when no keyring answered.
+- **The Test takes its own URL and token**, not the full setup: the setup needs a station
+  location, and the Test is what lists them. Found on screen: a fresh setup could never start.
+- **A send-phase timeout counts as "may have reached".** ureq 3.3 reports `SendRequest` also while
+  waiting for the reply to a request the server read in full (found by the lost-reply test); only
+  resolve and connect timeouts prove nothing was sent.
+- **The settings tab row wraps:** with LOGGING, eleven tabs no longer fit the 900 px window.
+- **`time_off` past midnight** is left out rather than sent on the wrong date.
+- **Not yet built:** the lookup (FR-LOG-05) and the spot prefill (FR-LOG-06) — the next slice.
 
 ## 10. Review of v0.1 (2026-10-27)
 

@@ -17,6 +17,7 @@ members = [
     "crates/k4-kpa",
     "crates/k4-spot",
     "crates/k4-catsrv",
+    "crates/k4-log",
     "app",
     "xtask",
 ]

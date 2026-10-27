@@ -1,6 +1,9 @@
 //! Config tests. trace: FR-CFG-01, FR-CFG-02, FR-CFG-03, FR-CFG-04, FR-CFG-05,
 //! NFR-SEC-01
-use k4_config::{redact, Config, MemoryStore, Peer, PeerSecret, Prefs, Profile, SecretStore};
+use k4_config::{
+    redact, Config, MemoryStore, Peer, PeerSecret, Prefs, Profile, SecretStore, WavelogPrefs,
+    WavelogStation,
+};
 
 /// The `SecretStore` abstraction holds the password out of the config file
 /// (FR-CFG-03): set/get/delete round-trip via the in-memory backend.
@@ -1177,4 +1180,38 @@ fn fr_cfg_01_an_unreadable_file_is_kept_aside() {
     let n = std::fs::read_dir(&dir).unwrap().count();
     let _ = std::fs::remove_dir_all(&dir);
     assert_eq!(n, 2, "config.toml plus the one copy");
+}
+
+/// FR-LOG-02: the Wavelog settings round-trip, and a config without them (or with a partial
+/// section) loads with logging unconfigured rather than failing.
+/// trace: FR-LOG-02
+#[test]
+fn fr_log_02_wavelog_prefs_round_trip() {
+    let mut c = Config::default();
+    c.prefs.wavelog = WavelogPrefs {
+        url: "https://log.dclnext.darc.de".into(),
+        index_php: false,
+        station_id: Some(3),
+        locations: vec![WavelogStation {
+            id: 3,
+            name: "Home".into(),
+            callsign: "DC0SK".into(),
+            gridsquare: "JO31".into(),
+            active: true,
+        }],
+        digital_mode: "FT4".into(),
+        operator: "DC0SK".into(),
+    };
+    let text = c.to_toml().unwrap();
+    assert!(!text.contains("wl2_"), "no token in the config");
+    assert_eq!(
+        Config::from_toml(&text).unwrap().prefs.wavelog,
+        c.prefs.wavelog
+    );
+    let empty = Config::from_toml(&Config::default().to_toml().unwrap()).unwrap();
+    assert_eq!(empty.prefs.wavelog, WavelogPrefs::default());
+    let partial = text.replace("index_php = false\n", "");
+    let reloaded = Config::from_toml(&partial).unwrap();
+    assert_eq!(reloaded.prefs.wavelog.url, "https://log.dclnext.darc.de");
+    assert_eq!(reloaded.prefs.wavelog.station_id, Some(3));
 }

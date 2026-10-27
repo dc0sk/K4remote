@@ -179,6 +179,48 @@ pub struct Prefs {
     /// The panadapter view and the renderer (FR-PAN-15, FR-UI-27).
     #[serde(default)]
     pub graphics: GraphicsPrefs,
+    /// QSO logging to Wavelog (FR-LOG). The token is not here: it is in the secret store.
+    #[serde(default)]
+    pub wavelog: WavelogPrefs,
+}
+
+/// A station location as Wavelog lists it, cached for an offline start (FR-LOG-02).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct WavelogStation {
+    pub id: u32,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub callsign: String,
+    #[serde(default)]
+    pub gridsquare: String,
+    /// The location Wavelog's own UI logs to.
+    #[serde(default)]
+    pub active: bool,
+}
+
+/// QSO logging to Wavelog (FR-LOG). Empty `url` = not configured; the token belongs to this URL
+/// and is deleted from the secret store when the URL changes.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct WavelogPrefs {
+    /// The server's normalised base (`k4_log::server::Server::base`).
+    #[serde(default)]
+    pub url: String,
+    /// The API answers only under `/index.php/api/v2` (found by the Test).
+    #[serde(default)]
+    pub index_php: bool,
+    /// The station location QSOs are logged to; `None` until chosen.
+    #[serde(default)]
+    pub station_id: Option<u32>,
+    /// Wavelog's station locations as last fetched.
+    #[serde(default)]
+    pub locations: Vec<WavelogStation>,
+    /// The digital mode last chosen for DATA (`FT8`, `FT4`, …).
+    #[serde(default)]
+    pub digital_mode: String,
+    /// Sent as `operator` when not empty (a club logbook attributes the QSO by it).
+    #[serde(default)]
+    pub operator: String,
 }
 
 /// What the panadapter shows (FR-PAN-15).
@@ -1163,6 +1205,7 @@ impl Default for Prefs {
             station_locator: String::new(),
             propagation: PropagationPrefs::default(),
             graphics: GraphicsPrefs::default(),
+            wavelog: WavelogPrefs::default(),
         }
     }
 }

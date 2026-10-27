@@ -473,15 +473,11 @@ pub fn spawn_demo_pan_feed(pan: PanHandle, snapshot: Arc<Mutex<UiSnapshot>>) {
 /// coloured frequency readouts, the strong-signal (yellow) S-meter, and the
 /// two-line state chips with no radio or sim attached. Not used in normal runs.
 pub fn demo_snapshot() -> UiSnapshot {
-    UiSnapshot {
-        connected: true,
-        phase: ConnPhase::Connected,
-        transmitting: false,
-        tx_armed: false,
+    let radio = RadioState {
         vfo_a_hz: Some(14_074_000),
         vfo_b_hz: Some(14_061_100),
-        mode_a: Some("USB"),
-        mode_b: Some("CW"),
+        mode_a: Some(Mode::Usb),
+        mode_b: Some(Mode::Cw),
         split: Some(false),
         s_meter_bars: Some(7),
         s_meter_dbm: Some(-68), // ≥ −73 → "caution" yellow (FR-UI-10)
@@ -495,9 +491,21 @@ pub fn demo_snapshot() -> UiSnapshot {
         preamp_on: Some(true),
         rit_on: Some(false),
         xit_on: Some(false),
+        tx_power: Some(10),
+        tx_power_range: Some('H'),
+        ..RadioState::default()
+    };
+    let mut s = UiSnapshot {
+        connected: true,
+        phase: ConnPhase::Connected,
+        transmitting: false,
+        tx_armed: false,
         status: "DEMO MODE — sample state (no radio). Switch A / B / A+B to reflow.".into(),
         ..Default::default()
-    }
+    };
+    // Through the same copy a live connection uses.
+    apply_radio_state(&mut s, &radio);
+    s
 }
 
 /// Short label for a [`Mode`].
@@ -1213,27 +1221,7 @@ fn publish(snapshot: &Arc<Mutex<UiSnapshot>>, ws: &mut WorkerState) {
         s.client_tx = session.is_client_tx();
         s.tuning = session.is_tuning() || session.is_raw_tx();
         s.tx_refusals = ws.tx_refusals;
-        s.digital_audio = st.digital_audio;
-        s.vfo_a_locked = st.vfo_a_locked;
-        s.vfo_b_locked = st.vfo_b_locked;
-        s.tx_test = st.tx_test;
-        s.vfo_a_hz = st.vfo_a_hz;
-        s.vfo_b_hz = st.vfo_b_hz;
-        s.mode_a = st.mode_a.map(mode_label);
-        s.mode_b = st.mode_b.map(mode_label);
-        s.split = st.split;
-        s.s_meter_bars = st.s_meter_bars;
-        s.s_meter_dbm = st.s_meter_dbm;
-        s.s_meter_dbm_sub = st.s_meter_dbm_sub;
-        s.bandwidth_hz = st.bandwidth_hz;
-        s.atten_db = st.atten_db;
-        s.atten_on = st.atten_on;
-        s.agc_mode = st.agc_mode;
-        s.nb_on = st.nb_on;
-        s.nr_on = st.nr_on;
-        s.preamp_on = st.preamp_on;
-        s.rit_on = st.rit_on;
-        s.xit_on = st.xit_on;
+        apply_radio_state(&mut s, st);
         s.audio_frames = ws.audio_frames;
         s.audio_played = ws.audio_played;
         s.spectrum_bins = ws.spectrum_bins;
@@ -1241,8 +1229,36 @@ fn publish(snapshot: &Arc<Mutex<UiSnapshot>>, ws: &mut WorkerState) {
         s.spectrum_sub = ws.spectrum_latest[1].clone();
         s.mini_pan = ws.mini_pan.clone();
         s.diag_lines = Arc::clone(&ws.diag_lines);
-        s.radio = st.clone();
     }
+}
+
+/// Copy the radio's state into the snapshot: the readout fields and `radio` itself. The live
+/// publish and the demo both go through here, so the two copies of the VFOs and modes cannot
+/// disagree — the demo once filled only the readouts and the log form, reading `radio`, saw no
+/// radio (2026-10-27).
+fn apply_radio_state(s: &mut UiSnapshot, st: &RadioState) {
+    s.digital_audio = st.digital_audio;
+    s.vfo_a_locked = st.vfo_a_locked;
+    s.vfo_b_locked = st.vfo_b_locked;
+    s.tx_test = st.tx_test;
+    s.vfo_a_hz = st.vfo_a_hz;
+    s.vfo_b_hz = st.vfo_b_hz;
+    s.mode_a = st.mode_a.map(mode_label);
+    s.mode_b = st.mode_b.map(mode_label);
+    s.split = st.split;
+    s.s_meter_bars = st.s_meter_bars;
+    s.s_meter_dbm = st.s_meter_dbm;
+    s.s_meter_dbm_sub = st.s_meter_dbm_sub;
+    s.bandwidth_hz = st.bandwidth_hz;
+    s.atten_db = st.atten_db;
+    s.atten_on = st.atten_on;
+    s.agc_mode = st.agc_mode;
+    s.nb_on = st.nb_on;
+    s.nr_on = st.nr_on;
+    s.preamp_on = st.preamp_on;
+    s.rit_on = st.rit_on;
+    s.xit_on = st.xit_on;
+    s.radio = st.clone();
 }
 
 /// Human-readable description of a connect target (no secrets).
@@ -2556,6 +2572,44 @@ mod tests {
     }
 
     use super::*;
+
+    /// FR-LOG-01: the demo snapshot goes through the live copy of the radio state, so its
+    /// readouts and its `radio` agree — the log form reads `radio` and saw no radio while the demo
+    /// filled only the readouts (2026-10-27).
+    /// trace: FR-LOG-01
+    #[test]
+    fn fr_log_01_the_demo_snapshot_agrees_with_its_radio_state() {
+        let d = demo_snapshot();
+        let mut e = UiSnapshot::default();
+        apply_radio_state(&mut e, &d.radio);
+        assert_eq!(
+            (
+                d.vfo_a_hz,
+                d.vfo_b_hz,
+                d.mode_a,
+                d.mode_b,
+                d.split,
+                d.s_meter_dbm
+            ),
+            (
+                e.vfo_a_hz,
+                e.vfo_b_hz,
+                e.mode_a,
+                e.mode_b,
+                e.split,
+                e.s_meter_dbm
+            )
+        );
+        assert_eq!(
+            (d.vfo_a_hz, d.mode_a),
+            (Some(14_074_000), Some("USB")),
+            "the demo's values"
+        );
+        assert_eq!(
+            (d.radio.tx_power, d.radio.tx_power_range),
+            (Some(10), Some('H'))
+        );
+    }
 
     /// Build a PAN payload with a known centre frequency and sample rate.
     fn pan_payload(center_hz: i64, sample_rate_khz: i32, bins: &[u8]) -> Vec<u8> {
