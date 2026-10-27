@@ -197,6 +197,77 @@ impl LogUi {
     pub fn ready(&self) -> bool {
         self.setup().is_some()
     }
+
+    /// The call field changed at `now`: `time_on` is taken when it first gets text and dropped
+    /// when it is emptied.
+    fn type_call(&mut self, s: String, now: u64) {
+        if self.call.trim().is_empty() && !s.trim().is_empty() {
+            self.time_on = Some(now);
+        }
+        if s.trim().is_empty() {
+            self.time_on = None;
+        }
+        self.call = s.to_ascii_uppercase();
+        self.form_error = None;
+    }
+}
+
+/// The mode of the transmit VFO (B in split).
+fn tx_mode(r: &k4_protocol::state::RadioState) -> Option<Mode> {
+    if r.split == Some(true) {
+        r.mode_b.or(r.mode_a)
+    } else {
+        r.mode_a
+    }
+}
+
+/// The draft from the form and the radio at `now` — or from the typed frequency when no radio is
+/// connected. Empty RST fields take the mode's default.
+fn draft_from(
+    l: &LogUi,
+    r: &k4_protocol::state::RadioState,
+    connected: bool,
+    now: u64,
+) -> Result<Draft, String> {
+    let (tx_hz, rx_hz, mode) = match (connected, r.vfo_a_hz) {
+        (true, Some(a)) => {
+            let (tx, rx) = frequencies(a, r.vfo_b_hz, r.split == Some(true));
+            (tx, rx, tx_mode(r).unwrap_or(Mode::Usb))
+        }
+        _ => {
+            let mhz: f64 = l
+                .manual_freq
+                .trim()
+                .replace(',', ".")
+                .parse()
+                .map_err(|_| "no radio: enter the frequency in MHz".to_string())?;
+            ((mhz * 1e6).round() as u64, None, Mode::Usb)
+        }
+    };
+    let (m, sub) = adif_mode(mode, l.digital);
+    let rst = default_rst(m, sub);
+    let pick = |typed: &str| {
+        if typed.trim().is_empty() {
+            rst.to_string()
+        } else {
+            typed.trim().to_string()
+        }
+    };
+    Ok(Draft {
+        call: l.call.clone(),
+        rst_sent: pick(&l.rst_sent),
+        rst_rcvd: pick(&l.rst_rcvd),
+        name: l.name.clone(),
+        comment: l.comment.clone(),
+        time_on: l.time_on.unwrap_or(now).min(now),
+        time_off: now,
+        tx_hz,
+        rx_hz,
+        mode,
+        digital: l.digital,
+        tx_pwr: power_watts(r.tx_power, r.tx_power_range),
+        operator: Some(l.prefs.operator.clone()).filter(|o| !o.is_empty()),
+    })
 }
 
 impl App {
@@ -270,16 +341,7 @@ impl App {
                     l.send(Cmd::SaveAdif(p));
                 }
             }
-            LogMsg::Call(s) => {
-                if l.call.trim().is_empty() && !s.trim().is_empty() {
-                    l.time_on = Some(unix_now());
-                }
-                if s.trim().is_empty() {
-                    l.time_on = None;
-                }
-                l.call = s.to_ascii_uppercase();
-                l.form_error = None;
-            }
+            LogMsg::Call(s) => l.type_call(s, unix_now()),
             LogMsg::RstSent(s) => l.rst_sent = s,
             LogMsg::RstRcvd(s) => l.rst_rcvd = s,
             LogMsg::Name(s) => l.name = s,
@@ -322,60 +384,12 @@ impl App {
         l.form_error = None;
     }
 
-    /// The mode of the transmit VFO (B in split).
     fn log_mode(&self) -> Option<Mode> {
-        let r = &self.ui.radio;
-        if r.split == Some(true) {
-            r.mode_b.or(r.mode_a)
-        } else {
-            r.mode_a
-        }
+        tx_mode(&self.ui.radio)
     }
 
-    /// The draft from the form and the radio (or the typed frequency when none is connected).
     fn log_draft(&self) -> Result<Draft, String> {
-        let l = &self.log;
-        let r = &self.ui.radio;
-        let (tx_hz, rx_hz, mode) = match (self.ui.connected, r.vfo_a_hz) {
-            (true, Some(a)) => {
-                let (tx, rx) = frequencies(a, r.vfo_b_hz, r.split == Some(true));
-                (tx, rx, self.log_mode().unwrap_or(Mode::Usb))
-            }
-            _ => {
-                let mhz: f64 = l
-                    .manual_freq
-                    .trim()
-                    .replace(',', ".")
-                    .parse()
-                    .map_err(|_| "no radio: enter the frequency in MHz".to_string())?;
-                ((mhz * 1e6).round() as u64, None, Mode::Usb)
-            }
-        };
-        let (m, sub) = adif_mode(mode, l.digital);
-        let rst = default_rst(m, sub);
-        let pick = |typed: &str| {
-            if typed.trim().is_empty() {
-                rst.to_string()
-            } else {
-                typed.to_string()
-            }
-        };
-        let now = unix_now();
-        Ok(Draft {
-            call: l.call.clone(),
-            rst_sent: pick(&l.rst_sent),
-            rst_rcvd: pick(&l.rst_rcvd),
-            name: l.name.clone(),
-            comment: l.comment.clone(),
-            time_on: l.time_on.unwrap_or(now).min(now),
-            time_off: now,
-            tx_hz,
-            rx_hz,
-            mode,
-            digital: l.digital,
-            tx_pwr: power_watts(r.tx_power, r.tx_power_range),
-            operator: Some(l.prefs.operator.clone()).filter(|o| !o.is_empty()),
-        })
+        draft_from(&self.log, &self.ui.radio, self.ui.connected, unix_now())
     }
 
     /// Copy the worker's status; take a new Test report's path form and station list into the
@@ -654,5 +668,141 @@ impl App {
             col = col.push(Text::new(last.clone()).size(11).color(dim));
         }
         col.into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use k4_protocol::state::RadioState;
+
+    fn ui() -> LogUi {
+        LogUi {
+            prefs: WavelogPrefs::default(),
+            tx: None,
+            status: Arc::default(),
+            view: Status::default(),
+            url_input: String::new(),
+            url_error: None,
+            token_input: String::new(),
+            token: None,
+            token_note: None,
+            call: String::new(),
+            rst_sent: String::new(),
+            rst_rcvd: String::new(),
+            name: String::new(),
+            comment: String::new(),
+            time_on: None,
+            digital: DigitalMode::Ft8,
+            manual_freq: String::new(),
+            form_error: None,
+            seen_test: None,
+        }
+    }
+
+    fn radio(a: u64, b: u64, split: bool, mode_a: Mode, mode_b: Mode) -> RadioState {
+        RadioState {
+            vfo_a_hz: Some(a),
+            vfo_b_hz: Some(b),
+            split: Some(split),
+            mode_a: Some(mode_a),
+            mode_b: Some(mode_b),
+            tx_power: Some(50),
+            tx_power_range: Some('H'),
+            ..RadioState::default()
+        }
+    }
+
+    /// FR-LOG-01: `time_on` is when the call was first typed — not moved by further typing,
+    /// dropped when the field is emptied, taken again when it is typed anew.
+    /// trace: FR-LOG-01
+    #[test]
+    fn fr_log_01_time_on_is_when_the_call_is_first_typed() {
+        let mut l = ui();
+        l.type_call("d".into(), 100);
+        assert_eq!((l.call.as_str(), l.time_on), ("D", Some(100)));
+        l.type_call("DL1".into(), 105);
+        assert_eq!(l.time_on, Some(100), "further typing keeps it");
+        l.type_call(String::new(), 110);
+        assert_eq!(l.time_on, None);
+        l.type_call("DK2".into(), 200);
+        assert_eq!(l.time_on, Some(200));
+    }
+
+    /// FR-LOG-01, FR-LOG-08: the draft takes frequency, mode and power from the radio — in split
+    /// the transmit VFO B and its mode, with VFO A as the receive frequency — the times from the
+    /// form and the clock, and the mode's RST when none is typed.
+    /// trace: FR-LOG-01, FR-LOG-08
+    #[test]
+    fn fr_log_01_the_draft_comes_from_the_radio() {
+        let mut l = ui();
+        l.type_call("dl1abc".into(), 1_000);
+        let plain = radio(14_250_000, 7_000_000, false, Mode::Usb, Mode::Cw);
+        let d = draft_from(&l, &plain, true, 1_300).unwrap();
+        assert_eq!((d.tx_hz, d.rx_hz, d.mode), (14_250_000, None, Mode::Usb));
+        assert_eq!((d.time_on, d.time_off), (1_000, 1_300));
+        assert_eq!((d.rst_sent.as_str(), d.rst_rcvd.as_str()), ("59", "59"));
+        assert_eq!(d.tx_pwr, Some(50.0));
+        let split = radio(14_000_000, 14_005_000, true, Mode::Usb, Mode::Cw);
+        let d = draft_from(&l, &split, true, 1_300).unwrap();
+        assert_eq!(
+            (d.tx_hz, d.rx_hz, d.mode),
+            (14_005_000, Some(14_000_000), Mode::Cw)
+        );
+        assert_eq!(d.rst_sent, "599", "CW's default");
+        l.rst_rcvd = " 579 ".into();
+        assert_eq!(
+            draft_from(&l, &split, true, 1_300).unwrap().rst_rcvd,
+            "579",
+            "a typed RST is kept"
+        );
+    }
+
+    /// FR-LOG-01: with no radio connected the typed frequency is used (a comma as the decimal
+    /// mark too), and without one the form says what is missing.
+    /// trace: FR-LOG-01
+    #[test]
+    fn fr_log_01_without_a_radio_the_typed_frequency() {
+        let mut l = ui();
+        l.type_call("DL1ABC".into(), 1_000);
+        let r = RadioState::default();
+        assert!(draft_from(&l, &r, false, 1_100)
+            .unwrap_err()
+            .contains("MHz"));
+        l.manual_freq = "7,074".into();
+        let d = draft_from(&l, &r, false, 1_100).unwrap();
+        assert_eq!((d.tx_hz, d.rx_hz), (7_074_000, None));
+        // Connected but no frequency yet counts as no radio.
+        assert_eq!(draft_from(&l, &r, true, 1_100).unwrap().tx_hz, 7_074_000);
+    }
+
+    /// FR-LOG-01: nothing reaches Wavelog except by the Log action — the one place that queues a
+    /// QSO is the `LogMsg::Log` arm, and the worker fills its queue from that command only.
+    /// Structural, over the production code of this file and the worker's.
+    /// trace: FR-LOG-01
+    #[test]
+    fn fr_log_01_nothing_is_sent_without_the_log_action() {
+        let text = include_str!("log_ui.rs");
+        let prod = &text[..text.find(concat!("mod ", "tests {")).expect("test module")];
+        let needle = concat!("Cmd::", "Log(");
+        let sites: Vec<usize> = prod.match_indices(needle).map(|(i, _)| i).collect();
+        assert_eq!(sites.len(), 1, "one place queues a QSO");
+        let arm = prod[..sites[0]]
+            .rfind("LogMsg::")
+            .map(|i| &prod[i..sites[0]])
+            .unwrap_or("");
+        assert!(
+            arm.starts_with("LogMsg::Log =>"),
+            "it is the Log action's arm: {arm:.60}"
+        );
+        let worker = include_str!("wavelog.rs");
+        let worker = &worker[..worker
+            .find(concat!("mod ", "tests {"))
+            .expect("test module")];
+        assert_eq!(
+            worker.matches(".add(").count(),
+            1,
+            "the queue is filled from Cmd::Log only"
+        );
     }
 }
