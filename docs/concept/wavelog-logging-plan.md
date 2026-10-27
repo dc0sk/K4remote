@@ -1,7 +1,7 @@
 ---
 title: "QSO logging to Wavelog (API v2) — design (FR-LOG)"
 status: Draft
-version: "0.2"
+version: "0.3"
 updated: 2026-10-27
 authors:
   - Simon Keimer (DC0SK)
@@ -148,8 +148,7 @@ never assumes `details` is an object:
   JS8 → `MFSK`/`JS8`; RTTY → `RTTY`; PSK31 → `PSK`/`PSK31`; the last choice is remembered. The
   lookup is asked with the **main** mode (`SSB`, `CW`, `MFSK`, …).
 - **Power:** `tx_pwr` in **watts** from the K4's power setting and its range (H: W, L: 0.1 W,
-  X: mW); left out when either is unknown. With the KPA1500 in OPERATE, the radiated power is the
-  amplifier's — open point §9.
+  X: mW); left out when either is unknown. An amplifier's output is not handled (§9).
 - **Call:** trimmed and upper-cased. **RST** defaults: `59` phone, `599` CW and RTTY, empty for
   FT8/FT4/JS8; editable. **`operator`:** the operator's callsign from Settings (as used for the
   cluster login), so a club logbook attributes the QSO.
@@ -193,9 +192,15 @@ Tests:
   belongs to is stored in the config beside it (`[wavelog] url`); **changing the URL deletes the
   token** and asks for a new one, so "sent only to the URL it was saved for" is an invariant of
   the config, not a naming scheme.
-- **The URL is normalised once:** scheme and host lower-case, trailing `/` and `/index.php`
-  removed; K4 Remote appends `/index.php/api/v2/…` itself (both forms answer on the probed
-  instance — open point §9 for the DARC one).
+- **The URL is normalised once:** scheme and host lower-case; a trailing `/`, `/api/v2` and
+  `/index.php` removed, so `https://log.dclnext.darc.de/api/v2` (the form DC0SK has) and
+  `https://log.dclnext.darc.de` are one server. K4 Remote then uses `<base>/api/v2/…`, falling
+  back to `<base>/index.php/api/v2/…` if `status` answers only there; the form that answered is
+  kept in the config. (Checked 2026-10-27: on the DARC server and the local one, both forms
+  answer `status`.)
+- **"API v2 present" is decided by the public `status` resource only.** The DARC server answers
+  an unknown v2 path without a token with **401 `unauthorized`** ("Missing API token"), not 404:
+  it authenticates before routing.
 - **HTTPS only**, except `http://127.0.0.1`, `http://[::1]` and `http://localhost`. Redirects are
   never followed (§3).
 - **`Secret`**, a newtype in `k4-log`: `Debug` prints `wl2_…<last four>`, no `Display`, no
@@ -210,12 +215,12 @@ Tests:
 
 `FR-LOG-01` … `FR-LOG-08` in the SRS, section R, rewritten to this version.
 
-## 9. Open points for DC0SK
+## 9. Answered by DC0SK (2026-10-27)
 
-- The URL of the DARC Wavelog; whether it runs 3.1.0 or later (the Test will say) and whether it
-  needs the `/index.php/` form.
-- Power: the K4's set power is what K4 Remote knows; with the KPA1500 in OPERATE, log the
-  amplifier's output instead?
+- The DARC Wavelog is `https://log.dclnext.darc.de/api/v2`. Its public `status` answers
+  `{"name":"Wavelog API","status":"ok"}` on both path forms, so it runs 3.1.0 or later.
+- No KPA1500 at DC0SK's station: `tx_pwr` is the K4's set power. (With an amplifier, the radiated
+  power would be its output — not handled.)
 
 ## 10. Review of v0.1 (2026-10-27)
 

@@ -372,7 +372,7 @@ The operator logs contacts from K4 Remote to a **Wavelog** logbook (for DC0SK: t
 hosts) through Wavelog's **API v2** (Wavelog 3.1.0 or later), with an API token entered in K4
 Remote. Requested 2026-10-27 by DC0SK; design, API facts checked against a local instance and the
 Wavelog source, an independent review and its write probes: `docs/concept/wavelog-logging-plan.md`
-v0.2. **Proposed, not built.**
+v0.3. The DARC server (`https://log.dclnext.darc.de/api/v2`) answers API v2. **Proposed, not built.**
 
 | ID | Requirement | Source | Prio | Verif. | Acceptance |
 |---|---|---|---|---|---|
