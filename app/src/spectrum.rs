@@ -1682,6 +1682,16 @@ mod spot_click_tests {
         pane_at: Point,
         pane: Size,
     ) -> tiny_skia::Pixmap {
+        render_on_cpu_with(sp, &Default::default(), pane_at, pane)
+    }
+
+    /// As [`render_on_cpu`], with the canvas state kept by the caller (the 3D cache lives there).
+    fn render_on_cpu_with(
+        sp: &Spectrum<'_, (bool, u64)>,
+        state: &std::cell::RefCell<PaneState>,
+        pane_at: Point,
+        pane: Size,
+    ) -> tiny_skia::Pixmap {
         use iced::advanced::graphics::geometry::Renderer as _;
         use iced::advanced::Renderer as _;
         type Geometry = iced::widget::canvas::Geometry<iced::Renderer>;
@@ -1692,7 +1702,7 @@ mod spot_click_tests {
             iced::Pixels(14.0),
         ));
         let geometry = sp.draw(
-            &Default::default(),
+            state,
             &renderer,
             &iced::Theme::Dark,
             Rectangle::new(pane_at, pane),
@@ -1726,6 +1736,103 @@ mod spot_click_tests {
             &[],
         );
         pixmap
+    }
+
+    /// FR-PAN-15 (audit Q): the 3D view draws through the real canvas path, inside its pane, and
+    /// its image is rebuilt only when what it shows changes: a frame with nothing new reuses it;
+    /// a new row, another receiver or another tilt rebuilds it.
+    /// trace: FR-PAN-15
+    #[test]
+    fn fr_pan_15_the_3d_image_is_drawn_and_rebuilt_only_on_change() {
+        let spots = store(&[]);
+        let bins: Vec<f32> = (0..400).map(|i| -110.0 + (i % 50) as f32).collect();
+        let pan: PanHandle = Arc::new(Mutex::new(PanShared::default()));
+        let push = |rx: usize, n: usize| {
+            let mut p = pan.lock().unwrap();
+            for _ in 0..n {
+                p.push(
+                    rx,
+                    PanRow {
+                        bins: bins.clone(),
+                        center_hz: CENTER as i64,
+                        span_hz: SPAN,
+                    },
+                );
+            }
+        };
+        push(0, 40);
+        push(1, 40);
+        let (pane_at, pane) = (Point::new(700.0, 450.0), Size::new(600.0, 300.0));
+        let view = View3d {
+            style: k4_stream::view3d::Style::Surface,
+            tilt: 0.5,
+            depth: 64,
+        };
+        let state = std::cell::RefCell::new(PaneState::default());
+        let image_id =
+            |st: &std::cell::RefCell<PaneState>| st.borrow().d3.image.as_ref().map(|(h, _)| h.id());
+        with(&spots, |a| {
+            let sp = |rx: usize, tilt: f32| Spectrum {
+                latest: &bins,
+                pan: &pan,
+                rx,
+                is_b: rx == 1,
+                gpu_waterfall: false,
+                view3d: Some(View3d { tilt, ..view }),
+                ..clone_view(a)
+            };
+            let pixmap = render_on_cpu_with(&sp(0, 0.5), &state, pane_at, pane);
+            let first = image_id(&state).expect("the 3D image is built");
+            // Drawn inside the pane (one pixel of anti-aliasing allowed), and something drawn.
+            let (mut inside, mut outside) = (0u32, 0u32);
+            for y in 0..pixmap.height() {
+                for x in 0..pixmap.width() {
+                    let p = pixmap.pixel(x, y).unwrap();
+                    if p.red() as u32 + p.green() as u32 + p.blue() as u32 > 60 {
+                        let within = (pane_at.x as u32 - 1..=(pane_at.x + pane.width) as u32)
+                            .contains(&x)
+                            && (pane_at.y as u32 - 1..=(pane_at.y + pane.height) as u32)
+                                .contains(&y);
+                        if within {
+                            inside += 1;
+                        } else {
+                            outside += 1;
+                        }
+                    }
+                }
+            }
+            assert!(
+                inside > 5_000,
+                "the surface is drawn: {inside} bright pixels"
+            );
+            assert_eq!(outside, 0, "nothing outside the pane");
+
+            render_on_cpu_with(&sp(0, 0.5), &state, pane_at, pane);
+            assert_eq!(
+                image_id(&state),
+                Some(first),
+                "nothing new: the image is reused"
+            );
+
+            push(0, 1);
+            render_on_cpu_with(&sp(0, 0.5), &state, pane_at, pane);
+            let after_row = image_id(&state).unwrap();
+            assert_ne!(after_row, first, "a new row rebuilds it");
+
+            // B gets the same number of rows, so only the receiver differs (the row count is part
+            // of the key as well: unequal counts would rebuild whatever the key said of `rx`).
+            push(1, 1);
+            render_on_cpu_with(&sp(1, 0.5), &state, pane_at, pane);
+            let after_rx = image_id(&state).unwrap();
+            assert_ne!(after_rx, after_row, "another receiver rebuilds it");
+
+            render_on_cpu_with(&sp(1, 0.7), &state, pane_at, pane);
+            assert_ne!(
+                image_id(&state).unwrap(),
+                after_rx,
+                "another tilt rebuilds it"
+            );
+        });
     }
 
     /// FR-UI-27 / FR-PAN-09: on the CPU renderer the waterfall stays inside its pane. iced_tiny_skia

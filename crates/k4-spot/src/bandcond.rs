@@ -309,6 +309,11 @@ pub const MAX_CALLS_PER_BAND: usize = 4096;
 #[derive(Debug, Default)]
 pub struct Activity {
     bands: HashMap<&'static str, HashMap<(String, Network), u64>>,
+    /// Per band, the second its full table was last scanned for expired entries: a flood of new
+    /// calls on a full band costs one scan per second, not one per spot (audit M).
+    full_scanned: HashMap<&'static str, u64>,
+    /// Full-table scans made (for the flood test).
+    scans: u64,
 }
 
 impl Activity {
@@ -318,7 +323,8 @@ impl Activity {
 
     /// Note `call` heard on `freq_hz` by `network` at `t`. Calls that do not normalise, and
     /// frequencies outside every band, are ignored. Entries older than the window are dropped;
-    /// a band already holding [`MAX_CALLS_PER_BAND`] fresh entries takes no new ones.
+    /// a band already holding [`MAX_CALLS_PER_BAND`] fresh entries takes no new ones. A full band is
+    /// scanned for expired entries at most once a second, so a flood costs one scan per second.
     pub fn note(&mut self, call: &str, freq_hz: u64, network: Network, t: u64) {
         let (Some(band), Some(call)) = (psk::band_token(freq_hz), normalise_callsign(call)) else {
             return;
@@ -326,6 +332,11 @@ impl Activity {
         let calls = self.bands.entry(band).or_default();
         let key = (call, network);
         if !calls.contains_key(&key) && calls.len() >= MAX_CALLS_PER_BAND {
+            if self.full_scanned.get(band).is_some_and(|&last| last >= t) {
+                return; // scanned this second already: still full
+            }
+            self.full_scanned.insert(band, t);
+            self.scans += 1;
             calls.retain(|_, &mut seen| t.saturating_sub(seen) < ACTIVITY_WINDOW_SECS);
             if calls.len() >= MAX_CALLS_PER_BAND {
                 return;
@@ -610,6 +621,38 @@ mod tests {
         );
         a.purge(120 + ACTIVITY_WINDOW_SECS);
         assert_eq!(a.count("20m", 0, &both), 0, "purged");
+    }
+
+    /// FR-UI-25 (audit M): a flood of new calls on a full band costs one scan of the band per
+    /// second, not one per spot — and a call arriving once old entries have expired still gets in.
+    /// trace: FR-UI-25
+    #[test]
+    fn fr_ui_25_a_flood_on_a_full_band_scans_once_a_second() {
+        let call = |i: usize| format!("K{}{}{}", i % 10, (b'A' + (i / 10 % 26) as u8) as char, i);
+        let mut a = Activity::new();
+        let f = 14_074_000;
+        for i in 0..MAX_CALLS_PER_BAND {
+            a.note(&call(i), f, Network::Rbn, 100);
+        }
+        assert_eq!(a.count("20m", 100, &[Network::Rbn]), MAX_CALLS_PER_BAND);
+        assert_eq!(a.scans, 0);
+        for i in 0..10_000 {
+            a.note(&call(MAX_CALLS_PER_BAND + i), f, Network::Rbn, 200);
+        }
+        assert_eq!(a.scans, 1, "10 000 new calls in one second: one scan");
+        for i in 0..100 {
+            a.note(&call(20_000 + i), f, Network::Rbn, 201);
+        }
+        assert_eq!(a.scans, 2, "the next second: one more");
+        // Once the first calls have expired, the next scan makes room.
+        let later = 100 + ACTIVITY_WINDOW_SECS;
+        a.note("DL1ABC", f, Network::Rbn, later);
+        assert_eq!(a.scans, 3);
+        assert_eq!(
+            a.count("20m", later, &[Network::Rbn]),
+            1,
+            "the new call is in"
+        );
     }
 
     /// FR-UI-25: a flood cannot grow a band past its cap, and stale entries make room.
