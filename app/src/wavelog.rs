@@ -1165,3 +1165,134 @@ mod tests {
         );
     }
 }
+
+/// Against a real local Wavelog (`tools/wavelog-test/setup.sh`): run with
+/// `K4_WAVELOG_URL=http://127.0.0.1:8086 K4_WAVELOG_TOKEN=wl2_… cargo test -p k4remote --bin
+/// k4remote -- --ignored local_wavelog`. Refuses any host but this computer, so it can never write
+/// to a real logbook.
+#[cfg(test)]
+mod local_wavelog {
+    use super::*;
+    use k4_log::qso::{DigitalMode, Draft};
+    use k4_protocol::state::Mode;
+
+    fn setup() -> (Server, Secret) {
+        let url = std::env::var("K4_WAVELOG_URL").expect("K4_WAVELOG_URL");
+        let token = std::env::var("K4_WAVELOG_TOKEN").expect("K4_WAVELOG_TOKEN");
+        let server = Server::parse(&url).expect("a URL");
+        let host = server.base().split("://").nth(1).unwrap_or("");
+        assert!(
+            ["127.0.0.1", "localhost", "[::1]"]
+                .iter()
+                .any(|h| host.starts_with(h)),
+            "refusing to write to {host}: only a local test instance"
+        );
+        (server, Secret::new(&token).expect("a v2 token"))
+    }
+
+    /// FR-LOG-01, FR-LOG-02, FR-LOG-04, FR-LOG-08 against a real Wavelog: the Test finds the
+    /// station; a QSO is logged through the worker and reads back with Wavelog's own mode/submode,
+    /// Hz, seconds and power; the same QSO again is a first-try duplicate, held.
+    /// trace: FR-LOG-01, FR-LOG-02, FR-LOG-04, FR-LOG-08
+    #[test]
+    #[ignore = "needs a local Wavelog: tools/wavelog-test/setup.sh"]
+    fn local_wavelog_logs_reads_back_and_holds_a_duplicate() {
+        let (server, token) = setup();
+        let dir = std::env::temp_dir().join(format!("k4-wavelog-local-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let status: StatusHandle = Arc::default();
+        let mut w = Worker::new(
+            Queue::open(&dir).unwrap(),
+            Transport::new(),
+            Arc::clone(&status),
+        );
+        w.command(Cmd::Configure(Some(Setup {
+            server: server.clone(),
+            token: token.clone(),
+            station_id: 1,
+        })));
+        w.command(Cmd::Test);
+        let report = status.lock().unwrap().test.clone().unwrap();
+        assert!(report.ok, "{report:?}");
+        assert!(
+            report
+                .locations
+                .as_ref()
+                .is_some_and(|l| l.iter().any(|s| s.id == 1)),
+            "{report:?}"
+        );
+
+        // A call no earlier run used, and a start time with 17 seconds — so "seconds are kept"
+        // cannot pass on a whole minute by chance.
+        let now = unix_now();
+        let call = format!("DL{}ZZ", now % 9 + 1);
+        let time_on = now - 120 - now % 60 + 17;
+        let q = Qso::from_draft(&Draft {
+            call: call.clone(),
+            rst_sent: String::new(),
+            rst_rcvd: String::new(),
+            name: "K4 Remote test".into(),
+            comment: format!("local test {now}"),
+            time_on,
+            time_off: time_on + 30,
+            tx_hz: 14_081_500,
+            rx_hz: None,
+            mode: Mode::Data,
+            digital: DigitalMode::Ft4,
+            tx_pwr: Some(5.0),
+            operator: None,
+        })
+        .unwrap();
+        w.command(Cmd::Log(Box::new(q.clone())));
+        while w.step() {}
+        let st = status.lock().unwrap().clone();
+        assert!(
+            st.last.as_deref().is_some_and(|l| l.contains("logged")),
+            "{st:?}"
+        );
+        assert_eq!((st.pending, st.held.len()), (0, 0), "{st:?}");
+
+        // Read it back as Wavelog stored it — the ADIF export carries every field (the JSON list
+        // leaves out tx_pwr).
+        let back = Transport::new().call(
+            Method::Get,
+            &server.endpoint(&format!("qso?callsign={call}&format=adif")),
+            Some(&token),
+            None,
+        );
+        let Attempt::Response {
+            status: 200, body, ..
+        } = back
+        else {
+            panic!("could not read the QSO back: {back:?}")
+        };
+        let v: Value = serde_json::from_slice(&body).unwrap();
+        let adif = v["data"]["adif"]
+            .as_str()
+            .unwrap_or("")
+            .to_ascii_uppercase();
+        let (_, hhmmss) = k4_log::qso::utc_date_time(time_on);
+        assert!(hhmmss.ends_with("17"), "{hhmmss}");
+        for want in [
+            "<MODE:4>MFSK".to_string(),
+            "<SUBMODE:3>FT4".to_string(),
+            "<BAND:3>20M".to_string(),
+            "<TX_PWR:1>5".to_string(),
+            format!("<TIME_ON:6>{hhmmss}"),
+        ] {
+            assert!(adif.contains(&want), "{want} not in {adif}");
+        }
+        assert!(
+            adif.contains("<FREQ:") && adif.contains(">14.0815"),
+            "{adif}"
+        );
+
+        // The same QSO again, first try: another QSO already in the log — held.
+        w.command(Cmd::Log(Box::new(q)));
+        while w.step() {}
+        let st = status.lock().unwrap().clone();
+        assert_eq!((st.pending, st.held.len()), (0, 1), "{st:?}");
+        assert!(st.held[0].reason.contains("already has this QSO"), "{st:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
