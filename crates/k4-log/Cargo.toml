@@ -1,0 +1,15 @@
+[package]
+name = "k4-log"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+publish = false
+description = "QSO logging to Wavelog (FR-LOG): the QSO record and its mapping, request bodies, reply classes, the queue and the token type. No HTTP or TLS stack: the app passes the transport."
+
+[dependencies]
+k4-protocol = { path = "../k4-protocol" }
+# The Wavelog API speaks JSON (request bodies, replies, queue entries).
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rand = "0.8"
