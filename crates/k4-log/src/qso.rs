@@ -323,7 +323,9 @@ mod tests {
         assert_eq!(frequencies(14_200_000, None, true), (14_200_000, None));
     }
 
-    /// FR-LOG-01: UTC date and time with seconds, across a year end and a leap day.
+    /// FR-LOG-01: UTC date and time with seconds, across a year end and a leap day. Every expected
+    /// value was computed with Python's `datetime.fromtimestamp(t, timezone.utc)`, not by hand (two
+    /// hand-computed ones were wrong).
     /// trace: FR-LOG-01
     #[test]
     fn fr_log_01_utc_date_and_time() {
