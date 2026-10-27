@@ -126,13 +126,6 @@ impl Server {
         let prefix = if self.index_php { "/index.php" } else { "" };
         format!("{}{prefix}/api/v2/{resource}", self.base)
     }
-
-    /// The `status` URL in the other path form — tried when this one does not answer.
-    pub fn status_fallback(&self) -> String {
-        self.clone()
-            .with_index_php(!self.index_php)
-            .endpoint("status")
-    }
 }
 
 #[cfg(test)]
@@ -171,10 +164,6 @@ mod tests {
         );
         assert_eq!(
             s.clone().with_index_php(true).endpoint("status"),
-            "https://log.example.org/wavelog/index.php/api/v2/status"
-        );
-        assert_eq!(
-            s.status_fallback(),
             "https://log.example.org/wavelog/index.php/api/v2/status"
         );
         assert_eq!(

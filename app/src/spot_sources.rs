@@ -565,7 +565,11 @@ mod tests {
                 scanned.push((name, std::fs::read_to_string(&path).unwrap()));
             }
         }
-        for rel in ["app/src/tls/mod.rs", "app/src/http_fetch.rs"] {
+        for rel in [
+            "app/src/tls/mod.rs",
+            "app/src/http_fetch.rs",
+            "app/src/wavelog.rs",
+        ] {
             scanned.push((rel.into(), std::fs::read_to_string(root.join(rel)).unwrap()));
         }
         let this = include_str!("spot_sources.rs");
@@ -582,6 +586,7 @@ mod tests {
             "mqtt_source.rs",
             "freedv_source.rs",
             "app/src/tls/mod.rs",
+            "app/src/wavelog.rs",
         ] {
             assert!(
                 scanned.iter().any(|(n, _)| n == must),

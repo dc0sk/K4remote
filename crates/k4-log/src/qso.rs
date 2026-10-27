@@ -225,11 +225,6 @@ impl Qso {
         })
     }
 
-    /// The main ADIF mode — what the lookup is asked with.
-    pub fn main_mode(&self) -> &str {
-        &self.mode
-    }
-
     /// The JSON body of `POST /api/v2/qso` for station location `station_profile_id`.
     pub fn body(&self, station_profile_id: u32) -> String {
         let mut v = serde_json::to_value(self).unwrap_or(serde_json::Value::Null);
@@ -392,7 +387,6 @@ mod tests {
                 .all(|v| !v.is_object() && !v.is_array()),
             "scalars only"
         );
-        assert_eq!(q.main_mode(), "SSB");
 
         let with = |f: fn(&mut Draft)| {
             let mut d = draft();

@@ -11,6 +11,7 @@ mod afterglow;
 mod graphics;
 mod http_fetch;
 mod kpa;
+mod log_ui;
 mod meter;
 mod propagation;
 mod spectrum;
@@ -21,6 +22,7 @@ mod tls;
 mod ui;
 mod update;
 mod waterfall_gpu;
+mod wavelog;
 mod worker;
 
 use ui::ViewMode;
@@ -282,6 +284,8 @@ struct App {
     station_locator_saved: String,
     /// The GRAPHICS settings (FR-UI-27), and the renderer this run started with.
     graphics: k4_config::GraphicsPrefs,
+    /// QSO logging to Wavelog: the form, the LOGGING tab and the worker's status (FR-LOG).
+    log: log_ui::LogUi,
     renderer_at_start: k4_config::Renderer,
     prop_sent: Option<spot_sources::PropagationCfg>,
     /// The CAT server's settings (FR-CATSRV-01); bind and port as typed.
@@ -749,6 +753,7 @@ enum SettingsTab {
     CatServer,
     Propagation,
     Graphics,
+    Logging,
     Backup,
 }
 
@@ -919,6 +924,8 @@ enum RxMsg {
 
 #[derive(Debug, Clone)]
 enum Message {
+    /// QSO logging (FR-LOG).
+    Log(log_ui::LogMsg),
     HostChanged(String),
     PortChanged(String),
     PasswordChanged(String),
@@ -1392,6 +1399,8 @@ impl App {
             (String::new(), String::new())
         };
 
+        // QSO logging (FR-LOG): its token is read here, bounded like the password above.
+        let log = log_ui::LogUi::start(prefs.wavelog.clone(), &secret_store, config_path.clone());
         let app = App {
             host: last.host,
             port: last.port.to_string(),
@@ -1417,6 +1426,7 @@ impl App {
             station_locator: prefs.station_locator.clone(),
             station_locator_saved: prefs.station_locator.clone(),
             graphics: prefs.graphics.clone(),
+            log,
             renderer_at_start: prefs.graphics.renderer,
             prop_sent: None,
             catsrv_bind: prefs.cat_server.bind.clone(),
@@ -2469,6 +2479,7 @@ impl App {
                     station_locator: self.locator_for_save(),
                     propagation: self.propagation.clone(),
                     graphics: self.graphics.clone(),
+                    wavelog: self.log.prefs.clone(),
                     ..Default::default()
                 },
             };
@@ -4116,7 +4127,9 @@ impl App {
             }
             Message::ScaleFactor(f) => self.scale_factor = f,
             Message::CursorMoved(x, y) => self.cursor = (x, y),
+            Message::Log(m) => return self.log_update(m),
             Message::Tick => {
+                self.log_tick();
                 if let Ok(snap) = self.snapshot.lock() {
                     self.ui = snap.clone();
                 }
@@ -8081,6 +8094,7 @@ impl App {
             .push(settings_tab_btn(SettingsTab::CatServer, "CAT SERVER"))
             .push(settings_tab_btn(SettingsTab::Propagation, "PROPAGATION"))
             .push(settings_tab_btn(SettingsTab::Graphics, "GRAPHICS"))
+            .push(settings_tab_btn(SettingsTab::Logging, "LOGGING"))
             .push(settings_tab_btn(SettingsTab::Backup, "BACKUP"));
         let settings_body: Element<Message> = match self.settings_tab {
             SettingsTab::Connection => Column::new()
@@ -8151,6 +8165,11 @@ impl App {
                 .spacing(10)
                 .push(Text::new("Graphics").size(12).color(dim))
                 .push(self.graphics_settings_view())
+                .into(),
+            SettingsTab::Logging => Column::new()
+                .spacing(10)
+                .push(Text::new("Logging (Wavelog)").size(12).color(dim))
+                .push(self.logging_settings_view())
                 .into(),
             SettingsTab::Backup => Column::new()
                 .spacing(10)
@@ -9419,10 +9438,19 @@ impl App {
             .style(pane_style(false))
             .padding([4, 8])
             .width(Length::Fill);
+        // The log strip (FR-LOG-01) sits under the AF recorder once logging is set up — a
+        // settings change, so the layout still does not shift while operating.
+        let log_frame = self.log_strip().map(|strip| {
+            Container::new(strip)
+                .style(pane_style(false))
+                .padding([4, 8])
+                .width(Length::Fill)
+        });
         let panadapter_slot: Element<Message> = Column::new()
             .spacing(10)
             .push(mini_frame)
             .push(af_frame)
+            .push_maybe(log_frame)
             .push(below)
             .into();
 
