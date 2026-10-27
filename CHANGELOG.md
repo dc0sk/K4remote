@@ -12,6 +12,17 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
 
 ## [Unreleased]
 
+### Added
+
+- **Log QSOs to Wavelog** (for example the DARC's logbook) through its API v2.
+  Set it up under **Settings → Logging**: the Wavelog URL, an API token (kept in
+  the system keychain), and the station location, which **Test** reads from
+  Wavelog. A **LOG** strip under the AF recorder then takes the call, RST, name
+  and comment; frequency, band, mode, power and the UTC times come from the
+  radio. Nothing is sent without pressing Log. Every QSO goes through a queue on
+  disk, so nothing is lost when Wavelog cannot be reached — it is sent when the
+  connection is back — and a QSO Wavelog already has is shown, not dropped.
+
 ## [0.11.0] — 2026-10-16
 
 ### Added

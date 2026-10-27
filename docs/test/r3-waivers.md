@@ -1,7 +1,7 @@
 ---
 title: "R3 traceability waivers"
 status: Active
-version: "1.1"
+version: "1.2"
 updated: 2026-10-27
 ---
 
@@ -22,10 +22,4 @@ features not yet implemented. Everything else must carry a real test.
 | `FR-UI-07` | Architectural property (Ver `T/D`): the worker owns all blocking network/audio I/O on its own thread and the UI renders from a lock-free snapshot (`app/src/worker.rs`, `app/src/main.rs`). "The UI never blocks" is structural, not a value a unit test can assert; verified by design review and demonstrated under load in the L4 HIL run. |
 | `NFR-PERF-01` | Latency budget (≤150 ms control round-trip, Ver `T/A`): requires wall-clock measurement against a LAN/radio, not available in the hardware-free suite. To be measured in the L4 HIL run and recorded in `docs/test/hil-runs/`. |
 | `NFR-PERF-CW` | CW keying-jitter budget (≤10 ms, Ver `T`): requires real-time timing measurement of paddle→`KZ` emission under an OS scheduler; belongs to a bench/HIL run, not a deterministic unit test. |
-| `FR-LOG-01` | Not yet implemented: proposed 2026-10-27 (QSO logging to Wavelog, `docs/concept/wavelog-logging-plan.md` v0.2). Remove this waiver when its slice lands with its tests. |
-| `FR-LOG-02` | Not yet implemented: proposed 2026-10-27 (QSO logging to Wavelog, `docs/concept/wavelog-logging-plan.md` v0.2). Remove this waiver when its slice lands with its tests. |
-| `FR-LOG-03` | Not yet implemented: proposed 2026-10-27 (QSO logging to Wavelog, `docs/concept/wavelog-logging-plan.md` v0.2). Remove this waiver when its slice lands with its tests. |
-| `FR-LOG-04` | Not yet implemented: proposed 2026-10-27 (QSO logging to Wavelog, `docs/concept/wavelog-logging-plan.md` v0.2). Remove this waiver when its slice lands with its tests. |
-| `FR-LOG-07` | Not yet implemented: proposed 2026-10-27 (QSO logging to Wavelog, `docs/concept/wavelog-logging-plan.md` v0.2). Remove this waiver when its slice lands with its tests. |
-| `FR-LOG-08` | Not yet implemented: proposed 2026-10-27 (QSO logging to Wavelog, `docs/concept/wavelog-logging-plan.md` v0.2). Remove this waiver when its slice lands with its tests. |
 | `FR-VFO-ID` | Station-ID (`ID`) set/display (Ver `T`, priority `S`): not yet implemented — planned. Remove this waiver and add a round-trip test when the feature lands. |

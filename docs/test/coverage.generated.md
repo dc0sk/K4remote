@@ -88,7 +88,7 @@ Legend: ✅ test-traced · 🟡 waived (see r3-waivers.md) · ⚪ not test-requi
 | `FR-LOG-04` | M | T | ✅ |
 | `FR-LOG-05` | C | T/D | ⚪ |
 | `FR-LOG-06` | C | T | ⚪ |
-| `FR-LOG-07` | S | T/D | 🟡 |
+| `FR-LOG-07` | S | T/D | ✅ |
 | `FR-LOG-08` | M | T | ✅ |
 | `FR-MACRO-01` | S | T | ✅ |
 | `FR-MEM-01` | S | T | ✅ |

@@ -899,7 +899,7 @@ mod tests {
 
     /// FR-LOG-04: a duplicate on the first try is another QSO already in the log — held for the
     /// operator, never removed as logged.
-    /// trace: FR-LOG-04
+    /// trace: FR-LOG-04, FR-LOG-07
     #[test]
     fn fr_log_04_a_first_try_duplicate_is_held() {
         let (port, _) = mock(vec![Step::Reply(400, "", DUPLICATE.into())]);
@@ -920,7 +920,7 @@ mod tests {
 
     /// FR-LOG-04: a foreign station location holds only that entry; a refused token pauses the
     /// queue — nothing more is sent — until a new setup is saved.
-    /// trace: FR-LOG-04
+    /// trace: FR-LOG-04, FR-LOG-07
     #[test]
     fn fr_log_04_forbidden_holds_and_a_bad_token_pauses() {
         let (port, seen) = mock(vec![
@@ -1092,7 +1092,7 @@ mod tests {
     }
 
     /// FR-LOG-04: only one K4 Remote sends from a queue; the other says so and only adds.
-    /// trace: FR-LOG-04
+    /// trace: FR-LOG-04, FR-LOG-07
     #[test]
     fn fr_log_04_one_sender_per_queue() {
         let (port, _) = mock(vec![Step::Reply(201, "", CREATED.into())]);

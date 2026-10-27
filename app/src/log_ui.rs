@@ -506,17 +506,19 @@ impl App {
             .push(small_btn("Log", Message::Log(LogMsg::Log)))
             .push(small_btn("Clear", Message::Log(LogMsg::Clear)));
         // What will be logged from the radio, and the queue's state.
-        let what = match self
-            .log_draft()
-            .and_then(|d| Qso::from_draft(&d).map_err(|e| e.to_string()))
-        {
-            Ok(q) => format!(
-                "{:.4} MHz {} {}{}",
-                q.freq as f64 / 1e6,
-                q.band,
-                q.submode.as_deref().unwrap_or(&q.mode),
-                q.tx_pwr.map(|p| format!(" {p} W")).unwrap_or_default()
-            ),
+        // What will be logged from the radio — shown before a call is typed, so the operator
+        // sees the frequency, band, mode and power the QSO will carry.
+        let what = match self.log_draft() {
+            Ok(d) => {
+                let (m, sub) = adif_mode(d.mode, d.digital);
+                format!(
+                    "{:.4} MHz {} {}{}",
+                    d.tx_hz as f64 / 1e6,
+                    k4_log::band::band_for(d.tx_hz).unwrap_or("(no band)"),
+                    sub.unwrap_or(m),
+                    d.tx_pwr.map(|p| format!(" {p} W")).unwrap_or_default()
+                )
+            }
             Err(_) => String::new(),
         };
         let v = &l.view;

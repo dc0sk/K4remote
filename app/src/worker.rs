@@ -496,6 +496,18 @@ pub fn demo_snapshot() -> UiSnapshot {
         rit_on: Some(false),
         xit_on: Some(false),
         status: "DEMO MODE — sample state (no radio). Switch A / B / A+B to reflow.".into(),
+        // The radio state too, as a live connection fills both (`s.radio = st.clone()`): what
+        // reads it — the log form among others — sees the same VFOs and modes as the readouts.
+        radio: RadioState {
+            vfo_a_hz: Some(14_074_000),
+            vfo_b_hz: Some(14_061_100),
+            mode_a: Some(k4_protocol::state::Mode::Usb),
+            mode_b: Some(k4_protocol::state::Mode::Cw),
+            split: Some(false),
+            tx_power: Some(10),
+            tx_power_range: Some('H'),
+            ..RadioState::default()
+        },
         ..Default::default()
     }
 }
