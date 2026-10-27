@@ -19,7 +19,7 @@ use k4_log::secret::Secret;
 use k4_log::server::Server;
 use k4_protocol::state::Mode;
 
-use crate::wavelog::{self, Cmd, Setup, Status, StatusHandle, TestReport};
+use crate::wavelog::{self, Cmd, Setup, Status, StatusHandle, TestReport, TestTarget};
 use crate::{load_secret_timed, role_color, small_btn, ui, App, Message};
 
 /// A station location in the picker.
@@ -60,6 +60,8 @@ pub struct LogUi {
     token_input: String,
     token: Option<Secret>,
     token_note: Option<String>,
+    /// A keychain write or removal running on its thread, and what to say when it ends.
+    keychain: Option<(std::sync::mpsc::Receiver<Result<(), String>>, String)>,
     call: String,
     rst_sent: String,
     rst_rcvd: String,
@@ -155,6 +157,7 @@ impl LogUi {
             token_input: String::new(),
             token,
             token_note,
+            keychain: None,
             call: String::new(),
             rst_sent: String::new(),
             rst_rcvd: String::new(),
@@ -288,7 +291,10 @@ impl App {
                     if server.base() != l.prefs.url {
                         // The token belongs to the old URL: it is deleted, never sent elsewhere.
                         if l.token.take().is_some() || !l.prefs.url.is_empty() {
-                            let _ = wavelog::forget_token(self.secret_store.as_ref());
+                            l.keychain = Some((
+                                wavelog::forget_token_in_background(Arc::clone(&self.secret_store)),
+                                "old token removed".into(),
+                            ));
                         }
                         l.prefs.url = server.base().to_string();
                         l.prefs.index_php = false;
@@ -302,30 +308,42 @@ impl App {
                 Err(e) => l.url_error = Some(e.to_string()),
             },
             LogMsg::Token(s) => l.token_input = s,
-            LogMsg::TokenSave => {
-                match Secret::new(&l.token_input) {
-                    Ok(t) if !l.prefs.url.is_empty() => {
-                        l.token_note = Some(match wavelog::save_token(self.secret_store.as_ref(), &t) {
-                        Ok(()) => format!("token {} saved", t.hint()),
-                        Err(e) => format!("token kept for this session only — the keychain refused it: {e}"),
-                    });
-                        l.token = Some(t);
-                        l.token_input.clear();
-                    }
-                    Ok(_) => l.token_note = Some("save the URL first".into()),
-                    Err(e) => l.token_note = Some(e.to_string()),
+            LogMsg::TokenSave => match Secret::new(&l.token_input) {
+                Ok(t) if !l.prefs.url.is_empty() => {
+                    l.token_note = Some("saving the token in the keychain…".into());
+                    l.keychain = Some((
+                        wavelog::save_token_in_background(
+                            Arc::clone(&self.secret_store),
+                            t.clone(),
+                        ),
+                        format!("token {} saved", t.hint()),
+                    ));
+                    // Usable at once; the keychain only decides whether it survives a restart.
+                    l.token = Some(t);
+                    l.token_input.clear();
                 }
-            }
+                Ok(_) => l.token_note = Some("save the URL first".into()),
+                Err(e) => l.token_note = Some(e.to_string()),
+            },
             LogMsg::TokenForget => {
-                let _ = wavelog::forget_token(self.secret_store.as_ref());
+                l.keychain = Some((
+                    wavelog::forget_token_in_background(Arc::clone(&self.secret_store)),
+                    "token removed".into(),
+                ));
                 l.token = None;
-                l.token_note = Some("token removed".into());
+                l.token_note = Some("removing the token…".into());
             }
             LogMsg::Operator(s) => {
                 l.prefs.operator = s.trim().to_ascii_uppercase();
                 save = true;
             }
-            LogMsg::Test => l.send(Cmd::Test),
+            LogMsg::Test => match (Server::parse(&l.prefs.url), l.token.clone()) {
+                (Ok(server), Some(token)) => l.send(Cmd::Test(Box::new(TestTarget {
+                    server: server.with_index_php(l.prefs.index_php),
+                    token,
+                }))),
+                _ => l.token_note = Some("save the URL and the token first".into()),
+            },
             LogMsg::Station(c) => {
                 l.prefs.station_id = Some(c.0.id);
                 save = true;
@@ -395,6 +413,22 @@ impl App {
     /// Copy the worker's status; take a new Test report's path form and station list into the
     /// config.
     pub(crate) fn log_tick(&mut self) {
+        if let Some((rx, done)) = &self.log.keychain {
+            match rx.try_recv() {
+                Ok(Ok(())) => {
+                    self.log.token_note = Some(done.clone());
+                    self.log.keychain = None;
+                }
+                Ok(Err(e)) => {
+                    self.log.token_note = Some(format!(
+                        "the keychain refused it ({e}) — the token is kept for this session only"
+                    ));
+                    self.log.keychain = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.log.keychain = None,
+            }
+        }
         let snap = self
             .log
             .status
@@ -687,6 +721,7 @@ mod tests {
             token_input: String::new(),
             token: None,
             token_note: None,
+            keychain: None,
             call: String::new(),
             rst_sent: String::new(),
             rst_rcvd: String::new(),
@@ -774,6 +809,32 @@ mod tests {
         assert_eq!((d.tx_hz, d.rx_hz), (7_074_000, None));
         // Connected but no frequency yet counts as no radio.
         assert_eq!(draft_from(&l, &r, true, 1_100).unwrap().tx_hz, 7_074_000);
+    }
+
+    /// FR-LOG-03, FR-CFG-08: no keychain I/O on the UI thread — this file stores and removes the
+    /// token only through the background helpers. (A save that ran here froze the window for the
+    /// D-Bus timeout when no keyring answered, seen 2026-10-27 on a private bus.)
+    /// trace: FR-LOG-03
+    #[test]
+    fn fr_log_03_no_keychain_io_on_the_ui_thread() {
+        let text = include_str!("log_ui.rs");
+        let prod = &text[..text.find(concat!("mod ", "tests {")).expect("test module")];
+        for blocking in [
+            concat!("wavelog::save_", "token("),
+            concat!("wavelog::forget_", "token("),
+        ] {
+            assert!(!prod.contains(blocking), "{blocking} runs on the UI thread");
+        }
+        for stray in [".set(", ".delete(", ".get("] {
+            assert!(
+                !prod.contains(&format!("secret_store{stray}")),
+                "secret_store{stray} on the UI thread"
+            );
+        }
+        assert!(
+            prod.contains("save_token_in_background(")
+                && prod.contains("forget_token_in_background(")
+        );
     }
 
     /// FR-LOG-01: nothing reaches Wavelog except by the Log action — the one place that queues a

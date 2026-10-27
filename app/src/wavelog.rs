@@ -211,6 +211,37 @@ pub fn forget_token(store: &dyn k4_config::SecretStore) -> Result<(), String> {
     store.delete(TOKEN_ACCOUNT).map_err(|e| e.to_string())
 }
 
+/// Keychain I/O blocks on the Secret Service (D-Bus) and can hang for its whole timeout on a
+/// locked or absent keyring — never on the UI thread (the house rule since a Connect froze the
+/// app). These run the store or the removal on a thread and hand back the result.
+pub fn save_token_in_background(
+    store: Arc<dyn k4_config::SecretStore>,
+    token: Secret,
+) -> Receiver<Result<(), String>> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        let _ = tx.send(save_token(store.as_ref(), &token));
+    });
+    rx
+}
+
+pub fn forget_token_in_background(
+    store: Arc<dyn k4_config::SecretStore>,
+) -> Receiver<Result<(), String>> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        let _ = tx.send(forget_token(store.as_ref()));
+    });
+    rx
+}
+
+/// What a Test checks: a server and a token, without a station location.
+#[derive(Debug, Clone)]
+pub struct TestTarget {
+    pub server: Server,
+    pub token: Secret,
+}
+
 /// What the logging needs to send: where, with which token, to which station location.
 #[derive(Debug, Clone)]
 pub struct Setup {
@@ -228,8 +259,9 @@ pub enum Cmd {
     Log(Box<Qso>),
     /// Retry now, also after a pause.
     SendNow,
-    /// Check the server and token; report on the status.
-    Test,
+    /// Check a server and token — before any station location is chosen (the Test is what
+    /// lists them); report on the status.
+    Test(Box<TestTarget>),
     /// Remove a held entry.
     Discard(String),
     /// Save the held entries as ADIF.
@@ -393,7 +425,7 @@ impl Worker {
                 self.next_try = Instant::now();
                 self.backoff = BACKOFF_FIRST;
             }
-            Cmd::Test => self.test(),
+            Cmd::Test(target) => self.test(*target),
             Cmd::Discard(id) => {
                 if let Ok((entries, _)) = self.queue.entries() {
                     for e in entries.iter().filter(|e| e.id == id) {
@@ -511,13 +543,8 @@ impl Worker {
 
     /// The Test (FR-LOG-02): API v2 present (by the public `status`, in either path form), the
     /// token valid with its scopes, owner and expiry, and the station locations.
-    fn test(&mut self) {
+    fn test(&mut self, setup: TestTarget) {
         let mut r = TestReport::default();
-        let Some(setup) = self.setup.clone() else {
-            r.lines.push("enter the URL and the token first".into());
-            self.finish_test(r);
-            return;
-        };
         if let Ok(mut st) = self.status.lock() {
             st.testing = true;
         }
@@ -1000,7 +1027,12 @@ mod tests {
             Step::Reply(200, "", listing.into()),
         ]);
         let (mut w, status, dir) = worker("test", port);
-        w.command(Cmd::Test);
+        // No station location yet: the Test is what lists them.
+        w.command(Cmd::Configure(None));
+        w.command(Cmd::Test(Box::new(TestTarget {
+            server: Server::parse(&format!("http://127.0.0.1:{port}")).unwrap(),
+            token: Secret::new(TOKEN).unwrap(),
+        })));
         let r = snapshot(&status).test.expect("a report");
         assert!(r.ok, "{r:?}");
         assert_eq!(r.index_php, Some(true), "only the /index.php form answered");
@@ -1104,7 +1136,10 @@ mod tests {
             w.command(Cmd::Log(Box::new(qso(c))));
         }
         while w.step() {}
-        w.command(Cmd::Test);
+        w.command(Cmd::Test(Box::new(TestTarget {
+            server: Server::parse(&format!("http://127.0.0.1:{port}")).unwrap(),
+            token: Secret::new(TOKEN).unwrap(),
+        })));
         let text = format!("{:?} {:#?}", snapshot(&status), w.setup);
         assert!(
             !text.contains(TOKEN) && !text.contains("0123456789abcdef"),
@@ -1211,7 +1246,10 @@ mod local_wavelog {
             token: token.clone(),
             station_id: 1,
         })));
-        w.command(Cmd::Test);
+        w.command(Cmd::Test(Box::new(TestTarget {
+            server: server.clone(),
+            token: token.clone(),
+        })));
         let report = status.lock().unwrap().test.clone().unwrap();
         assert!(report.ok, "{report:?}");
         assert!(

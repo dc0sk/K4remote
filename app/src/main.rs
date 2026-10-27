@@ -8095,7 +8095,10 @@ impl App {
             .push(settings_tab_btn(SettingsTab::Propagation, "PROPAGATION"))
             .push(settings_tab_btn(SettingsTab::Graphics, "GRAPHICS"))
             .push(settings_tab_btn(SettingsTab::Logging, "LOGGING"))
-            .push(settings_tab_btn(SettingsTab::Backup, "BACKUP"));
+            .push(settings_tab_btn(SettingsTab::Backup, "BACKUP"))
+            // Eleven tabs do not fit one row of the 900 px window: wrap onto a second row rather
+            // than squeeze the last one into a column of letters (seen 2026-10-27).
+            .wrap();
         let settings_body: Element<Message> = match self.settings_tab {
             SettingsTab::Connection => Column::new()
                 .spacing(10)
