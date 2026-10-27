@@ -1034,6 +1034,31 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// FR-LOG-04: a QSO queued for one server is never sent to another — after the URL changes it
+    /// is held (to be saved as ADIF), and nothing reaches the new server for it.
+    /// trace: FR-LOG-04
+    #[test]
+    fn fr_log_04_an_entry_for_another_server_is_held() {
+        let (port, seen) = mock(vec![Step::Reply(201, "", CREATED.into())]);
+        let (mut w, status, dir) = worker("moved", port);
+        w.command(Cmd::Log(Box::new(qso("DL1ABC"))));
+        // Logging now goes to another server (its own token): the queued entry must not follow.
+        w.command(Cmd::Configure(Some(Setup {
+            server: Server::parse(&format!("http://localhost:{port}")).unwrap(),
+            token: Secret::new(TOKEN).unwrap(),
+            station_id: 7,
+        })));
+        assert!(!w.step());
+        let st = snapshot(&status);
+        assert_eq!((st.pending, st.held.len()), (0, 1), "{st:?}");
+        assert!(
+            st.held[0].reason.contains("logged for http://127.0.0.1"),
+            "{st:?}"
+        );
+        assert!(seen.lock().unwrap().is_empty(), "nothing was sent");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// FR-LOG-04: only one K4 Remote sends from a queue; the other says so and only adds.
     /// trace: FR-LOG-04
     #[test]
