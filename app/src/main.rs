@@ -949,6 +949,8 @@ enum Message {
     CycleBandwidth,
     SelectTxVfo(bool),
     PaneQsy(bool, u64),
+    /// A spot's nameplate clicked: tune as `PaneQsy`, and offer its call to the log form.
+    SpotQsy(bool, u64, String),
     PaneWheel(bool, i32),
     SetAfGain(u8),
     /// A drag ended: re-send the settled value unthrottled. Without this the
@@ -2846,6 +2848,11 @@ impl App {
                 // split *transition*, so a stale read-back can't revert it.
                 self.tx_vfo_b = is_b;
                 self.send(WorkerCmd::Cat(k4_protocol::cat::set_split(is_b)));
+            }
+            Message::SpotQsy(is_b, hz, call) => {
+                // FR-LOG-06: into an empty call field only, never sent; the tuning is unchanged.
+                self.log.prefill_call(&call, spots::unix_now());
+                return self.update(Message::PaneQsy(is_b, hz));
             }
             Message::PaneQsy(is_b, hz) => {
                 if !self.allow_tuning(is_b) {
@@ -9269,6 +9276,7 @@ impl App {
                     vfo_hz: pane_center_hz,
                     passband_hz: self.pane_passband_hz(p.is_b(), pane_center_hz),
                     on_qsy: Message::PaneQsy,
+                    on_spot: Message::SpotQsy,
                     on_wheel: Message::PaneWheel,
                 })
                 .width(Length::Fill)
@@ -13088,5 +13096,36 @@ mod large_screen_tests {
             squash(wf).contains("crate::graphics::note_backend(true);if!storage.has::<Gpu>(){"),
             "the GPU primitive does not report drawing"
         );
+    }
+}
+
+#[cfg(test)]
+mod spot_prefill_wiring_tests {
+    use super::source_guard::{arm_start, production};
+
+    /// FR-LOG-06: a nameplate click reaches the log form and still tunes. The canvas sends
+    /// `SpotQsy` for a plate; its arm offers the call to the form first, then does exactly what
+    /// `PaneQsy` does — and queues nothing.
+    /// trace: FR-LOG-06
+    #[test]
+    fn fr_log_06_the_spot_click_fills_the_form_and_still_tunes() {
+        let src = production();
+        assert!(
+            src.contains("on_spot: Message::SpotQsy,"),
+            "the spectrum's nameplate click is not routed to SpotQsy"
+        );
+        let a = arm_start(src, "Message::SpotQsy(").unwrap();
+        let end = src[a..]
+            .find("\n            }\n")
+            .expect("the end of the SpotQsy arm");
+        let arm = &src[a..a + end];
+        let fill = arm
+            .find("self.log.prefill_call(&call,")
+            .expect("the arm offers the call to the log form");
+        let tune = arm
+            .find("return self.update(Message::PaneQsy(is_b, hz));")
+            .expect("the arm tunes as a plain click does");
+        assert!(fill < tune, "the call is offered before the tune returns");
+        assert!(!arm.contains("Cmd::Log"), "a click never queues a QSO");
     }
 }

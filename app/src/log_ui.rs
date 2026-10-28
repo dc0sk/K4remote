@@ -8,7 +8,7 @@
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use iced::widget::{pick_list, Column, Row, Text, TextInput};
 use iced::{Alignment, Element, Length, Task};
@@ -19,7 +19,10 @@ use k4_log::secret::Secret;
 use k4_log::server::Server;
 use k4_protocol::state::Mode;
 
-use crate::wavelog::{self, Cmd, Setup, Status, StatusHandle, TestReport, TestTarget};
+use crate::wavelog::{
+    self, Cmd, LookupAnswer, LookupHandle, LookupKey, LookupReq, Setup, Status, StatusHandle,
+    TestReport, TestTarget,
+};
 use crate::{load_secret_timed, role_color, small_btn, ui, App, Message};
 
 /// A station location in the picker.
@@ -75,7 +78,21 @@ pub struct LogUi {
     form_error: Option<String>,
     /// The last Test report already taken into the config.
     seen_test: Option<TestReport>,
+    /// The lookup thread (FR-LOG-05) and its newest answer.
+    lookup_tx: Option<Sender<LookupReq>>,
+    lookup_out: LookupHandle,
+    /// When the call was last edited — the lookup waits until it settles.
+    call_edited: Option<Instant>,
+    /// What was last asked: each settled call (with its band and mode) is asked once.
+    asked: Option<LookupKey>,
+    /// The newest answer, as of the last tick.
+    lookup: Option<(LookupKey, LookupAnswer)>,
+    /// Why the lookup is off until the URL or the token changes.
+    lookup_off: Option<String>,
 }
+
+/// How long the call must stay unchanged before it is looked up.
+const LOOKUP_SETTLE: Duration = Duration::from_millis(400);
 
 #[derive(Debug, Clone)]
 pub enum LogMsg {
@@ -147,6 +164,9 @@ impl LogUi {
             .into_iter()
             .find(|d| d.label() == prefs.digital_mode)
             .unwrap_or_default();
+        let lookup_out: LookupHandle = Arc::default();
+        let (lookup_tx, lookup_rx) = mpsc::channel();
+        wavelog::spawn_lookup(lookup_rx, Arc::clone(&lookup_out));
         let ui = Self {
             url_input: prefs.url.clone(),
             prefs,
@@ -168,6 +188,12 @@ impl LogUi {
             manual_freq: String::new(),
             form_error: None,
             seen_test: None,
+            lookup_tx: Some(lookup_tx),
+            lookup_out,
+            call_edited: None,
+            asked: None,
+            lookup: None,
+            lookup_off: None,
         };
         ui.reconfigure();
         ui
@@ -212,7 +238,86 @@ impl LogUi {
         }
         self.call = s.to_ascii_uppercase();
         self.form_error = None;
+        self.call_edited = Some(Instant::now());
     }
+
+    /// Copy the lookup thread's newest answer; a refusal turns the lookup off until the URL or
+    /// the token changes.
+    fn take_lookup_answer(&mut self) {
+        let answer = self.lookup_out.lock().ok().and_then(|o| o.clone());
+        if let Some((_, LookupAnswer::Refused(why))) = &answer {
+            self.lookup_off = Some(why.clone());
+        }
+        self.lookup = answer;
+    }
+
+    /// A spot's call clicked (FR-LOG-06): it goes into the call field only when that is empty —
+    /// never over a call being typed — and nothing is sent. Returns whether it was taken.
+    pub fn prefill_call(&mut self, call: &str, now: u64) -> bool {
+        if !self.ready() || !self.call.trim().is_empty() || call.trim().is_empty() {
+            return false;
+        }
+        self.type_call(call.trim().to_string(), now);
+        true
+    }
+}
+
+/// The lookup to make now (FR-LOG-05), if one is due: logging set up and the lookup not refused,
+/// the queue neither paused nor offline, the call settled for [`LOOKUP_SETTLE`] with three
+/// characters and a digit, a band known — and not the same call, band and mode as last asked.
+fn lookup_request(
+    l: &LogUi,
+    r: &k4_protocol::state::RadioState,
+    connected: bool,
+    now: Instant,
+) -> Option<LookupReq> {
+    if l.lookup_off.is_some() || l.view.paused.is_some() || l.view.unreachable {
+        return None;
+    }
+    if now.duration_since(l.call_edited?) < LOOKUP_SETTLE {
+        return None;
+    }
+    let key = lookup_key(l, r, connected)?;
+    if l.asked.as_ref() == Some(&key) {
+        return None;
+    }
+    let setup = l.setup()?;
+    Some(LookupReq {
+        server: setup.server,
+        token: setup.token,
+        key,
+    })
+}
+
+/// The call, band and main ADIF mode the form would be looked up with now.
+fn lookup_key(l: &LogUi, r: &k4_protocol::state::RadioState, connected: bool) -> Option<LookupKey> {
+    let call = l.call.trim();
+    if !k4_log::lookup::wants_lookup(call) {
+        return None;
+    }
+    let d = draft_from(l, r, connected, 0).ok()?;
+    Some(LookupKey {
+        call: call.to_string(),
+        band: k4_log::band::band_for(d.tx_hz)?.to_string(),
+        mode: adif_mode(d.mode, d.digital).0.to_string(),
+    })
+}
+
+/// The lookup line for the form as it is now: the answer only while it is for this call, band and
+/// mode — an answer for a call no longer in the field is dropped.
+fn lookup_line(l: &LogUi, key: Option<&LookupKey>) -> Option<String> {
+    if let Some(why) = &l.lookup_off {
+        return Some(format!("lookup off: {why}"));
+    }
+    let (k, a) = l.lookup.as_ref()?;
+    if Some(k) != key {
+        return None;
+    }
+    Some(match a {
+        LookupAnswer::Found(f) => f.line(),
+        LookupAnswer::Failed(m) => format!("no lookup: {m}"),
+        LookupAnswer::Refused(m) => format!("lookup off: {m}"),
+    })
 }
 
 /// The mode of the transmit VFO (B in split).
@@ -384,6 +489,9 @@ impl App {
         }
         if self.log.setup().map(|s| (s.server, s.token, s.station_id)) != before {
             self.log.reconfigure();
+            // A new URL or token may look up again.
+            self.log.lookup_off = None;
+            self.log.asked = None;
         }
         if save {
             self.save_config();
@@ -440,6 +548,7 @@ impl App {
             .clone()
             .filter(|t| Some(t) != self.log.seen_test.as_ref());
         self.log.view = snap;
+        self.lookup_tick(Instant::now());
         let Some(t) = new_test else { return };
         self.log.seen_test = Some(t.clone());
         let l = &mut self.log;
@@ -461,6 +570,18 @@ impl App {
         }
         self.log.reconfigure();
         self.save_config();
+    }
+
+    /// Take the newest lookup answer (a refusal turns the lookup off) and ask the next one that is
+    /// due (FR-LOG-05).
+    fn lookup_tick(&mut self, now: Instant) {
+        self.log.take_lookup_answer();
+        if let Some(req) = lookup_request(&self.log, &self.ui.radio, self.ui.connected, now) {
+            self.log.asked = Some(req.key.clone());
+            if let Some(tx) = &self.log.lookup_tx {
+                let _ = tx.send(req);
+            }
+        }
     }
 
     /// The log strip under the AF recorder (FR-LOG-01, FR-LOG-07), when logging is set up.
@@ -505,7 +626,6 @@ impl App {
         row = row
             .push(small_btn("Log", Message::Log(LogMsg::Log)))
             .push(small_btn("Clear", Message::Log(LogMsg::Clear)));
-        // What will be logged from the radio, and the queue's state.
         // What will be logged from the radio — shown before a call is typed, so the operator
         // sees the frequency, band, mode and power the QSO will carry.
         let what = match self.log_draft() {
@@ -543,6 +663,9 @@ impl App {
                         .color(dim),
                 ),
         );
+        if let Some(s) = lookup_line(l, lookup_key(l, r, self.ui.connected).as_ref()) {
+            col = col.push(Text::new(s).size(11).color(dim));
+        }
         if let Some(e) = &l.form_error {
             col = col.push(Text::new(e.clone()).size(11).color(caution));
         }
@@ -734,7 +857,161 @@ mod tests {
             manual_freq: String::new(),
             form_error: None,
             seen_test: None,
+            lookup_tx: None,
+            lookup_out: Arc::default(),
+            call_edited: None,
+            asked: None,
+            lookup: None,
+            lookup_off: None,
         }
+    }
+
+    /// A form with logging set up (URL, token, station location).
+    fn ready_ui() -> LogUi {
+        let mut l = ui();
+        l.prefs.url = "https://log.example.org".into();
+        l.prefs.station_id = Some(1);
+        l.token = Secret::new("wl2_0123456789abcdef0123456789abcdef01234567").ok();
+        assert!(l.ready());
+        l
+    }
+
+    fn key(call: &str, band: &str, mode: &str) -> LookupKey {
+        LookupKey {
+            call: call.into(),
+            band: band.into(),
+            mode: mode.into(),
+        }
+    }
+
+    /// FR-LOG-05: one request per settled call — none while it is being typed (400 ms), one when
+    /// it settles, none again for the same call, band and mode; a new one when the mode changes
+    /// (asked by its main ADIF mode, MFSK for FT4) or the call does; none for a call too short.
+    /// trace: FR-LOG-05
+    #[test]
+    fn fr_log_05_one_request_per_settled_call() {
+        let mut l = ready_ui();
+        let mut r = radio(14_074_000, 7_000_000, false, Mode::Usb, Mode::Cw);
+        l.type_call("dl1abc".into(), 100);
+        let t0 = l.call_edited.expect("edited");
+        let at = |ms| t0 + Duration::from_millis(ms);
+        assert!(
+            lookup_request(&l, &r, true, at(399)).is_none(),
+            "still typing"
+        );
+        let req = lookup_request(&l, &r, true, at(400)).expect("settled");
+        assert_eq!(req.key, key("DL1ABC", "20m", "SSB"));
+        assert_eq!(req.server.base(), "https://log.example.org");
+        l.asked = Some(req.key);
+        assert!(
+            lookup_request(&l, &r, true, at(5_000)).is_none(),
+            "asked once"
+        );
+
+        r.mode_a = Some(Mode::Data);
+        l.digital = DigitalMode::Ft4;
+        let req = lookup_request(&l, &r, true, at(5_000)).expect("another mode");
+        assert_eq!(req.key, key("DL1ABC", "20m", "MFSK"), "the main mode");
+        l.asked = Some(req.key);
+
+        l.type_call("DL1ABCD".into(), 101);
+        let t1 = l.call_edited.expect("edited");
+        assert_eq!(
+            lookup_request(&l, &r, true, t1 + LOOKUP_SETTLE).map(|q| q.key.call),
+            Some("DL1ABCD".into())
+        );
+        l.type_call("DL".into(), 102);
+        let t2 = l.call_edited.expect("edited");
+        assert!(
+            lookup_request(&l, &r, true, t2 + LOOKUP_SETTLE).is_none(),
+            "too short"
+        );
+    }
+
+    /// FR-LOG-05: no lookup while the queue is paused (a refused token among the reasons), while
+    /// Wavelog is unreachable, after the lookup itself was refused, or before logging is set up.
+    /// trace: FR-LOG-05
+    #[test]
+    fn fr_log_05_no_lookup_while_paused_offline_or_refused() {
+        let r = radio(14_074_000, 7_000_000, false, Mode::Usb, Mode::Cw);
+        let settled = |l: &mut LogUi| {
+            l.type_call("DL1ABC".into(), 100);
+            l.call_edited.expect("edited") + LOOKUP_SETTLE
+        };
+        let mut l = ready_ui();
+        let t = settled(&mut l);
+        assert!(lookup_request(&l, &r, true, t).is_some(), "the control");
+
+        l.view.paused = Some("the token was refused (invalid_token) — enter a new one".into());
+        assert!(lookup_request(&l, &r, true, t).is_none(), "paused");
+        l.view.paused = None;
+        l.view.unreachable = true;
+        assert!(lookup_request(&l, &r, true, t).is_none(), "offline");
+        l.view.unreachable = false;
+
+        *l.lookup_out.lock().unwrap() = Some((
+            key("DL1ABC", "20m", "SSB"),
+            LookupAnswer::Refused("Invalid or revoked API token".into()),
+        ));
+        l.take_lookup_answer();
+        assert!(lookup_request(&l, &r, true, t).is_none(), "refused");
+        assert_eq!(
+            lookup_line(&l, None).as_deref(),
+            Some("lookup off: Invalid or revoked API token")
+        );
+
+        let mut l = ui();
+        let t = settled(&mut l);
+        assert!(lookup_request(&l, &r, true, t).is_none(), "not set up");
+    }
+
+    /// FR-LOG-05: an answer is shown only for the call, band and mode it was asked for — an answer
+    /// for a call no longer in the field is dropped.
+    /// trace: FR-LOG-05
+    #[test]
+    fn fr_log_05_an_answer_for_another_call_is_dropped() {
+        let mut l = ready_ui();
+        let r = radio(14_074_000, 7_000_000, false, Mode::Usb, Mode::Cw);
+        let found = k4_log::lookup::Lookup {
+            call: "DL1ABC".into(),
+            dxcc: "FEDERAL REPUBLIC OF GERMANY".into(),
+            cont: "EU".into(),
+            name: "Test".into(),
+            grid: "JO62".into(),
+            worked: k4_log::lookup::Worked::New,
+        };
+        *l.lookup_out.lock().unwrap() = Some((
+            key("DL1ABC", "20m", "SSB"),
+            LookupAnswer::Found(found.clone()),
+        ));
+        l.take_lookup_answer();
+        l.type_call("DL1ABC".into(), 100);
+        let shown = |l: &LogUi, r: &RadioState| lookup_line(l, lookup_key(l, r, true).as_ref());
+        assert_eq!(shown(&l, &r), Some(found.line()));
+        l.type_call("DL1ABD".into(), 100);
+        assert_eq!(shown(&l, &r), None, "another call");
+        l.type_call("DL1ABC".into(), 100);
+        let on_40 = radio(7_074_000, 7_000_000, false, Mode::Usb, Mode::Cw);
+        assert_eq!(shown(&l, &on_40), None, "another band");
+    }
+
+    /// FR-LOG-06: a spot's call goes into an empty call field (and starts its time), never over a
+    /// call being typed, and not while logging is not set up.
+    /// trace: FR-LOG-06
+    #[test]
+    fn fr_log_06_a_spot_fills_only_an_empty_call() {
+        let mut l = ready_ui();
+        assert!(l.prefill_call("K1AAA", 500));
+        assert_eq!((l.call.as_str(), l.time_on), ("K1AAA", Some(500)));
+        assert!(!l.prefill_call("K2BBB", 600), "a call is there");
+        assert_eq!(l.call, "K1AAA");
+        l.type_call(String::new(), 700);
+        l.type_call("DL".into(), 701);
+        assert!(!l.prefill_call("K2BBB", 702), "a call is being typed");
+        assert_eq!(l.call, "DL");
+        let mut off = ui();
+        assert!(!off.prefill_call("K1AAA", 500), "logging not set up");
+        assert!(off.call.is_empty());
     }
 
     fn radio(a: u64, b: u64, split: bool, mode_a: Mode, mode_b: Mode) -> RadioState {
