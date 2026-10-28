@@ -27,6 +27,21 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
   in this mode. Clicking a spot's nameplate puts its call into an empty call
   field (and tunes to it, as before).
 
+### Changed
+
+- **`--demo` shows real spots** when a spotting network is switched on, instead
+  of mixing them with its sample spots; the samples appear only while no
+  network is on.
+- The **user manual** has new screenshots throughout (taken on a 3440 × 1440
+  screen) and a section on logging to Wavelog.
+
+### Fixed
+
+- **Arrows and minus signs drawn as empty boxes.** Where the UI font has no
+  such symbol (Noto Sans has none of → − ◄ ► ●), it is now taken from another
+  installed font: the VFO step buttons, BAND −, the RIT and MIC − buttons and
+  "Play → K4" show their symbols again.
+
 ## [0.11.0] — 2026-10-16
 
 ### Added

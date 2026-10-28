@@ -188,6 +188,19 @@ pub fn status_text(d: &Decision, observed: Option<bool>, gpu_waterfall: bool) ->
 mod tests {
     use super::*;
 
+    /// NFR-USE-01: widget text is shaped with font fallback by default, so a symbol the UI font
+    /// lacks (→ − ◄ ● ≥; Noto Sans has none of them) comes from another system font instead of an
+    /// empty box — the patched `vendor/iced_core`. Canvas text keeps basic shaping (the spectrum's
+    /// labels are redrawn every frame and are plain ASCII).
+    /// trace: NFR-USE-01
+    #[test]
+    fn nfr_use_01_widget_text_falls_back_for_missing_symbols() {
+        use iced::advanced::text::Shaping;
+        assert_eq!(Shaping::default(), Shaping::Advanced);
+        let label = iced::widget::canvas::Text::default();
+        assert_eq!(label.shaping, Shaping::Basic);
+    }
+
     /// FR-UI-27: the whole decision table — setting × the user's ICED_BACKEND × K4_WATERFALL ×
     /// adapter present.
     /// trace: FR-UI-27

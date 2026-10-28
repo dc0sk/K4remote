@@ -1796,8 +1796,6 @@ dependencies = [
 [[package]]
 name = "iced_core"
 version = "0.13.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0013a238275494641bf8f1732a23a808196540dc67b22ff97099c044ae4c8a1c"
 dependencies = [
  "bitflags 2.13.0",
  "bytes",
