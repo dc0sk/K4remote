@@ -1,8 +1,8 @@
 ---
 title: "R6 baseline — public functions with no production reference"
 status: Draft
-version: "0.5"
-updated: 2026-10-16
+version: "0.6"
+updated: 2026-10-28
 authors:
   - Simon Keimer (DC0SK)
 ---
@@ -65,7 +65,6 @@ See `r5-unreached-encoders.md` for each one's reason.
 - `crates/k4-transport/src/lib.rs:psk_loopback` — the TLS-PSK loopback server in `tls_support`, for `tests/tls.rs`.
 - `crates/k4-stream/src/audio.rs:is_opus` — asserted by `tests/codecs.rs`.
 - `crates/k4-audio/src/codec.rs:stereo` — builds the stereo Opus packet `tests/opus.rs` decodes, the shape the K4 streams for RX (FR-AUD-04); the app itself only encodes mono.
-- `crates/k4-config/src/lib.rs:any_enabled` — asserted by `tests/config.rs`.
 - `crates/k4-spot/src/style.rs:contrast` — WCAG ratio; its in-file tests use it to hold spot nameplate colours readable.
 - `crates/k4-spot/src/style.rs:luminance` — only `contrast` calls it (the WCAG relative luminance); it follows `contrast`.
 - `crates/k4-spot/src/mqtt.rs:buffered` — lets the in-file tests bound the decoder's buffer.

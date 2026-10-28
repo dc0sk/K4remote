@@ -238,4 +238,4 @@ Legend: ✅ test-traced · 🟡 waived (see r3-waivers.md) · ⚪ not test-requi
 | `NFR-SEC-03` | S | T | ✅ |
 | `NFR-TEST-01` | M | I | ✅ |
 | `NFR-TEST-02` | M | T | ✅ |
-| `NFR-USE-01` | M | D | ⚪ |
+| `NFR-USE-01` | M | D | ✅ |
