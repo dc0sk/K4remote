@@ -15,7 +15,7 @@ published (Fira Sans: SIL Open Font Licence).
 | `iced_tiny_skia` 0.13.0 | `src/layer.rs`, `draw_primitive_group` / `draw_primitive_cache` | store `clip_bounds * transformation` | A canvas's shapes were clipped to the canvas's own rectangle taken as window coordinates. A pane away from the window's top-left corner lost its trace and grid (pane B entirely), and the damage tracking compared mismatched rectangles (flicker). |
 | `iced_tiny_skia` 0.13.0 | `src/engine.rs`, `draw_primitive`, `Primitive::Stroke` | widen the stroke's box by the stroke width before testing it against the layer | A horizontal or vertical line has a zero-height or zero-width box; `Rectangle::intersection` returned none, so the line was taken for off-screen and never drawn: the dB grid, the frequency grid and the spot pins. |
 | `iced_tiny_skia` 0.13.0 | `src/engine.rs`, `draw_image`, `Image::Raster` | always clip a raster image to its own bounds within the region being redrawn | The draw rounds an image's window position down to a whole row of the image. With one row of waterfall history (just after start), a row is the whole band tall, so the image could start above the pane. Unclipped, the waterfall's newest row was smeared over the widgets above, outside any redrawn region, so it stayed and flashed as the window's buffers alternated. |
-| `iced_core` 0.13.2 | `src/text.rs`, `Shaping` | `Advanced` is the default instead of `Basic`; `Cargo.toml` allows the lint `unpredictable_function_pointer_comparisons`, which the newer compiler raises on an upstream derive (CI builds with `-D warnings`) | Basic shaping has no font fallback. Noto Sans, the UI font on DC0SK's machine, has none of the symbols the UI uses (→ − ◄ ► ↔ ⇄ ● ≥ ≤ ≈), so every one was drawn as an empty box: the VFO step buttons, BAND −, the RIT and MIC − buttons, "Play → K4" (found on 2026-10-28 in screenshots for the manual; DC0SK's own screenshot from July shows it too). Advanced shaping takes each missing glyph from another system font (DejaVu Sans here). Text inputs and the log editor were already advanced; canvas text keeps its own explicit `Basic`, so the spectrum's per-frame labels cost the same. |
+| `iced_core` 0.13.2 | `src/text.rs`, `Shaping` | `Advanced` is the default instead of `Basic`; `Cargo.toml` allows the lint `unpredictable_function_pointer_comparisons`, which the newer compiler raises on an upstream derive (CI builds with `-D warnings`) | Basic shaping has no font fallback. Noto Sans, the UI font on DC0SK's machine, has none of the symbols the UI uses (→ − ≤ ≥ ► ◄ ●, the set the glyph test finds missing under basic shaping), so every one was drawn as an empty box: the VFO step buttons, BAND −, the RIT and MIC − buttons, "Play → K4" (found on 2026-10-28 in screenshots for the manual; DC0SK's own screenshot from July shows it too). Advanced shaping takes each missing glyph from another system font (DejaVu Sans here). Text inputs and the log editor were already advanced; canvas text keeps its own explicit `Basic`, so the spectrum's per-frame labels cost the same. |
 
 Tests (each fails against the published code and passes against the patched copy):
 - `fr_ui_27_the_cpu_renderer_survives_centred_canvas_text` (app/src/graphics.rs): the sort panics
@@ -26,9 +26,14 @@ Tests (each fails against the published code and passes against the patched copy
 - `fr_ui_27_the_cpu_renderer_keeps_the_waterfall_inside_its_pane` (app/src/spectrum.rs): 1–4 rows
   at five pane positions; with the published image draw, one row at y = 410 painted 29 400 pixels
   (49 rows) outside the pane.
+- `nfr_use_01_every_symbol_in_the_ui_has_a_glyph` (app/src/graphics.rs): every non-ASCII
+  character in app/src, shaped as widget text is by default, has a glyph on the host (asked of
+  cosmic-text, which returns glyph id 0 for a missing one). With the published default it fails for
+  → − ≤ ≥ ► ◄ ● on DC0SK's machine. It depends on the host's fonts, as the screen does — and it
+  answers the 0.14 question below by running, not by looking.
 - `nfr_use_01_widget_text_falls_back_for_missing_symbols` (app/src/graphics.rs): widget text
-  defaults to advanced shaping, canvas text to basic. The glyphs themselves were checked on
-  screen: before, empty boxes; after, the arrows and minus signs drawn from DejaVu Sans.
+  defaults to advanced shaping, canvas text to basic (pins the patch). The glyphs were also checked
+  on screen: before, empty boxes; after, drawn from DejaVu Sans.
 
 The first four were confirmed on the radio by DC0SK on 2026-10-11 (CPU renderer, 3440×1440, Wayland).
 
