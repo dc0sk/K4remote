@@ -1035,11 +1035,20 @@ mod tests {
             token: Secret::new(TOKEN).unwrap(),
             station_id: 7,
         })));
-        // The entry is for the old URL and is held; a new one goes to the new server.
+        // The old URL's entry is held without a request; a new one goes to the new server. Two
+        // entries queued in the same second are listed in either order (the file name has whole
+        // seconds and a random id), so the two steps are counted, not ordered.
         w.command(Cmd::Log(Box::new(qso("DL2BBB"))));
-        assert!(!w.step(), "the old URL's entry is held, nothing sent");
-        assert!(snapshot(&status).unreachable, "nothing has answered yet");
-        assert!(w.step(), "the new entry is sent");
+        let mut sent = 0;
+        for _ in 0..2 {
+            if w.step() {
+                sent += 1;
+            }
+        }
+        assert_eq!(
+            sent, 1,
+            "one request: the old URL's entry is held, not sent"
+        );
         assert!(!snapshot(&status).unreachable, "{:?}", snapshot(&status));
         let _ = std::fs::remove_dir_all(&dir);
     }
