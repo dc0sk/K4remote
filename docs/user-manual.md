@@ -2,7 +2,7 @@
 title: "K4 Remote — User Manual"
 status: Draft
 version: "0.11.0"
-updated: 2026-10-16
+updated: 2026-10-28
 authors:
   - Simon Keimer (DC0SK)
 ---
@@ -78,8 +78,10 @@ compiled in). For a minimal build without TLS, keychain, or K-Pod:
 cargo run -p k4remote --no-default-features --features audio-device
 ```
 
-> 📷 **Screenshot needed — `screenshots/app-launch.png`:** The app on first launch, before
-> connecting (empty VFO readouts, the Settings button in the header).
+![K4 Remote on first launch, not yet connected](screenshots/app-launch.png)
+
+*On first launch: not connected, the VFO readouts empty, **Connect** and **Settings** in the
+header.*
 
 ---
 
@@ -89,8 +91,7 @@ All connection settings live in the **Settings** window — open it from the **S
 in the header. It has its own window, like Networks, KPA1500 and Diagnostics, and closes with
 **Done** (bottom right, in the same place on every tab), the window's own controls or **ESC**.
 
-> 📷 **Screenshot needed — `screenshots/settings-connection.png`:** The Settings window open on
-> the **Connection** tab, showing the host / port / TLS fields.
+![The Settings window on the Connection tab](screenshots/settings-connection.png)
 
 ### Connection types
 
@@ -110,14 +111,20 @@ in the header. It has its own window, like Networks, KPA1500 and Diagnostics, an
 Successful connections are added to **Saved peers** for one-click reconnect. The link
 **auto-reconnects** with bounded backoff if it drops.
 
-> 📷 **Screenshot needed — `screenshots/settings-peers.png`:** The Saved peers list with a couple
-> of entries, each showing its **Use** / **Delete** buttons.
+![Saved peers: address, plain or TLS, where the password is kept, Use and Del](screenshots/settings-peers.png)
+
+*Each saved peer shows whether the link is plain (`tcp`) or `TLS`, and whether its password is
+kept in the keychain or not at all (`no pw`). **Use** fills the Connection tab with it; **Del**
+removes it.*
 
 ---
 
 ## 3. The main window
 
 ![K4 Remote main window](screenshots/main.png)
+
+*The main window on a 3440 × 1440 screen, with the demo's sample signals and live spot
+nameplates from PSK Reporter, POTA and FreeDV.*
 
 From top to bottom:
 
@@ -133,6 +140,8 @@ From top to bottom:
   or for anyone else connected. **MUTE** beside it silences that receiver while keeping its level, so
   unmuting returns to where you had it; mute always starts clear when the app opens. The **Volume**
   slider in Settings is the master over both.
+- **LOG strip** — once logging to Wavelog is set up, a strip above the panadapter for logging
+  the QSO you are in ([Logging to Wavelog](#logging-to-wavelog)).
 - **Transmit panel** — the TX arm, PTT, and mode-specific transmit controls.
 
 > **Volume levels.** The **Volume** slider in Settings is the master: it reads 0–100 % and follows a
@@ -155,6 +164,8 @@ From top to bottom:
 
 The **view mode** (A / B / A+B) picks which receiver(s) are shown; single-A or single-B also
 selects the active RX, while A+B leaves that to a click in the spectrum pane.
+
+![The A+B view: both VFOs and both receivers' panadapters side by side](screenshots/main-dual.png)
 
 ### Control chips: tap, hold, right-click
 
@@ -340,8 +351,7 @@ In **Settings → Audio**:
 - **Mute radio monitor on connect** — silences the radio's local TX monitor so a remote session
   doesn't blare the shack speaker (on by default).
 
-> 📷 **Screenshot needed — `screenshots/settings-audio.png`:** The Settings **Audio** section with
-> the Speaker / Mic dropdowns and the Volume / Mic-gain sliders.
+![Settings, Audio tab: speaker and mic, Volume and Mic gain, and the switches below](screenshots/settings-audio.png)
 
 ---
 
@@ -390,9 +400,7 @@ Configure them in **Settings → K-Pod**:
 
 Assignments are saved automatically and take effect on the next press.
 
-> 📷 **Screenshot needed — `screenshots/kpod-editor.png`:** Settings scrolled to **K-Pod function
-> switches**, showing several slots with preset labels and CAT strings, and the **Reset to
-> samples** button.
+![Settings, K-Pod tab: the 16 tap and hold slots with their labels and CAT strings](screenshots/kpod-editor.png)
 
 > **CAT macros can do anything a K4 command can — including keying the transmitter.** See
 > [Safety notes](#13-safety-notes).
@@ -461,7 +469,13 @@ down to the trace at the station's frequency. Plates that would overlap are stac
 lanes, and any that do not fit are counted as **+N** in the corner. A spot older than the limit in
 Settings (default 15 minutes), or outside the view, is not shown.
 
+![Spot nameplates on 20 m: PSK Reporter (blue) and POTA (green) callsigns stacked in lanes, each with its tick down to the trace](screenshots/spot-nameplates.png)
+
 Everything is **off until you turn it on**. Open **Settings → Spotting → Networks…**:
+
+![Settings, Spotting tab: the afterglow, the spot age limit, and how many networks are on](screenshots/settings-spotting.png)
+
+![The Networks window: PSK Reporter on and connected, RBN below](screenshots/spotting-networks.png)
 
 - **RBN** (Reverse Beacon Network) — CW/RTTY skimmer spots. The relay server is prefilled but off.
   RBN asks that end-users connect to a **DX cluster that carries its spots** rather than to its own
@@ -501,10 +515,11 @@ frequency and mode, which network reported it and who heard it, the signal repor
 Plates are coloured by where the spot came from — **amber** RBN, **blue** PSK Reporter, **lilac** DX
 cluster, **green** POTA, **coral** FreeDV Reporter — and fade as they age, down to half strength at the age limit, so the freshest stand out.
 
-To see the display without connecting anything, start the app with `--demo`: it shows sample spots.
+To see the display without connecting anything, start the app with `--demo`. While no network is
+switched on it shows sample spots; with any network on, it shows the real spots instead (as in the
+pictures here).
 
-> 📷 **Screenshot needed — `screenshots/settings-backup.png`:** The **K4 settings backup** section
-> with the Export / Import controls.
+![Settings, Backup tab: export the K4's settings, and import or play a saved file back to the K4](screenshots/settings-backup.png)
 
 ### CAT server (logging and digital-mode software)
 
@@ -515,6 +530,8 @@ set the software up exactly as for one:
 
 - **Rig / radio:** Elecraft K4, connected over the network (TCP).
 - **Address:** `127.0.0.1` · **Port:** `9200` (the defaults here).
+
+![Settings, CAT Server tab: address and port, and the CAT PTT settings below](screenshots/settings-cat-server.png)
 
 Turn it on with **CAT server: ON**; the status line then says where it listens and how many
 programs are connected. What the software can do:
@@ -556,6 +573,10 @@ On the **BAND** screen each band button's label is coloured by that band's curre
 example *"20 m: Good — HamQSL day at JO31: Fair; 14 stations heard in 15 min (RBN, PSK Reporter)"*.
 A band with no current data keeps its normal colour.
 
+![Band buttons coloured by HamQSL's forecast: 20 m good, 80–30 m fair, 17–10 m poor; 160 m and 6 m have no rating](screenshots/band-colours.png)
+
+![The BAND screen in place of the panadapter, with the transverter bands on the right](screenshots/band-screen.png)
+
 The colours combine every source that is switched on and reachable:
 
 - **HamQSL (N0NBH)** — a propagation forecast for four band groups (80–40, 30–20, 17–15 and 12–10 m),
@@ -574,6 +595,8 @@ untick them; unticking an activity network only stops counting it. **Locator** i
 Maidenhead square (4 or 6 characters, e.g. `JO31`): day and night follow the sun there, which matters
 when the radio is far from this computer. Without one, day is 06:00–18:00 on this computer's clock. A
 locator that is not yet complete is shown in the caution colour and not saved.
+
+![Settings, Propagation tab: the colouring, HamQSL and its update interval, the activity networks, the locator](screenshots/settings-propagation.png)
 
 **Without an internet connection nothing gets in the way.** Sources are fetched in the background; one
 that cannot be reached is retried later and shown as a status line on the tab, never as a dialog. The
@@ -594,14 +617,69 @@ shows as many as its height has pixels: a taller pane shows more time.
   front, time receding into the background; nearer lines hide farther ones;
 - **3D — shaded surface** — the same as a continuous landscape coloured by level, like the waterfall.
 
+![3D, stacked traces](screenshots/main-3d-stacked.png)
+
+![3D, shaded surface](screenshots/main-3d-shaded.png)
+
 For the 3D views, **Tilt** sets how far the history climbs up the pane (20–90 %) and **Depth** how many
 rows of history are shown (16–256). The frequency axis and the passband sit along the front edge, and
 clicking or wheel-tuning there works as in the classic view. Spot nameplates are shown as in the classic view, each tick reaching down to the front row.
+
+![Settings, Graphics tab in a 3D view: Tilt, Depth, and the renderer in use](screenshots/settings-graphics.png)
 
 **Renderer** shows what is drawing now — *GPU (wgpu)* or *CPU (software)* — and why, and chooses the
 renderer for the **next start**: *Auto* (use the GPU if there is one, the default), *GPU*, or *CPU*.
 If the GPU is chosen but none is found, the app starts on the CPU instead and says so. The environment
 variables `ICED_BACKEND` and `K4_WATERFALL`, if set, override the setting (for diagnosis).
+
+### Logging to Wavelog
+
+K4 Remote logs your QSOs to a **Wavelog** logbook (for example the one the DARC hosts) through
+Wavelog's **API v2**, which needs Wavelog **3.1.0 or later**.
+
+![Settings, Logging tab: the Wavelog URL saved, waiting for the token](screenshots/settings-logging.png)
+
+**Setting it up**, in **Settings → Logging**:
+
+1. In Wavelog, under **API**, create a **v2 token** with the permissions `qso:write`,
+   `station:read` and `lookup:read`.
+2. Enter your Wavelog's **URL** and press **Save**. The address as Wavelog shows it, with or
+   without `/api/v2` or `/index.php`, is fine. It must be `https://`, except on this computer.
+3. Paste the **token** and press **Save**. It goes into your system keychain with the other
+   secrets, never into the config file. **Forget** removes it, and changing the URL deletes it,
+   so a token is never sent to another server.
+4. Press **Test**. It checks that the API answers, shows whose token it is, what it may do and
+   when it expires, and reads your **station locations**. The one active in Wavelog is chosen;
+   pick another from the list if you log from somewhere else.
+5. **Operator** is optional: your callsign, for a club logbook.
+
+**The LOG strip** then appears above the panadapter:
+
+![The LOG strip: call, RST sent and received, name, comment, Log and Clear; below, what will be logged and the queue](screenshots/log-strip.png)
+
+- Type the **call**, and optionally RST, name and comment. Frequency, band, mode and power come
+  from the radio; the line below shows what will be logged, e.g. *14.0740 MHz 20m USB 10 W*. In
+  split it is the transmit VFO, with the receive frequency logged too.
+- Empty RST fields take the mode's usual report (59, 599, nothing for FT8/FT4/JS8).
+- In **DATA** a picker chooses the digital mode (FT8, FT4, JS8, RTTY, PSK31); the last choice is
+  kept.
+- The QSO's start time is when you start typing the call; its end time is when you press **Log**
+  (or Enter). **Nothing is sent without Log.**
+- **Lookup while typing:** about half a second after you stop typing (from three characters,
+  one a digit), the strip shows what Wavelog knows: country, name and grid, and whether you
+  worked the station before — *new*, *worked before, not on this band*, *worked on this band,
+  not in this mode* or *worked on this band and mode*. The call goes to your own logbook only.
+- **Click a spot's nameplate** and its call goes into the call field, if that is empty; the click
+  still tunes as before. A call you are typing is never replaced.
+
+**Every QSO goes through a queue on disk**, so nothing is lost:
+
+- If Wavelog cannot be reached, the QSO waits and is sent later (or press **Send now**).
+- If a reply was lost and the QSO is sent again, Wavelog reporting it as already logged counts as
+  logged.
+- A QSO Wavelog already has from somewhere else is **held** and shown under **Queue**, never
+  dropped. Save held QSOs as an ADIF file, then discard them.
+- If the token is refused, the queue and the lookup pause until you save a new one.
 
 ## 11. Keyboard shortcuts
 

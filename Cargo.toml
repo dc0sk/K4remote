@@ -39,3 +39,4 @@ sha2 = "0.10"
 [patch.crates-io]
 iced_graphics = { path = "vendor/iced_graphics" }
 iced_tiny_skia = { path = "vendor/iced_tiny_skia" }
+iced_core = { path = "vendor/iced_core" }

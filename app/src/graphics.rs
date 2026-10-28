@@ -188,6 +188,78 @@ pub fn status_text(d: &Decision, observed: Option<bool>, gpu_waterfall: bool) ->
 mod tests {
     use super::*;
 
+    /// NFR-USE-01: every non-ASCII character in the app's source has a glyph on this computer when
+    /// shaped as widget text is by default — asked of the shaper itself, which returns glyph id 0
+    /// for a character no font supplies (the empty box). The set comes from the source, not a hand
+    /// list. It depends on the host's fonts, as the screen does: with basic shaping and Noto Sans as
+    /// the UI font, → − ◄ ► ● all fail.
+    /// trace: NFR-USE-01
+    #[test]
+    fn nfr_use_01_every_symbol_in_the_ui_has_a_glyph() {
+        use cosmic_text::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping as Shape};
+        use iced::advanced::text::Shaping;
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/src");
+        let mut chars = std::collections::BTreeSet::new();
+        for entry in std::fs::read_dir(dir).expect("app/src") {
+            let path = entry.expect("entry").path();
+            if path.extension().is_some_and(|e| e == "rs") {
+                let src = std::fs::read_to_string(&path).expect("source");
+                for line in src.lines().filter(|l| !l.trim_start().starts_with("//")) {
+                    chars.extend(line.chars().filter(|c| !c.is_ascii()));
+                }
+            }
+        }
+        assert!(
+            chars.contains(&'◄') && chars.contains(&'→'),
+            "the scan found the UI's symbols"
+        );
+        let mut fonts = FontSystem::new();
+        if fonts.db().faces().next().is_none() {
+            eprintln!("no system fonts here: nothing to check");
+            return;
+        }
+        let shaping = match Shaping::default() {
+            Shaping::Advanced => Shape::Advanced,
+            Shaping::Basic => Shape::Basic,
+        };
+        let mut missing = Vec::new();
+        for ch in &chars {
+            let mut buf = Buffer::new(&mut fonts, Metrics::new(14.0, 18.0));
+            let text = ch.to_string();
+            buf.set_text(
+                &mut fonts,
+                &text,
+                Attrs::new().family(Family::SansSerif),
+                shaping,
+            );
+            buf.shape_until_scroll(&mut fonts, false);
+            let glyphs: Vec<u16> = buf
+                .layout_runs()
+                .flat_map(|r| r.glyphs.iter().map(|g| g.glyph_id))
+                .collect();
+            if glyphs.is_empty() || glyphs.contains(&0) {
+                missing.push(*ch);
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "no glyph on this computer for {missing:?}"
+        );
+    }
+
+    /// NFR-USE-01: widget text is shaped with font fallback by default, so a symbol the UI font
+    /// lacks (→ − ◄ ● ≥; Noto Sans has none of them) comes from another system font instead of an
+    /// empty box — the patched `vendor/iced_core`. Canvas text keeps basic shaping (the spectrum's
+    /// labels are redrawn every frame and are plain ASCII).
+    /// trace: NFR-USE-01
+    #[test]
+    fn nfr_use_01_widget_text_falls_back_for_missing_symbols() {
+        use iced::advanced::text::Shaping;
+        assert_eq!(Shaping::default(), Shaping::Advanced);
+        let label = iced::widget::canvas::Text::default();
+        assert_eq!(label.shaping, Shaping::Basic);
+    }
+
     /// FR-UI-27: the whole decision table — setting × the user's ICED_BACKEND × K4_WATERFALL ×
     /// adapter present.
     /// trace: FR-UI-27

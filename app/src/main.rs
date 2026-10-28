@@ -1264,7 +1264,6 @@ impl App {
         );
         if demo {
             worker::spawn_demo_pan_feed(Arc::clone(&pan), Arc::clone(&snapshot));
-            spots::spawn_demo_spots(Arc::clone(&spots));
         }
 
         // Load persisted config: prefill the last-used connection (FR-CFG-01/05)
@@ -1340,6 +1339,11 @@ impl App {
             p.set_afterglow_ms(prefs.spectrum_afterglow_ms());
         }
         let spot_networks = prefs.spot_networks.clone();
+        // The demo's sample spots stand in for the networks: with any network switched on, the
+        // real spots are shown instead, not mixed with invented ones.
+        if demo && !spot_networks.any_enabled() {
+            spots::spawn_demo_spots(Arc::clone(&spots));
+        }
         if let Ok(mut p) = spot_pins.lock() {
             *p = tls::pins_from(&spot_networks.trusted());
         }
