@@ -111,3 +111,6 @@ iced_graphics = "0.13"
 # The software renderer itself, to draw a pane through it at a pane's offset (FR-UI-27).
 iced_tiny_skia = "0.13"
 tiny-skia = "0.11"
+# The text shaper iced uses (same version), to ask it whether every symbol in the UI has a glyph
+# (NFR-USE-01): a missing one comes back as glyph id 0, drawn as an empty box.
+cosmic-text = "=0.12.1"

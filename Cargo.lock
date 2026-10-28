@@ -2236,6 +2236,7 @@ name = "k4remote"
 version = "0.11.0"
 dependencies = [
  "bytemuck",
+ "cosmic-text",
  "iced",
  "iced_graphics",
  "iced_renderer",
