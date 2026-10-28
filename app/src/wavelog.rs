@@ -1029,7 +1029,7 @@ mod tests {
         w.command(Cmd::Log(Box::new(qso("DL1ABC"))));
         assert!(w.step());
         assert!(snapshot(&status).unreachable, "{:?}", snapshot(&status));
-        let (port, _) = mock(vec![Step::Reply(201, "", CREATED.into())]);
+        let (port, seen) = mock(vec![Step::Reply(201, "", CREATED.into())]);
         w.command(Cmd::Configure(Some(Setup {
             server: Server::parse(&format!("http://127.0.0.1:{port}")).unwrap(),
             token: Secret::new(TOKEN).unwrap(),
@@ -1049,7 +1049,20 @@ mod tests {
             sent, 1,
             "one request: the old URL's entry is held, not sent"
         );
-        assert!(!snapshot(&status).unreachable, "{:?}", snapshot(&status));
+        // Which entry went where, whatever the order: the request carried the new QSO, and the
+        // old URL's is the one held.
+        let bodies: Vec<String> = seen
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|s| s.body.clone())
+            .collect();
+        assert_eq!(bodies.len(), 1);
+        assert!(bodies[0].contains("DL2BBB"), "{bodies:?}");
+        let st = snapshot(&status);
+        assert_eq!(st.held.len(), 1, "{st:?}");
+        assert!(st.held[0].summary.starts_with("DL1ABC"), "{st:?}");
+        assert!(!st.unreachable, "{st:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
