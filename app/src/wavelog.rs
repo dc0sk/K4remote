@@ -15,6 +15,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use k4_config::WavelogStation;
+use k4_log::lookup::Lookup;
 use k4_log::qso::Qso;
 use k4_log::queue::{Entry, Queue, SenderLock, State};
 use k4_log::reply::{self, Attempt, Failure, LastAttempt, Outcome, Pause};
@@ -305,6 +306,8 @@ pub struct Status {
     pub test: Option<TestReport>,
     /// A Test is running.
     pub testing: bool,
+    /// The last send could not reach Wavelog (and none has since): no lookups meanwhile.
+    pub unreachable: bool,
 }
 
 pub type StatusHandle = Arc<Mutex<Status>>;
@@ -356,6 +359,7 @@ pub struct Worker {
     next_try: Instant,
     backoff: Duration,
     lock: Option<SenderLock>,
+    unreachable: bool,
 }
 
 impl Worker {
@@ -369,6 +373,7 @@ impl Worker {
             next_try: Instant::now(),
             backoff: BACKOFF_FIRST,
             lock: None,
+            unreachable: false,
         }
     }
 
@@ -396,6 +401,7 @@ impl Worker {
             st.held = held;
             st.paused = self.paused.clone();
             st.other_sender = self.setup.is_some() && self.lock.is_none();
+            st.unreachable = self.unreachable;
         }
     }
 
@@ -496,6 +502,7 @@ impl Worker {
             entry.last_attempt = LastAttempt::Unknown;
         }
         entry.attempts += 1;
+        self.unreachable = matches!(attempt, Attempt::Failed(Failure::NotConnected(_)));
         let what = summary(&entry.qso);
         match outcome {
             Outcome::Logged(id) => {
@@ -706,6 +713,105 @@ pub fn spawn(rx: Receiver<Cmd>, queue: Queue, status: StatusHandle) {
         });
 }
 
+/// A callsign lookup to make (FR-LOG-05): on the logging server, with its token.
+#[derive(Debug, Clone)]
+pub struct LookupReq {
+    pub server: Server,
+    pub token: Secret,
+    pub key: LookupKey,
+}
+
+/// What a lookup is for: the call, the band and the main ADIF mode. An answer is shown only while
+/// the form still has all three.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LookupKey {
+    pub call: String,
+    pub band: String,
+    pub mode: String,
+}
+
+/// The answer to one lookup.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LookupAnswer {
+    Found(Lookup),
+    /// No answer this time (not reachable, a server error); asked again only for another call.
+    Failed(String),
+    /// The token may not look up (refused, or no `lookup:read`): the lookup stays off until the
+    /// URL or the token changes, so a dead token is not sent on every call typed.
+    Refused(String),
+}
+
+/// The newest answer, for the key it answers.
+pub type LookupHandle = Arc<Mutex<Option<(LookupKey, LookupAnswer)>>>;
+
+/// Ask Wavelog about one call.
+pub fn lookup(transport: &Transport, req: &LookupReq) -> LookupAnswer {
+    let k = &req.key;
+    let url = format!(
+        "{}?{}",
+        req.server.endpoint("lookup"),
+        k4_log::lookup::query(&k.call, &k.band, &k.mode)
+    );
+    match transport.call(Method::Get, &url, Some(&req.token), None) {
+        Attempt::Response {
+            status: 200, body, ..
+        } => match k4_log::lookup::parse(&body, &k.call) {
+            Some(l) => LookupAnswer::Found(l),
+            None => LookupAnswer::Failed("an unexpected reply".into()),
+        },
+        Attempt::Response {
+            status: 401 | 403,
+            body,
+            ..
+        } => {
+            let v: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+            LookupAnswer::Refused(
+                v["error"]["message"]
+                    .as_str()
+                    .or(v["error"]["code"].as_str())
+                    .unwrap_or("the token was refused")
+                    .to_string(),
+            )
+        }
+        Attempt::Response { status, .. } => LookupAnswer::Failed(format!("HTTP {status}")),
+        Attempt::Failed(Failure::NotConnected(m) | Failure::AfterSend(m)) => {
+            LookupAnswer::Failed(m)
+        }
+        Attempt::Failed(Failure::Certificate(h)) => {
+            LookupAnswer::Failed(format!("the certificate of {h} was refused"))
+        }
+    }
+}
+
+/// The newest of the requests waiting: `first`, or a later one already queued behind it.
+fn newest(first: LookupReq, rx: &Receiver<LookupReq>) -> LookupReq {
+    let mut req = first;
+    while let Ok(next) = rx.try_recv() {
+        req = next;
+    }
+    req
+}
+
+/// Start the lookup thread: its own transport, so a slow QSO send never holds a lookup up, and
+/// only the newest request is answered.
+pub fn spawn_lookup(rx: Receiver<LookupReq>, out: LookupHandle) {
+    let _ = thread::Builder::new()
+        .name("wavelog-lookup".into())
+        .spawn(move || {
+            let transport = Transport::with_timeout(LOOKUP_TIMEOUT);
+            while let Ok(first) = rx.recv() {
+                let req = newest(first, &rx);
+                let answer = lookup(&transport, &req);
+                if let Ok(mut o) = out.lock() {
+                    *o = Some((req.key, answer));
+                }
+            }
+        });
+}
+
+/// A lookup is only worth having while the call is being typed.
+const LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -832,6 +938,132 @@ mod tests {
 
     fn snapshot(s: &StatusHandle) -> Status {
         s.lock().unwrap().clone()
+    }
+
+    fn lookup_req(port: u16, call: &str) -> LookupReq {
+        LookupReq {
+            server: Server::parse(&format!("http://127.0.0.1:{port}")).unwrap(),
+            token: Secret::new(TOKEN).unwrap(),
+            key: LookupKey {
+                call: call.into(),
+                band: "20m".into(),
+                mode: "MFSK".into(),
+            },
+        }
+    }
+
+    /// FR-LOG-05, FR-LOG-03: the lookup asks `lookup` with call, band and main mode and the token in
+    /// the header; a reply is found, a refusal (401, 403) turns the lookup off, anything else is a
+    /// failure for this call only.
+    /// trace: FR-LOG-05, FR-LOG-03
+    #[test]
+    fn fr_log_05_the_lookup_request_and_its_answers() {
+        const FOUND: &str = r#"{"data":{"callsign":"DL1ABC","dxcc":"FEDERAL REPUBLIC OF GERMANY","cont":"EU","name":"","gridsquare":null,"call_worked":true,"call_worked_band":true,"call_worked_band_mode":true}}"#;
+        const SCOPE: &str = r#"{"error":{"code":"insufficient_scope","message":"This token lacks the lookup:read scope"}}"#;
+        let (port, seen) = mock(vec![
+            Step::Reply(200, "", FOUND.into()),
+            Step::Reply(401, "", BAD_TOKEN.into()),
+            Step::Reply(403, "", SCOPE.into()),
+            Step::Reply(500, "", "{}".into()),
+            Step::Reply(200, "", FOUND.into()),
+        ]);
+        let t = Transport::with_timeout(Duration::from_millis(400));
+        let LookupAnswer::Found(f) = lookup(&t, &lookup_req(port, "DL1ABC")) else {
+            panic!("found")
+        };
+        assert_eq!(f.worked, k4_log::lookup::Worked::BandMode);
+        let s = seen.lock().unwrap()[0].clone();
+        assert_eq!(
+            s.line,
+            "GET /api/v2/lookup?callsign=DL1ABC&band=20m&mode=MFSK&detail=full HTTP/1.1"
+        );
+        assert_eq!(s.auth.as_deref(), Some(format!("Bearer {TOKEN}").as_str()));
+        assert_eq!(
+            lookup(&t, &lookup_req(port, "DL1ABC")),
+            LookupAnswer::Refused("Invalid or revoked API token".into())
+        );
+        assert_eq!(
+            lookup(&t, &lookup_req(port, "DL1ABC")),
+            LookupAnswer::Refused("This token lacks the lookup:read scope".into())
+        );
+        assert_eq!(
+            lookup(&t, &lookup_req(port, "DL1ABC")),
+            LookupAnswer::Failed("HTTP 500".into())
+        );
+        assert_eq!(
+            lookup(&t, &lookup_req(port, "DL2XYZ")),
+            LookupAnswer::Failed("an unexpected reply".into()),
+            "an answer for another call is not taken"
+        );
+        let closed = TcpListener::bind("127.0.0.1:0").unwrap();
+        let dead = closed.local_addr().unwrap().port();
+        drop(closed);
+        assert!(matches!(
+            lookup(&t, &lookup_req(dead, "DL1ABC")),
+            LookupAnswer::Failed(_)
+        ));
+    }
+
+    /// FR-LOG-05: of the requests waiting, only the newest is asked.
+    /// trace: FR-LOG-05
+    #[test]
+    fn fr_log_05_only_the_newest_request_is_asked() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        for c in ["DL1A", "DL1AB", "DL1ABC"] {
+            tx.send(lookup_req(1, c)).unwrap();
+        }
+        let first = rx.recv().unwrap();
+        assert_eq!(newest(first, &rx).key.call, "DL1ABC");
+        assert!(rx.try_recv().is_err(), "the older ones are dropped");
+    }
+
+    /// FR-LOG-05: a send that cannot connect marks Wavelog unreachable (no lookups meanwhile); a
+    /// reply clears it.
+    /// trace: FR-LOG-05
+    #[test]
+    fn fr_log_05_an_unreachable_send_stops_the_lookup_until_a_reply() {
+        let closed = TcpListener::bind("127.0.0.1:0").unwrap();
+        let dead = closed.local_addr().unwrap().port();
+        drop(closed);
+        let (mut w, status, dir) = worker("unreach", dead);
+        w.command(Cmd::Log(Box::new(qso("DL1ABC"))));
+        assert!(w.step());
+        assert!(snapshot(&status).unreachable, "{:?}", snapshot(&status));
+        let (port, seen) = mock(vec![Step::Reply(201, "", CREATED.into())]);
+        w.command(Cmd::Configure(Some(Setup {
+            server: Server::parse(&format!("http://127.0.0.1:{port}")).unwrap(),
+            token: Secret::new(TOKEN).unwrap(),
+            station_id: 7,
+        })));
+        // The old URL's entry is held without a request; a new one goes to the new server. Two
+        // entries queued in the same second are listed in either order (the file name has whole
+        // seconds and a random id), so the two steps are counted, not ordered.
+        w.command(Cmd::Log(Box::new(qso("DL2BBB"))));
+        let mut sent = 0;
+        for _ in 0..2 {
+            if w.step() {
+                sent += 1;
+            }
+        }
+        assert_eq!(
+            sent, 1,
+            "one request: the old URL's entry is held, not sent"
+        );
+        // Which entry went where, whatever the order: the request carried the new QSO, and the
+        // old URL's is the one held.
+        let bodies: Vec<String> = seen
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|s| s.body.clone())
+            .collect();
+        assert_eq!(bodies.len(), 1);
+        assert!(bodies[0].contains("DL2BBB"), "{bodies:?}");
+        let st = snapshot(&status);
+        assert_eq!(st.held.len(), 1, "{st:?}");
+        assert!(st.held[0].summary.starts_with("DL1ABC"), "{st:?}");
+        assert!(!st.unreachable, "{st:?}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// FR-LOG-04, FR-LOG-03: a QSO is queued, sent with the token in the Authorization header and
@@ -1227,8 +1459,9 @@ mod local_wavelog {
 
     /// FR-LOG-01, FR-LOG-02, FR-LOG-04, FR-LOG-08 against a real Wavelog: the Test finds the
     /// station; a QSO is logged through the worker and reads back with Wavelog's own mode/submode,
-    /// Hz, seconds and power; the same QSO again is a first-try duplicate, held.
-    /// trace: FR-LOG-01, FR-LOG-02, FR-LOG-04, FR-LOG-08
+    /// Hz, seconds and power; the lookup by the main mode (MFSK) finds it worked on this band and
+    /// mode, by the submode (FT4) not; the same QSO again is a first-try duplicate, held.
+    /// trace: FR-LOG-01, FR-LOG-02, FR-LOG-04, FR-LOG-05, FR-LOG-08
     #[test]
     #[ignore = "needs a local Wavelog: tools/wavelog-test/setup.sh"]
     fn local_wavelog_logs_reads_back_and_holds_a_duplicate() {
@@ -1324,6 +1557,27 @@ mod local_wavelog {
             adif.contains("<FREQ:") && adif.contains(">14.0815"),
             "{adif}"
         );
+
+        // FR-LOG-05: looked up by the main mode, this FT4 QSO is worked on this band and mode;
+        // looked up by its submode it would not be — why the lookup asks the main mode.
+        let t = Transport::new();
+        let worked = |mode: &str| {
+            let req = LookupReq {
+                server: server.clone(),
+                token: token.clone(),
+                key: LookupKey {
+                    call: call.clone(),
+                    band: "20m".into(),
+                    mode: mode.into(),
+                },
+            };
+            match lookup(&t, &req) {
+                LookupAnswer::Found(f) => f.worked,
+                other => panic!("the lookup failed: {other:?}"),
+            }
+        };
+        assert_eq!(worked("MFSK"), k4_log::lookup::Worked::BandMode);
+        assert_eq!(worked("FT4"), k4_log::lookup::Worked::Band);
 
         // The same QSO again, first try: another QSO already in the log — held.
         w.command(Cmd::Log(Box::new(q)));

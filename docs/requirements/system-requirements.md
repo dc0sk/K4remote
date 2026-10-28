@@ -1,8 +1,8 @@
 ---
 title: "System Requirements Specification"
 status: Draft
-version: "0.97"
-updated: 2026-10-27
+version: "0.98"
+updated: 2026-10-28
 authors:
   - Simon Keimer (DC0SK)
 owns: [FR, NFR]
@@ -374,7 +374,8 @@ Remote. Requested 2026-10-27 by DC0SK; design, API facts checked against a local
 Wavelog source, an independent review and its write probes: `docs/concept/wavelog-logging-plan.md`
 v0.4. The DARC server (`https://log.dclnext.darc.de/api/v2`) answers API v2. **Built 2026-10-27:**
 `FR-LOG-01`…`04`, `07`, `08` (crate `k4-log`, `app/src/wavelog.rs`, `app/src/log_ui.rs`), checked
-against a local Wavelog and on screen. **Proposed:** `FR-LOG-05` (lookup), `FR-LOG-06` (spot prefill).
+against a local Wavelog and on screen. **Built 2026-10-28:** `FR-LOG-05` (lookup, `k4_log::lookup`)
+and `FR-LOG-06` (spot prefill), likewise checked against the local Wavelog and on screen.
 
 | ID | Requirement | Source | Prio | Verif. | Acceptance |
 |---|---|---|---|---|---|
@@ -475,6 +476,7 @@ against a local Wavelog and on screen. **Proposed:** `FR-LOG-05` (lookup), `FR-L
 | 2026-07-25 | 0.48 | DC0SK | Added FR-FM-02 as a **DTMF keypad** (`DM`) — the part of the gap-analysis item that is both buildable and useful remotely: sending DTMF for repeater/link control cannot be done any other way over the link. A 4×4 popup opened from the FM panel, one `DM<digit>;` per key. **Scoped down from the gap analysis on purpose:** the '6 stored DTMF sequences' are config work deferred to a follow-up, and the **1750 Hz tone burst has no documented CAT command** in D12 (searched), so it is not buildable now rather than guessed at — the `RO`/`RA` lesson. `send_dtmf` refuses a non-DTMF character rather than emitting a malformed `DM`. |
 | 2026-07-25 | 0.49 | DC0SK | Added FR-XVTR-01 (transverter band setup), the last substantial backlog item — complex and niche (transverter operators), but fully documented so buildable without hardware-guessing. Six `XV*` encoders (`XVN`/`XVM`/`XVR`/`XVI`/`XVO`/`XVP`), a read-back parser for each field, and a setup form on the BAND screen. The design turns on `XVN` being **stateful** — it selects the band the other commands target — so every field send is prefixed with `XVN<band>`, and the form re-reads all fields when a band is picked, keyed on the `XVN` the radio confirms so a stale value never lands. The form outgrew the fixed-height config-screen slot and clipped; fixed by compacting it to three rows and wrapping the BAND screen in a scrollable. Deferred, and said so: the **mW power scale on XVTR bands** (showing mW instead of W when operating on a configured transverter band) — it needs the current-band-is-XVTR state wired through, and is an operating-display concern separate from this setup form. |
 | 2026-07-26 | 0.50 | DC0SK | Added FR-UI-UPD-02 (automatic update check + top-area notification), requested by DC0SK; **recorded, not yet implemented**. It is a deliberate, operator-chosen relaxation of FR-UI-UPD-01, which made the update check *manual-only* on the reasoning that "a radio-control app should not make unannounced outbound connections, and a remote station may be on a metered link." The automatic check is therefore constrained to bound that cost: default-on but **opt-out in Settings**, **once per start** rather than on a timer, and **silent** unless it finds a substantiated newer release — so a metered link sees at most one small request per launch, and only a real update ever draws attention. The notification lives in the top status area beside the connection indicator (not a modal), as a clickable link to the release page, reusing FR-UI-UPD-01's numeric, never-spurious comparison. Also fixed a stale/duplicated `version` block in this document's YAML frontmatter (a merge artifact: two `version:` keys) — set to 0.50 / 2026-07-26. |
+| 2026-10-28 | 0.98 | DC0SK | **`FR-LOG-05`, `FR-LOG-06` built**: the callsign lookup while typing (its own thread, newest request only, off after a 401/403 until the URL or token changes, none while paused or unreachable) and the spot-click prefill (an empty call field only; the click still tunes). All of section R is now built. |
 | 2026-10-27 | 0.97 | DC0SK | **`FR-LOG-01`…`04`, `07`, `08` built** (QSO logging to Wavelog, design v0.4 as built): log strip, LOGGING tab, the token, the queue, status, field mapping; `FR-LOG-05`/`06` still proposed. |
 | 2026-10-27 | 0.96 | DC0SK | Added **`FR-LOG-01` … `FR-LOG-08`** (section R, QSO logging to Wavelog through API v2): log form, LOGGING tab, the token, a persisted queue, lookup, spot prefill, status, field mapping — to design v0.2 after an independent review (revise, major: the duplicate key, error classes by code, a queue directory, token mechanisms) and its write probes. All proposed, not built; DC0SK's answers: form + spot prefill + lookup, queue and retry, station picked from the list, write tests against a local instance. |
 | 2026-10-08 | 0.95 | DC0SK | **`FR-UI-26`, `FR-PAN-15`, `FR-UI-27` built** to the reviewed design (v0.2 → v0.3): the window opens maximised and the panadapter takes the free space (it had been pinned to 300 px in a scrollable body); 256 rows of history, never more drawn than the band has pixels; the 3D view in two styles with tilt and depth, on both renderers through one CPU rasteriser (the GPU shader path deferred on measured cost); the GRAPHICS tab with the renderer for the next start and what is drawing now. |

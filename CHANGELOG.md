@@ -22,6 +22,10 @@ and [`docs/requirements/system-requirements.md`](docs/requirements/system-requir
   radio. Nothing is sent without pressing Log. Every QSO goes through a queue on
   disk, so nothing is lost when Wavelog cannot be reached — it is sent when the
   connection is back — and a QSO Wavelog already has is shown, not dropped.
+  While you type a call, Wavelog is asked about it: the strip shows the country,
+  name and grid, and whether you worked the station before, on this band, and
+  in this mode. Clicking a spot's nameplate puts its call into an empty call
+  field (and tunes to it, as before).
 
 ## [0.11.0] — 2026-10-16
 

@@ -1,8 +1,8 @@
 ---
 title: "QSO logging to Wavelog (API v2) — design (FR-LOG)"
 status: Draft
-version: "0.4"
-updated: 2026-10-27
+version: "0.5"
+updated: 2026-10-28
 authors:
   - Simon Keimer (DC0SK)
 ---
@@ -236,7 +236,17 @@ Tests:
   resolve and connect timeouts prove nothing was sent.
 - **The settings tab row wraps:** with LOGGING, eleven tabs no longer fit the 900 px window.
 - **`time_off` past midnight** is left out rather than sent on the wrong date.
-- **Not yet built:** the lookup (FR-LOG-05) and the spot prefill (FR-LOG-06) — the next slice.
+- **The lookup (FR-LOG-05, built 2026-10-28) runs on its own thread** with its own transport
+  (5 s), so a slow QSO send never delays it; only the newest waiting request is asked. Each
+  call, band and main mode is asked once. **A 401 or 403 turns it off** until the URL or token
+  changes, and the strip says why: a dead token is not sent on every call typed (Wavelog
+  rate-limits failed authentication per client IP). "Offline" is the worker's own finding: the
+  last send could not connect (`Status.unreachable`), cleared by any reply. A lookup that fails
+  for another reason shows "no lookup: …" for that call only.
+- **The spot prefill (FR-LOG-06, built 2026-10-28):** the spectrum sends a separate message for
+  a nameplate click (`on_spot`, with the call); its handler offers the call to the form, then
+  tunes through the same path as before. The form takes it only when logging is set up and the
+  call field is empty.
 
 ## 10. Review of v0.1 (2026-10-27)
 

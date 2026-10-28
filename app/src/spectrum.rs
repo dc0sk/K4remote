@@ -306,6 +306,9 @@ pub struct Spectrum<'a, Message> {
     pub view3d: Option<View3d>,
     /// Left-click → tune this VFO to the clicked frequency.
     pub on_qsy: fn(bool, u64) -> Message,
+    /// Left-click on a spot's nameplate → tune this VFO to the spot, with its call (FR-SPOT-10,
+    /// FR-LOG-06).
+    pub on_spot: fn(bool, u64, String) -> Message,
     /// Wheel scroll → step this VFO up (`+1`) / down (`-1`).
     pub on_wheel: fn(bool, i32) -> Message,
 }
@@ -690,17 +693,16 @@ impl<Message> canvas::Program<Message> for Spectrum<'_, Message> {
             canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
                 if self.span_hz > 0 =>
             {
-                let hz = match self.spot_at(pos, bounds.width, bounds.height * 0.4) {
-                    Some(spot) => spot.freq_hz,
+                let msg = match self.spot_at(pos, bounds.width, bounds.height * 0.4) {
+                    Some(spot) => (self.on_spot)(self.is_b, spot.freq_hz, spot.call),
                     None => {
                         let frac = (pos.x / bounds.width).clamp(0.0, 1.0) as f64 - 0.5;
-                        (self.center_hz as f64 + frac * self.span_hz as f64).max(0.0) as u64
+                        let hz =
+                            (self.center_hz as f64 + frac * self.span_hz as f64).max(0.0) as u64;
+                        (self.on_qsy)(self.is_b, hz)
                     }
                 };
-                (
-                    canvas::event::Status::Ignored,
-                    Some((self.on_qsy)(self.is_b, hz)),
-                )
+                (canvas::event::Status::Ignored, Some(msg))
             }
             canvas::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
                 let y = match delta {
@@ -1399,6 +1401,18 @@ mod spot_click_tests {
     fn qsy(is_b: bool, hz: u64) -> (bool, u64) {
         (is_b, hz)
     }
+    thread_local! {
+        /// The call the last nameplate click carried (each test runs on its own thread).
+        static SPOT_CALL: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+    }
+    /// A nameplate click: tunes like any click, and records the call it carried.
+    fn spot_qsy(is_b: bool, hz: u64, call: String) -> (bool, u64) {
+        SPOT_CALL.with(|c| *c.borrow_mut() = Some(call));
+        (is_b, hz)
+    }
+    fn take_spot_call() -> Option<String> {
+        SPOT_CALL.with(|c| c.borrow_mut().take())
+    }
     fn wheel(is_b: bool, dir: i32) -> (bool, u64) {
         (is_b, dir as u64)
     }
@@ -1430,6 +1444,7 @@ mod spot_click_tests {
             passband_hz: None,
             view3d: None,
             on_qsy: qsy,
+            on_spot: spot_qsy,
             on_wheel: wheel,
         };
         f(&sp)
@@ -1586,6 +1601,30 @@ mod spot_click_tests {
         });
     }
 
+    /// FR-LOG-06: a click on a nameplate tunes to the spot and carries its call, for the log form;
+    /// a click anywhere else tunes to the position and carries none.
+    /// trace: FR-LOG-06
+    #[test]
+    fn fr_log_06_a_nameplate_click_carries_the_call() {
+        let near = CENTER + 10_000;
+        let store = store(&[("K1AAA", near, 30)]);
+        with(&store, |sp| {
+            let view = sp.spot_view(W, H * 0.4).expect("the spot is shown");
+            let p = &view.layout.placed[0];
+            let y = k4_spot::layout::LANES_TOP + p.lane as f32 * k4_spot::layout::LANE_H + 3.0;
+            let w_plate = view.items[p.index].label_w;
+            assert_eq!(click(sp, p.left + 1.0, y), Some((false, near)));
+            assert_eq!(take_spot_call().as_deref(), Some("K1AAA"));
+            let past = p.left + w_plate + 2.0;
+            assert_eq!(click(sp, past, y), Some((false, position_hz(past))));
+            assert_eq!(
+                take_spot_call(),
+                None,
+                "a click beside the plate carries no call"
+            );
+        });
+    }
+
     /// FR-SPOT-10: the click path only tunes. It returns the tune message for the pane it belongs to
     /// and never anything else; a right click and a click outside the pane do nothing.
     /// trace: FR-SPOT-10
@@ -1643,6 +1682,7 @@ mod spot_click_tests {
             passband_hz: sp.passband_hz,
             view3d: sp.view3d,
             on_qsy: sp.on_qsy,
+            on_spot: sp.on_spot,
             on_wheel: sp.on_wheel,
         }
     }
